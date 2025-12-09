@@ -47,6 +47,13 @@ Deno.serve(async (req) => {
       throw itemsError;
     }
 
+    // Get user's taste profile
+    const { data: tasteProfile } = await supabase
+      .from('user_taste_profiles')
+      .select('onboarding_interests, top_categories, entity_type_preferences, preferred_sources, last_computed_at')
+      .eq('user_id', userId)
+      .single();
+
     // Calculate stats
     const totalItems = items?.length || 0;
 
@@ -88,6 +95,15 @@ Deno.serve(async (req) => {
       .slice(0, 5)
       .map(([tag]) => tag);
 
+    // Extract taste profile data
+    const tasteData = tasteProfile ? {
+      onboarding_interests: tasteProfile.onboarding_interests || null,
+      top_categories: tasteProfile.top_categories || {},
+      entity_type_preferences: tasteProfile.entity_type_preferences || {},
+      preferred_sources: tasteProfile.preferred_sources || [],
+      last_computed_at: tasteProfile.last_computed_at,
+    } : null;
+
     return new Response(
       JSON.stringify({
         name: user.name,
@@ -97,6 +113,7 @@ Deno.serve(async (req) => {
           top_tags: topTags,
           type_mix: typeMix,
         },
+        taste: tasteData,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

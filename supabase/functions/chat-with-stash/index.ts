@@ -49,6 +49,30 @@ Deno.serve(async (req) => {
 
     const supabase = createSupabaseClient();
 
+    // Fetch user's taste profile for personalized context
+    const { data: tasteProfile } = await supabase
+      .from('user_taste_profiles')
+      .select('top_categories, entity_type_preferences')
+      .eq('user_id', userId)
+      .single();
+
+    // Build taste context for AI
+    let tasteContext: { top_interests: string[]; preferred_types: string[] } | null = null;
+    if (tasteProfile) {
+      const topCats = tasteProfile.top_categories || {};
+      const typePrefs = tasteProfile.entity_type_preferences || {};
+      
+      tasteContext = {
+        top_interests: Object.keys(topCats).slice(0, 5),
+        preferred_types: Object.entries(typePrefs)
+          .sort((a, b) => (b[1] as number) - (a[1] as number))
+          .slice(0, 3)
+          .map(([type]) => type),
+      };
+      
+      console.log('🧠 User taste context:', tasteContext);
+    }
+
     // If there's a focused item, fetch it first
     let focusedItem = null;
     
@@ -166,8 +190,8 @@ Deno.serve(async (req) => {
       url: focusedItem.entities.canonical_url,
     } : null;
 
-    // Get AI response with relevant context and conversation history
-    const answer = await chatWithStash(message, relevantEntities, focusedContext, conversationHistory);
+    // Get AI response with relevant context, conversation history, and taste profile
+    const answer = await chatWithStash(message, relevantEntities, focusedContext, conversationHistory, tasteContext);
 
     // Find items mentioned in the AI response by matching quoted titles
     const mentionedItems: typeof rankedItems = [];

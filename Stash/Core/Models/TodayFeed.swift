@@ -1,7 +1,7 @@
 import Foundation
 
 /// Response from GET /feed/today endpoint
-struct TodayFeed: Codable {
+struct TodayFeed: Codable, Equatable {
     let aiSubtitle: String
     var brainSnack: [ItemSummary]
     var fromFriends: [ItemSummary]

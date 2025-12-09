@@ -14,24 +14,29 @@ struct StashApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if authManager.isAuthenticated {
-                if authManager.needsHandleSetup {
-                    // User is authenticated but needs to set up handle
-                    HandleSetupView()
+            Group {
+                if authManager.isCheckingAuth {
+                    // Show loading while checking auth state
+                    ZStack {
+                        StashTheme.Color.bg
+                            .ignoresSafeArea()
+                        ProgressView()
+                            .tint(StashTheme.Color.accent)
+                    }
+                } else if authManager.isAuthenticated {
+                    if authManager.needsHandleSetup {
+                        // User is authenticated but needs to set up handle
+                        HandleSetupView()
+                    } else if authManager.needsInterestsOnboarding {
+                        // User has handle but hasn't set up interests
+                        InterestsOnboardingView()
+                    } else {
+                        // User is fully set up, show main app
+                        MainTabView()
+                    }
                 } else {
-                    // User is fully set up, show main app
-                    MainTabView()
-                }
-            } else {
-                // User is not authenticated, show auth screen
-                AuthView()
-            }
-        }
-        .onChange(of: authManager.isAuthenticated) { oldValue, newValue in
-            if newValue {
-                // User just became authenticated, ensure session is saved
-                Task {
-                    await authManager.checkAuthStatus()
+                    // User is not authenticated, show auth screen
+                    AuthView()
                 }
             }
         }

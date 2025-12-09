@@ -391,6 +391,46 @@ class APIClient: ObservableObject {
             throw APIError.networkError(error)
         }
     }
+    
+    // MARK: - Onboarding
+    
+    /// Parse user's interests during onboarding
+    func parseInterests(interests: String) async throws {
+        // Real API call
+        do {
+            print("🔵 Calling parse-interests function with: \(interests)")
+            
+            struct ParseInterestsPayload: Encodable {
+                let interests: String
+            }
+            
+            struct ParseInterestsResponse: Codable {
+                let success: Bool
+            }
+            
+            let payload = ParseInterestsPayload(interests: interests)
+            
+            let _: ParseInterestsResponse = try await supabase.functions.invoke(
+                "parse-interests",
+                options: FunctionInvokeOptions(body: payload)
+            )
+            
+            print("🟢 Interests parsed and saved")
+        } catch let error as FunctionsError {
+            // Try to extract more details from the FunctionsError
+            switch error {
+            case .httpError(let code, let data):
+                let responseBody = String(data: data, encoding: .utf8) ?? "Unable to decode"
+                print("🔴 Parse interests HTTP error \(code): \(responseBody)")
+            case .relayError:
+                print("🔴 Parse interests relay error")
+            }
+            throw APIError.networkError(error)
+        } catch {
+            print("🔴 Parse interests error: \(error)")
+            throw APIError.networkError(error)
+        }
+    }
 }
 
 // MARK: - Response Types
@@ -415,6 +455,7 @@ struct Friend: Codable, Identifiable {
     let userId: String
     let handle: String
     let name: String?
+    let tasteSimilarity: TasteSimilarity?
 
     var id: String { userId }
 
@@ -422,6 +463,17 @@ struct Friend: Codable, Identifiable {
         case userId = "user_id"
         case handle
         case name
+        case tasteSimilarity = "taste_similarity"
+    }
+    
+    struct TasteSimilarity: Codable {
+        let similarityScore: Double?
+        let commonInterests: [String]?
+        
+        enum CodingKeys: String, CodingKey {
+            case similarityScore = "similarity_score"
+            case commonInterests = "common_interests"
+        }
     }
 }
 

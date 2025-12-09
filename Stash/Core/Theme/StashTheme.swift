@@ -35,15 +35,21 @@ struct StashTheme {
             SwiftUI.Color("StashTextMuted", bundle: nil)
         }
 
-        // Brand accent (Stash actions) - same in both modes
-        static let accent = SwiftUI.Color(hex: "#FFB869")          // Warm apricot
-        static let accentSoft = SwiftUI.Color(hex: "#FFB869").opacity(0.14)
-        static let accentStrong = SwiftUI.Color(hex: "#F59E0B")
+        // Brand accent (Stash actions) - uses AccentColor from assets
+        static var accent: SwiftUI.Color {
+            SwiftUI.Color("AccentColor", bundle: nil)
+        }
+        static var accentSoft: SwiftUI.Color {
+            SwiftUI.Color("AccentColor", bundle: nil).opacity(0.14)
+        }
+        static var accentStrong: SwiftUI.Color {
+            SwiftUI.Color("AccentColor", bundle: nil).opacity(0.8)
+        }
 
-        // AI identity (aqua/teal) - same in both modes
-        static let ai = SwiftUI.Color(hex: "#24D3C4")              // Aqua = intelligence
-        static let aiSoft = SwiftUI.Color(hex: "#24D3C4").opacity(0.14)
-        static let aiGlow = SwiftUI.Color(hex: "#24D3C4").opacity(0.45)
+        // AI identity (cosmic violet/blue) - matches Synapse Lens
+        static let ai = SwiftUI.Color(hex: "#5238B5")              // Deep Violet = intelligence
+        static let aiSoft = SwiftUI.Color(hex: "#5238B5").opacity(0.14)
+        static let aiGlow = SwiftUI.Color(hex: "#5238B5").opacity(0.45)
 
         // Semantic - same in both modes
         static let success = SwiftUI.Color(hex: "#22C55E")

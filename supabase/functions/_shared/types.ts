@@ -1,6 +1,6 @@
 // Shared TypeScript types for Supabase Edge Functions
 
-export type EntityType = 'article' | 'song' | 'event' | 'recipe' | 'generic';
+export type EntityType = 'article' | 'song' | 'event' | 'recipe' | 'tweet' | 'instagram_post' | 'instagram_reel' | 'tiktok' | 'youtube_video' | 'youtube_short' | 'threads_post' | 'generic';
 export type ItemSource = 'self' | 'friend_link' | 'friend_user' | 'ai_recommendation';
 export type ItemStatus = 'unopened' | 'opened' | 'done';
 
@@ -33,6 +33,50 @@ export interface StashItem {
   opened_at: string | null;
 }
 
+// Type-specific metadata extracted during enrichment
+export interface TypeMetadata {
+  // Social posts (tweet, threads, instagram)
+  author_name?: string;
+  author_handle?: string;
+  author_avatar_url?: string;
+  embed_html?: string;
+  media_urls?: string[];
+  like_count?: number;
+  repost_count?: number;
+  comment_count?: number;
+  
+  // Video
+  video_id?: string;
+  video_platform?: string;
+  thumbnail_url?: string;
+  duration_seconds?: number;
+  
+  // Music
+  apple_music_id?: string;
+  spotify_id?: string;
+  artist_name?: string;
+  album_name?: string;
+  album_art_url?: string;
+  preview_url?: string;
+  duration_ms?: number;
+  
+  // Events
+  venue_name?: string;
+  venue_address?: string;
+  latitude?: number;
+  longitude?: number;
+  start_date?: string;
+  end_date?: string;
+  ticket_url?: string;
+  
+  // Recipe
+  ingredients?: string[];
+  steps?: string[];
+  prep_time?: string;
+  cook_time?: string;
+  servings?: number;
+}
+
 export interface ItemSummary {
   item_id: string;
   entity_id: string;
@@ -48,6 +92,7 @@ export interface ItemSummary {
     icon_url: string | null;
     tags: string[];
     suggested_prompts?: string[];
+    type_metadata?: TypeMetadata;
   };
 }
 
@@ -88,6 +133,7 @@ export interface EnrichmentResult {
   tags: string[];
   primary_emoji: string;
   suggested_prompts: string[];
+  type_metadata?: TypeMetadata;
 }
 
 // CORS headers for responses

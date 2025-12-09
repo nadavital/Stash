@@ -27,18 +27,41 @@ Deno.serve(async (req) => {
     let imageUrl: string | null = null;
     let urlHint: string | null = null;
 
-    // Detect URL type from domain - force entity type for known music services
+    // Detect URL type from domain - force entity type for known platforms
     const hostname = new URL(url).hostname;
-    let forcedEntityType: 'song' | 'event' | null = null;
+    let forcedEntityType: string | null = null;
 
-    if (hostname.includes('music.apple.com') || hostname.includes('spotify.com')) {
+    if (hostname.includes('music.apple.com') || hostname.includes('spotify.com') || hostname.includes('soundcloud.com')) {
       urlHint = 'This is a music streaming link';
-      forcedEntityType = 'song'; // Force song type for music services
+      forcedEntityType = 'song';
     } else if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
-      urlHint = 'This is a video link';
+      if (url.includes('/shorts/')) {
+        urlHint = 'This is a YouTube Short (vertical video)';
+        forcedEntityType = 'youtube_short';
+      } else {
+        urlHint = 'This is a YouTube video';
+        forcedEntityType = 'youtube_video';
+      }
+    } else if (hostname.includes('tiktok.com')) {
+      urlHint = 'This is a TikTok video';
+      forcedEntityType = 'tiktok';
+    } else if (hostname.includes('instagram.com')) {
+      if (url.includes('/reel/')) {
+        urlHint = 'This is an Instagram Reel';
+        forcedEntityType = 'instagram_reel';
+      } else if (url.includes('/p/')) {
+        urlHint = 'This is an Instagram post';
+        forcedEntityType = 'instagram_post';
+      }
+    } else if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
+      urlHint = 'This is a tweet/post on X';
+      forcedEntityType = 'tweet';
+    } else if (hostname.includes('threads.net')) {
+      urlHint = 'This is a Threads post';
+      forcedEntityType = 'threads_post';
     } else if (hostname.includes('eventbrite.com') || hostname.includes('ticketmaster.com')) {
       urlHint = 'This is an event/ticket link';
-      forcedEntityType = 'event'; // Force event type for ticket services
+      forcedEntityType = 'event';
     }
 
     try {
@@ -98,14 +121,18 @@ Deno.serve(async (req) => {
       const enrichment = await enrichUrl(url, title, description, textSnippet, urlHint);
       console.log('Gemini enrichment result:', enrichment);
 
+      // Use forced entity type if detected from URL
+      const finalEntityType = forcedEntityType || enrichment.entity_type;
+
       // Generate embedding
       const embeddingText = `${enrichment.clean_title} ${enrichment.summary} ${enrichment.tags.join(' ')}`;
       const embedding = await generateEmbedding(embeddingText);
-      // Create new entity
+      
+      // Create new entity with type-specific metadata
       const { data: newEntity, error: entityError } = await supabase
         .from('entities')
         .insert({
-          type: enrichment.entity_type,
+          type: finalEntityType,
           canonical_url: url,
           title: enrichment.clean_title,
           description,
@@ -116,6 +143,7 @@ Deno.serve(async (req) => {
           tags: enrichment.tags,
           embedding: JSON.stringify(embedding),
           suggested_prompts: enrichment.suggested_prompts,
+          raw_metadata: enrichment.type_metadata || null,
         })
         .select()
         .single();

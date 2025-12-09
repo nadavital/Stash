@@ -12,8 +12,11 @@ struct AISummaryCard: View {
         VStack(alignment: .leading, spacing: 12) {
             // AI label row
             HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 14, weight: .medium))
+                Image("stash-glyph")
+                    .resizable()
+                    .renderingMode(.template)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 16, height: 16)
                     .foregroundColor(StashTheme.Color.ai)
 
                 Text("AI Summary")

@@ -1,4 +1,4 @@
-import type { EnrichmentResult, EntityType } from './types.ts';
+import type { EnrichmentResult, EntityType, TypeMetadata } from './types.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
 // Use 2.5 Flash for chat (supports URL context), 2.0 Flash for enrichment
@@ -17,6 +17,15 @@ function getDefaultPrompts(entityType: EntityType): string[] {
       return ['Key takeaways?', 'Related articles?', 'Summarize this'];
     case 'event':
       return ['Event details?', 'Similar events?', 'What to expect?'];
+    case 'tweet':
+    case 'threads_post':
+    case 'instagram_post':
+      return ['What\'s the context?', 'Who is this person?', 'Related posts?'];
+    case 'youtube_video':
+    case 'youtube_short':
+    case 'tiktok':
+    case 'instagram_reel':
+      return ['Key points?', 'Who made this?', 'Similar videos?'];
     default:
       return ['Tell me more', 'Why is this interesting?', 'Related items?'];
   }
@@ -30,7 +39,7 @@ export async function enrichUrl(
   textSnippet: string | null,
   urlHint: string | null = null
 ): Promise<EnrichmentResult> {
-  const prompt = `You are a content classifier. Analyze this web content and return ONLY a JSON object with no additional text.
+  const prompt = `You are a content classifier and metadata extractor. Analyze this web content and return ONLY a JSON object with no additional text.
 
 URL: ${url}
 Title: ${title || 'Unknown'}
@@ -40,31 +49,71 @@ ${urlHint ? `Hint: ${urlHint}` : ''}
 
 Return JSON in this exact format:
 {
-  "entity_type": "article|song|event|recipe|generic",
+  "entity_type": "article|song|event|recipe|tweet|threads_post|instagram_post|instagram_reel|tiktok|youtube_video|youtube_short|generic",
   "clean_title": "user-friendly title",
   "summary": "1-2 sentence summary",
   "tags": ["short", "lowercase", "topic-oriented"],
   "primary_emoji": "single emoji",
-  "suggested_prompts": ["prompt1", "prompt2", "prompt3"]
+  "suggested_prompts": ["prompt1", "prompt2", "prompt3"],
+  "type_metadata": { ... type-specific fields ... }
 }
 
-Rules:
-- entity_type must be one of: article, song, event, recipe, generic
-- If the URL is from music.apple.com, spotify.com, or mentions "song", "album", "track", "artist" → use "song" type
-- If the URL is from eventbrite, ticketmaster, or mentions "event", "concert", "show" → use "event" type
-- If the URL has recipe content or is from a cooking site → use "recipe" type
-- If it's a blog post or news article → use "article" type
-- Otherwise use "generic"
-- clean_title should be concise and readable (e.g., "Song Name by Artist")
-- summary should be 1-2 sentences, user-friendly
-- tags should be 3-5 short lowercase words (for songs: genre, artist name, mood)
-- primary_emoji: 🎵 for songs, 🎟️ for events, 🍳 for recipes, 📰 for articles, 🔗 for generic
-- suggested_prompts: 3 SHORT conversation starters (max 6 words each) that a user might ask about this content. Be specific to the content type:
-  * For songs: "Similar artists?", "What genre is this?", "Lyrics meaning?"
-  * For recipes: "Substitution ideas?", "How long to prep?", "Pair with what wine?"
-  * For articles: "Key takeaways?", "Counter arguments?", "Related reads?"
-  * For events: "Ticket prices?", "Who else is going?", "What to wear?"
-  * For generic: "What is this about?", "Why save this?", "Similar items?"`;
+Entity Type Rules:
+- twitter.com, x.com → "tweet"
+- threads.net → "threads_post"
+- instagram.com/p/ → "instagram_post"
+- instagram.com/reel/ → "instagram_reel"
+- tiktok.com → "tiktok"
+- youtube.com/watch, youtu.be (horizontal video) → "youtube_video"
+- youtube.com/shorts → "youtube_short"
+- music.apple.com, spotify.com, soundcloud.com → "song"
+- eventbrite.com, ticketmaster.com, concert/event pages → "event"
+- Recipe content, cooking sites → "recipe"
+- Blog posts, news articles → "article"
+- Otherwise → "generic"
+
+Type-Specific Metadata (include ONLY relevant fields):
+
+For songs:
+  "type_metadata": {
+    "artist_name": "Artist Name",
+    "album_name": "Album Name" (if available)
+  }
+
+For recipes:
+  "type_metadata": {
+    "ingredients": ["ingredient 1", "ingredient 2", ...],
+    "prep_time": "15 min",
+    "cook_time": "30 min",
+    "servings": 4
+  }
+
+For social posts (tweet, threads_post, instagram_post):
+  "type_metadata": {
+    "author_name": "Display Name",
+    "author_handle": "@username"
+  }
+
+For videos (youtube_video, youtube_short, tiktok, instagram_reel):
+  "type_metadata": {
+    "video_id": "extracted_id_from_url",
+    "video_platform": "youtube|tiktok|instagram",
+    "duration_seconds": 180 (if known)
+  }
+
+For events:
+  "type_metadata": {
+    "venue_name": "Venue Name",
+    "venue_address": "Full Address",
+    "start_date": "2025-01-15T19:00:00Z" (ISO format if available)
+  }
+
+Emoji Guide:
+- 🎵 songs, 🍳 recipes, 📰 articles, 🎫 events
+- 🐦 tweets, 📷 instagram posts, 🎬 reels/tiktoks, 📺 youtube videos
+- 🔗 generic
+
+Summary should be engaging, 1-2 sentences. For recipes, mention key dish qualities. For songs, mention genre/mood. For social posts, capture the main point.`;
 
   try {
     console.log('🔵 Calling Gemini API...');
@@ -77,7 +126,7 @@ Rules:
         }],
         generationConfig: {
           temperature: 0.3,
-          maxOutputTokens: 500,
+          maxOutputTokens: 1000,
         }
       })
     });
@@ -111,6 +160,7 @@ Rules:
       tags: result.tags?.slice(0, 5) || [],
       primary_emoji: result.primary_emoji || '🔗',
       suggested_prompts: result.suggested_prompts?.slice(0, 3) || getDefaultPrompts(result.entity_type || 'generic'),
+      type_metadata: result.type_metadata || undefined,
     };
   } catch (error) {
     console.error('❌ Enrichment error:', error);
@@ -123,6 +173,7 @@ Rules:
       tags: [],
       primary_emoji: '🔗',
       suggested_prompts: getDefaultPrompts('generic'),
+      type_metadata: undefined,
     };
   }
 }
@@ -153,12 +204,13 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 }
 
-// Chat with stash using Gemini 2.5 Flash with URL context
+// Chat with stash using Gemini 2.5 Flash with URL context and user taste
 export async function chatWithStash(
   userMessage: string,
   relevantEntities: Array<{ id: string; title: string; summary: string; tags: string[] }>,
   focusedItem?: { id: string; title: string; summary: string; tags: string[]; url?: string } | null,
-  conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }> | null
+  conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }> | null,
+  tasteContext?: { top_interests: string[]; preferred_types: string[] } | null
 ): Promise<string> {
   // Handle empty stash case
   if (relevantEntities.length === 0 && !focusedItem) {
@@ -177,32 +229,48 @@ export async function chatWithStash(
     ? recentHistory.map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`).join('\n')
     : '';
 
+  // Build taste context string for personalization
+  let tasteText = '';
+  if (tasteContext && (tasteContext.top_interests.length > 0 || tasteContext.preferred_types.length > 0)) {
+    const interests = tasteContext.top_interests.length > 0 
+      ? `interests: ${tasteContext.top_interests.join(', ')}` 
+      : '';
+    const types = tasteContext.preferred_types.length > 0 
+      ? `prefers: ${tasteContext.preferred_types.join(', ')}` 
+      : '';
+    tasteText = `\nUser's taste: ${[interests, types].filter(Boolean).join('; ')}`;
+  }
+
   // Build the prompt based on whether we have a focused item with URL
   let prompt: string;
   
   if (focusedItem?.url) {
     // When we have a URL, ask Gemini to fetch it for detailed info
-    prompt = `You are Stash, a helpful AI assistant. The user is asking about "${focusedItem.title}".
+    prompt = `You are Stash, a helpful AI assistant that knows the user's taste.${tasteText}
+
+The user is asking about "${focusedItem.title}".
 
 For detailed information, refer to this URL: ${focusedItem.url}
 
 ${historyText ? `Recent conversation:\n${historyText}\n` : ''}
 User: ${userMessage}
 
-Answer the user's question using information from the URL. Be concise (2-3 sentences) unless they ask for detailed lists like ingredients or steps. Always refer to the item as "${focusedItem.title}".`;
+Answer the user's question using information from the URL. Be concise (2-3 sentences) unless they ask for detailed lists like ingredients or steps. Always refer to the item as "${focusedItem.title}". If relevant, connect to their interests.`;
   } else if (focusedItem) {
     // Focused item but no URL
-    prompt = `You are Stash, a helpful AI assistant. The user is viewing "${focusedItem.title}".
+    prompt = `You are Stash, a helpful AI assistant that knows the user's taste.${tasteText}
+
+The user is viewing "${focusedItem.title}".
 Summary: ${focusedItem.summary}
 Tags: ${focusedItem.tags.join(', ')}
 
 ${historyText ? `Recent conversation:\n${historyText}\n` : ''}
 User: ${userMessage}
 
-Answer based on what you know. Be concise.`;
+Answer based on what you know. Be concise. If relevant, connect to their interests.`;
   } else {
     // General query about stash
-    prompt = `You are Stash, a helpful AI assistant that helps users explore their saved content.
+    prompt = `You are Stash, a helpful AI assistant that helps users explore their saved content.${tasteText}
 
 User's saved items:
 ${contextText}
@@ -210,7 +278,7 @@ ${contextText}
 ${historyText ? `Recent conversation:\n${historyText}\n` : ''}
 User: ${userMessage}
 
-Help the user by referencing their saved items. Use exact titles in quotes. Be concise (2-3 sentences).`;
+Help the user by referencing their saved items. Use exact titles in quotes. Be concise (2-3 sentences). Consider their interests when making suggestions.`;
   }
 
   try {

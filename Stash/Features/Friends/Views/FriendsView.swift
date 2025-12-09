@@ -26,30 +26,7 @@ struct FriendsView: View {
                 } else {
                     List {
                         ForEach(viewModel.friends) { friend in
-                            HStack {
-                                Circle()
-                                    .fill(StashTheme.Color.aiSoft)
-                                    .frame(width: 50, height: 50)
-                                    .overlay(
-                                        Text(friend.handle.prefix(1).uppercased())
-                                            .font(StashTypography.sectionTitle)
-                                            .foregroundColor(StashTheme.Color.ai)
-                                    )
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    if let name = friend.name {
-                                        Text(name)
-                                            .font(StashTypography.cardTitle)
-                                            .foregroundColor(StashTheme.Color.textPrimary)
-                                    }
-                                    Text("@\(friend.handle)")
-                                        .font(StashTypography.body)
-                                        .foregroundColor(StashTheme.Color.textSecondary)
-                                }
-
-                                Spacer()
-                            }
-                            .padding(.vertical, 4)
+                            FriendRow(friend: friend)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
                                     Task {
@@ -161,6 +138,87 @@ class FriendsViewModel: ObservableObject {
             friends.removeAll { $0.userId == friendId }
         } catch {
             self.error = error
+        }
+    }
+}
+
+// MARK: - Friend Row with Taste Similarity
+struct FriendRow: View {
+    let friend: Friend
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // Avatar
+            Circle()
+                .fill(StashTheme.Color.aiSoft)
+                .frame(width: 50, height: 50)
+                .overlay(
+                    Text(friend.handle.prefix(1).uppercased())
+                        .font(StashTypography.sectionTitle)
+                        .foregroundColor(StashTheme.Color.ai)
+                )
+            
+            // Name and handle
+            VStack(alignment: .leading, spacing: 4) {
+                if let name = friend.name {
+                    Text(name)
+                        .font(StashTypography.cardTitle)
+                        .foregroundColor(StashTheme.Color.textPrimary)
+                }
+                Text("@\(friend.handle)")
+                    .font(StashTypography.body)
+                    .foregroundColor(StashTheme.Color.textSecondary)
+                
+                // Common interests
+                if let similarity = friend.tasteSimilarity,
+                   let interests = similarity.commonInterests,
+                   !interests.isEmpty {
+                    Text(interests.prefix(3).joined(separator: " • "))
+                        .font(StashTypography.caption)
+                        .foregroundColor(StashTheme.Color.ai)
+                        .lineLimit(1)
+                }
+            }
+            
+            Spacer()
+            
+            // Taste match indicator
+            if let similarity = friend.tasteSimilarity,
+               let score = similarity.similarityScore {
+                TasteMatchBadge(score: score)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Taste Match Badge
+struct TasteMatchBadge: View {
+    let score: Double
+    
+    private var matchLevel: (text: String, color: Color) {
+        switch score {
+        case 0.8...: return ("🔥", StashTheme.Color.accent)
+        case 0.6..<0.8: return ("✨", StashTheme.Color.ai)
+        case 0.4..<0.6: return ("👍", StashTheme.Color.success)
+        default: return ("", .clear)
+        }
+    }
+    
+    var body: some View {
+        if score >= 0.4 {
+            HStack(spacing: 4) {
+                Text(matchLevel.text)
+                    .font(.caption)
+                
+                Text("\(Int(score * 100))%")
+                    .font(StashTypography.caption.bold())
+                    .foregroundColor(matchLevel.color)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(matchLevel.color.opacity(0.15))
+            .cornerRadius(StashTheme.Radius.pill)
         }
     }
 }

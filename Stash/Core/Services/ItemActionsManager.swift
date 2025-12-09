@@ -7,8 +7,7 @@ extension Notification.Name {
     static let itemDeleted = Notification.Name("itemDeleted")
     static let itemLiked = Notification.Name("itemLiked")
     static let itemUnliked = Notification.Name("itemUnliked")
-    static let itemMarkedDone = Notification.Name("itemMarkedDone")
-    static let itemMarkedUndone = Notification.Name("itemMarkedUndone")
+    static let itemOpened = Notification.Name("itemOpened")
 }
 
 /// Manages item actions with optimistic updates
@@ -87,62 +86,6 @@ class ItemActionsManager: ObservableObject {
         processingItems.remove(itemId)
     }
     
-    // MARK: - Done Actions
-    
-    /// Mark an item as done with optimistic update
-    func markItemDone(
-        itemId: String,
-        onOptimisticUpdate: (() -> Void)? = nil,
-        onRollback: (() -> Void)? = nil
-    ) async {
-        guard !processingItems.contains(itemId) else { return }
-        processingItems.insert(itemId)
-        
-        // Optimistic update
-        onOptimisticUpdate?()
-        NotificationCenter.default.post(name: .itemMarkedDone, object: itemId)
-        
-        do {
-            try await apiClient.markItemDone(itemId: itemId)
-            print("🟢 Item marked done: \(itemId)")
-        } catch {
-            print("🔴 Error marking item done: \(error)")
-            lastError = error
-            // Rollback on failure
-            onRollback?()
-            NotificationCenter.default.post(name: .itemMarkedUndone, object: itemId)
-        }
-        
-        processingItems.remove(itemId)
-    }
-    
-    /// Mark an item as not done with optimistic update
-    func markItemUndone(
-        itemId: String,
-        onOptimisticUpdate: (() -> Void)? = nil,
-        onRollback: (() -> Void)? = nil
-    ) async {
-        guard !processingItems.contains(itemId) else { return }
-        processingItems.insert(itemId)
-        
-        // Optimistic update
-        onOptimisticUpdate?()
-        NotificationCenter.default.post(name: .itemMarkedUndone, object: itemId)
-        
-        do {
-            try await apiClient.markItemUndone(itemId: itemId)
-            print("🟢 Item marked undone: \(itemId)")
-        } catch {
-            print("🔴 Error marking item undone: \(error)")
-            lastError = error
-            // Rollback on failure
-            onRollback?()
-            NotificationCenter.default.post(name: .itemMarkedDone, object: itemId)
-        }
-        
-        processingItems.remove(itemId)
-    }
-    
     // MARK: - Delete Actions
     
     /// Delete an item with optimistic update
@@ -175,7 +118,21 @@ class ItemActionsManager: ObservableObject {
     
     // MARK: - Tracking Actions (non-optimistic, fire-and-forget)
     
-    /// Track item engagement (doesn't need optimistic update)
+    /// Track when user opens a detail view (implicit engagement signal)
+    func trackOpen(itemId: String) {
+        Task {
+            do {
+                try await apiClient.markItemOpened(itemId: itemId)
+                NotificationCenter.default.post(name: .itemOpened, object: itemId)
+                print("🟢 Item opened tracked: \(itemId)")
+            } catch {
+                print("🔴 Error tracking item open: \(error)")
+                // Non-critical, don't show error to user
+            }
+        }
+    }
+    
+    /// Track item engagement (for specific actions like play, scroll, etc.)
     func trackEngagement(itemId: String, action: String) {
         Task {
             do {
@@ -183,17 +140,6 @@ class ItemActionsManager: ObservableObject {
             } catch {
                 print("🔴 Error tracking engagement: \(error)")
                 // Non-critical, don't show error to user
-            }
-        }
-    }
-    
-    /// Mark item as opened
-    func markOpened(itemId: String) {
-        Task {
-            do {
-                try await apiClient.markItemOpened(itemId: itemId)
-            } catch {
-                print("🔴 Error marking item opened: \(error)")
             }
         }
     }

@@ -69,7 +69,7 @@ class ShareViewController: UIViewController {
         // Save button
         saveButton.setTitle("Save to Stash", for: .normal)
         saveButton.setTitleColor(.white, for: .normal)
-        saveButton.backgroundColor = UIColor(red: 1.0, green: 0.72, blue: 0.41, alpha: 1.0) // #FFB869
+        saveButton.backgroundColor = UIColor(named: "AccentColor")
         saveButton.titleLabel?.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
         saveButton.layer.cornerRadius = 12
         saveButton.translatesAutoresizingMaskIntoConstraints = false

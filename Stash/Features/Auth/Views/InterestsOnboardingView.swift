@@ -1,0 +1,150 @@
+import SwiftUI
+
+/// View for onboarding users with their interests
+struct InterestsOnboardingView: View {
+    @StateObject private var viewModel = InterestsOnboardingViewModel()
+    @FocusState private var isInputFocused: Bool
+    
+    // Example interests to inspire users
+    private let exampleInterests = [
+        "indie music, cooking, AI",
+        "basketball, tech startups, podcasts",
+        "travel, photography, recipes",
+        "hip-hop, design, reading",
+    ]
+    
+    var body: some View {
+        ZStack {
+            // Background
+            StashTheme.Color.bg
+                .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                Spacer()
+                
+                // Header
+                VStack(spacing: 20) {
+                    // AI brain icon with glow
+                    ZStack {
+                        Circle()
+                            .fill(StashTheme.Color.aiSoft)
+                            .frame(width: 100, height: 100)
+                        
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 50))
+                            .foregroundColor(StashTheme.Color.ai)
+                    }
+                    
+                    Text("What are you into?")
+                        .font(StashTypography.pageTitle)
+                        .foregroundColor(StashTheme.Color.textPrimary)
+                    
+                    Text("Tell Stash about your interests so we can personalize your experience")
+                        .font(StashTypography.body)
+                        .foregroundColor(StashTheme.Color.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
+                
+                Spacer()
+                    .frame(height: 40)
+                
+                // Interest input
+                VStack(alignment: .leading, spacing: 16) {
+                    // Text editor for free-form input
+                    ZStack(alignment: .topLeading) {
+                        if viewModel.interestsText.isEmpty {
+                            Text("e.g., \(exampleInterests.randomElement() ?? "indie music, cooking, AI")...")
+                                .font(StashTypography.body)
+                                .foregroundColor(StashTheme.Color.textMuted)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 14)
+                        }
+                        
+                        TextEditor(text: $viewModel.interestsText)
+                            .font(StashTypography.body)
+                            .foregroundColor(StashTheme.Color.textPrimary)
+                            .scrollContentBackground(.hidden)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .focused($isInputFocused)
+                    }
+                    .frame(height: 120)
+                    .background(StashTheme.Color.surface)
+                    .cornerRadius(StashTheme.Radius.card)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: StashTheme.Radius.card)
+                            .stroke(
+                                isInputFocused ? StashTheme.Color.ai : StashTheme.Color.borderSubtle,
+                                lineWidth: isInputFocused ? 2 : 1
+                            )
+                    )
+                    
+                    // Suggestions
+                    Text("Try describing topics, genres, hobbies, or anything you love")
+                        .font(StashTypography.caption)
+                        .foregroundColor(StashTheme.Color.textMuted)
+                }
+                .padding(.horizontal, StashSpacing.screenHorizontal)
+                
+                Spacer()
+                
+                // Buttons
+                VStack(spacing: 16) {
+                    // Continue button
+                    Button(action: {
+                        Task {
+                            await viewModel.submitInterests()
+                        }
+                    }) {
+                        HStack {
+                            if viewModel.isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: StashTheme.Color.textPrimary))
+                            } else {
+                                Text("Continue")
+                                    .font(StashTypography.body.weight(.semibold))
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(canContinue ? StashTheme.Color.accent : StashTheme.Color.surfaceSoft)
+                        .foregroundColor(canContinue ? StashTheme.Color.textPrimary : StashTheme.Color.textMuted)
+                        .cornerRadius(StashTheme.Radius.pill)
+                    }
+                    .disabled(!canContinue)
+                    
+                    // Skip button
+                    Button(action: {
+                        viewModel.skipOnboarding()
+                    }) {
+                        Text("Skip for now")
+                            .font(StashTypography.body)
+                            .foregroundColor(StashTheme.Color.textSecondary)
+                    }
+                    .disabled(viewModel.isLoading)
+                }
+                .padding(.horizontal, StashSpacing.screenHorizontal)
+                .padding(.bottom, 40)
+            }
+        }
+        .onTapGesture {
+            isInputFocused = false
+        }
+        .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
+            Button("OK") {
+                viewModel.errorMessage = nil
+            }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
+    }
+    
+    private var canContinue: Bool {
+        !viewModel.isLoading && viewModel.interestsText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3
+    }
+}
+
+#Preview {
+    InterestsOnboardingView()
+}

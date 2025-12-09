@@ -51,8 +51,29 @@ Deno.serve(async (req) => {
         throw friendsError;
       }
 
+      // Get taste similarity data for all friends
+      const { data: similarities } = await supabase
+        .from('friend_similarity')
+        .select('friend_id, similarity_score, common_interests')
+        .eq('user_id', userId)
+        .in('friend_id', friendIds);
+
+      // Create a map for quick lookup
+      const similarityMap = new Map(
+        (similarities || []).map(s => [s.friend_id, {
+          similarity_score: s.similarity_score,
+          common_interests: s.common_interests
+        }])
+      );
+
+      // Enrich friends with similarity data
+      const enrichedFriends = (friends || []).map(friend => ({
+        ...friend,
+        taste_similarity: similarityMap.get(friend.user_id) || null
+      }));
+
       return new Response(
-        JSON.stringify({ friends: friends || [] }),
+        JSON.stringify({ friends: enrichedFriends }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }

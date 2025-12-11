@@ -1,5 +1,5 @@
 import { createSupabaseClient } from '../_shared/supabase-client.ts';
-import { enrichUrl, generateEmbedding } from '../_shared/gemini-client.ts';
+import { enrichUrl, enrichImage, generateEmbedding } from '../_shared/gemini-client.ts';
 import { corsHeaders } from '../_shared/types.ts';
 
 Deno.serve(async (req) => {
@@ -9,17 +9,115 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { item_id, url } = await req.json();
+    const enrichmentStartTime = Date.now();
+    const { item_id, url, imageBase64 } = await req.json();
 
-    if (!item_id || !url) {
+    if (!item_id || (!url && !imageBase64)) {
+      console.log('❌ [enrich-entity] Missing required fields');
       return new Response(
-        JSON.stringify({ error: 'item_id and url are required' }),
+        JSON.stringify({ error: 'item_id and (url or imageBase64) are required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     const supabase = createSupabaseClient();
+    const mode = imageBase64 ? 'image' : 'url';
 
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: 'enrichment_started',
+      item_id,
+      mode,
+      url: url ? url.substring(0, 100) : undefined,
+      image_size: imageBase64 ? imageBase64.length : undefined,
+    }));
+
+    // IMAGE ANALYSIS PATH
+    if (imageBase64) {
+      const geminiStartTime = Date.now();
+      console.log(`🖼️  [enrich-entity] Processing image for item: ${item_id}, size: ${imageBase64.length} chars`);
+
+      // Call Gemini Vision to analyze image
+      const enrichment = await enrichImage(imageBase64);
+      const geminiDuration = Date.now() - geminiStartTime;
+
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        event: 'gemini_vision_completed',
+        item_id,
+        duration_ms: geminiDuration,
+        entity_type: enrichment.entity_type,
+        title: enrichment.clean_title,
+      }));
+
+      // Generate embedding
+      console.log(`🧠 [enrich-entity] Generating embedding for item: ${item_id}`);
+      const embeddingText = `${enrichment.clean_title} ${enrichment.summary} ${enrichment.tags.join(' ')}`;
+      const embedding = await generateEmbedding(embeddingText);
+
+      // Use source URL from grounding if found, otherwise use pseudo-URL
+      const canonicalUrl = enrichment.source_url || `stash://image/${item_id}`;
+      const sourceName = enrichment.source_url
+        ? new URL(enrichment.source_url).hostname
+        : 'Image';
+
+      if (enrichment.source_url) {
+        console.log(`🔗 [enrich-entity] Source URL found via grounding: ${enrichment.source_url}`);
+      }
+
+      console.log(`💾 [enrich-entity] Creating entity for item: ${item_id}`);
+      // Create new entity for image
+      const { data: newEntity, error: entityError } = await supabase
+        .from('entities')
+        .insert({
+          type: enrichment.entity_type,
+          canonical_url: canonicalUrl,
+          title: enrichment.clean_title,
+          description: null,
+          source_name: sourceName,
+          image_url: null, // We don't store the actual image
+          summary: enrichment.summary,
+          primary_emoji: enrichment.primary_emoji,
+          tags: enrichment.tags,
+          embedding: JSON.stringify(embedding),
+          suggested_prompts: enrichment.suggested_prompts,
+          raw_metadata: enrichment.type_metadata || null,
+        })
+        .select()
+        .single();
+
+      if (entityError) {
+        console.error(`❌ [enrich-entity] Entity creation failed:`, entityError);
+        throw entityError;
+      }
+
+      // Update stash item with entity_id
+      await supabase
+        .from('stash_items')
+        .update({ entity_id: newEntity.id })
+        .eq('id', item_id);
+
+      const totalDuration = Date.now() - enrichmentStartTime;
+
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        event: 'enrichment_completed',
+        item_id,
+        entity_id: newEntity.id,
+        mode: 'image',
+        total_duration_ms: totalDuration,
+      }));
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          entity_id: newEntity.id,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // URL ANALYSIS PATH (existing logic)
     // Fetch URL metadata
     let title: string | null = null;
     let description: string | null = null;

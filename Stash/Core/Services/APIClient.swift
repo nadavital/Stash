@@ -135,13 +135,16 @@ class APIClient: ObservableObject {
             return CreateItemResponse(
                 itemId: UUID().uuidString,
                 status: "queued",
-                entityId: nil
+                entityId: nil,
+                title: nil
             )
         }
 
         // Real API call
         do {
-            print("🔵 Calling create-item function...")
+            let startTime = Date()
+            let sanitizedURL = url.count > 100 ? "\(url.prefix(100))..." : url
+            print("🔵 [APIClient] Calling create-item with URL: \(sanitizedURL), source: \(source.rawValue)")
 
             struct CreateItemPayload: Encodable {
                 let url: String
@@ -160,15 +163,80 @@ class APIClient: ObservableObject {
                 options: FunctionInvokeOptions(body: payload)
             )
 
+            let duration = Date().timeIntervalSince(startTime)
+
             // Invalidate feed cache since we added a new item
             await invalidateFeedCache()
             // Invalidate profile cache since stats changed
             await invalidateProfileCache()
-            
-            print("🟢 Item created: \(response)")
+
+            print("🟢 [APIClient] Item created successfully - ID: \(response.itemId), Status: \(response.status), Entity ID: \(response.entityId ?? "nil"), Duration: \(String(format: "%.2f", duration))s")
+            print("🗑️  [APIClient] Invalidated feed and profile caches")
+
             return response
         } catch {
-            print("🔴 Create item error: \(error)")
+            print("🔴 [APIClient] Create item failed - Error: \(error)")
+            print("🔴 [APIClient] Error type: \(type(of: error))")
+            if let urlError = error as? URLError {
+                print("🔴 [APIClient] URLError code: \(urlError.code.rawValue)")
+            }
+            throw APIError.networkError(error)
+        }
+    }
+
+    /// Create a new stash item from an image (screenshot analysis)
+    func createItemFromImage(imageData: Data, source: ItemSource = .self, note: String? = nil) async throws -> CreateItemResponse {
+        if useMockData {
+            // Simulate network delay
+            try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds (image analysis takes longer)
+            return CreateItemResponse(
+                itemId: UUID().uuidString,
+                status: "queued",
+                entityId: nil,
+                title: nil
+            )
+        }
+
+        // Real API call
+        do {
+            let startTime = Date()
+            let imageSizeMB = Double(imageData.count) / 1_048_576
+            print("📸 [APIClient] Calling create-item with image - Size: \(String(format: "%.2f", imageSizeMB))MB, source: \(source.rawValue)")
+
+            struct CreateItemFromImagePayload: Encodable {
+                let imageBase64: String
+                let source: String
+                let note: String?
+            }
+
+            let base64 = imageData.base64EncodedString()
+            print("🔄 [APIClient] Encoded image to base64 - Length: \(base64.count) characters")
+
+            let payload = CreateItemFromImagePayload(
+                imageBase64: base64,
+                source: source.rawValue,
+                note: note
+            )
+
+            let response: CreateItemResponse = try await supabase.functions.invoke(
+                "create-item",
+                options: FunctionInvokeOptions(body: payload)
+            )
+
+            let duration = Date().timeIntervalSince(startTime)
+
+            // Invalidate feed cache since we added a new item
+            await invalidateFeedCache()
+            // Invalidate profile cache since stats changed
+            await invalidateProfileCache()
+
+            print("🟢 [APIClient] Image item created successfully - ID: \(response.itemId), Status: \(response.status), Entity ID: \(response.entityId ?? "nil"), Duration: \(String(format: "%.2f", duration))s")
+            print("🗑️  [APIClient] Invalidated feed and profile caches")
+
+            return response
+        } catch {
+            print("🔴 [APIClient] Create image item failed - Error: \(error)")
+            print("🔴 [APIClient] Error type: \(type(of: error))")
             throw APIError.networkError(error)
         }
     }
@@ -242,6 +310,11 @@ class APIClient: ObservableObject {
     /// Unlike an item
     func unlikeItem(itemId: String) async throws {
         try await performItemAction(itemId: itemId, action: "unlike")
+    }
+
+    /// Dislike an item (negative taste signal)
+    func dislikeItem(itemId: String) async throws {
+        try await performItemAction(itemId: itemId, action: "dislike")
     }
 
     /// Mark an item as done
@@ -439,11 +512,13 @@ struct CreateItemResponse: Codable {
     let itemId: String
     let status: String
     let entityId: String?
+    let title: String?
 
     enum CodingKeys: String, CodingKey {
         case itemId = "item_id"
         case status
         case entityId = "entity_id"
+        case title
     }
 }
 

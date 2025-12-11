@@ -69,7 +69,11 @@ struct DetailToolbarModifier: ViewModifier {
     let item: ItemSummary
     @Binding var liked: Bool?
     let onLikeChanged: (Bool?) -> Void
-    
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var showDeleteAlert = false
+    private let actionsManager = ItemActionsManager.shared
+
     func body(content: Content) -> some View {
         content
             .navigationBarTitleDisplayMode(.inline)
@@ -90,10 +94,10 @@ struct DetailToolbarModifier: ViewModifier {
                                 .frame(width: 40, height: 36)
                         }
                         .buttonStyle(.plain)
-                        
+
                         Divider()
                             .frame(height: 20)
-                        
+
                         // Dislike button
                         Button {
                             Haptics.light()
@@ -108,8 +112,40 @@ struct DetailToolbarModifier: ViewModifier {
                                 .frame(width: 40, height: 36)
                         }
                         .buttonStyle(.plain)
+
+                        Divider()
+                            .frame(height: 20)
+
+                        // More menu (delete)
+                        Menu {
+                            Button(role: .destructive) {
+                                showDeleteAlert = true
+                            } label: {
+                                Label("Delete from Stash", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.system(size: 16, weight: .medium))
+                                .frame(width: 40, height: 36)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
+            }
+            .alert("Delete Item?", isPresented: $showDeleteAlert) {
+                Button("Delete", role: .destructive) {
+                    Task {
+                        await actionsManager.deleteItem(itemId: item.itemId) {
+                            // Optimistic update - dismiss immediately
+                            dismiss()
+                        } onError: { error in
+                            print("Delete failed: \(error)")
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Are you sure you want to remove \"\(item.title)\" from your Stash?")
             }
     }
 }

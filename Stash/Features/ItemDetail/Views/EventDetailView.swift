@@ -138,7 +138,10 @@ struct EventDetailView: View {
         Task {
             if newValue == true {
                 await actionsManager.likeItem(itemId: item.itemId)
+            } else if newValue == false {
+                await actionsManager.dislikeItem(itemId: item.itemId)
             } else if newValue == nil {
+                // User toggled off (was liked or disliked, now neutral)
                 await actionsManager.unlikeItem(itemId: item.itemId)
             }
         }

@@ -67,11 +67,11 @@ class ItemActionsManager: ObservableObject {
     ) async {
         guard !processingItems.contains(itemId) else { return }
         processingItems.insert(itemId)
-        
+
         // Optimistic update
         onOptimisticUpdate?()
         NotificationCenter.default.post(name: .itemUnliked, object: itemId)
-        
+
         do {
             try await apiClient.unlikeItem(itemId: itemId)
             print("🟢 Item unliked successfully: \(itemId)")
@@ -82,10 +82,36 @@ class ItemActionsManager: ObservableObject {
             onRollback?()
             NotificationCenter.default.post(name: .itemLiked, object: itemId)
         }
-        
+
         processingItems.remove(itemId)
     }
-    
+
+    /// Dislike an item with optimistic update (negative taste signal)
+    func dislikeItem(
+        itemId: String,
+        onOptimisticUpdate: (() -> Void)? = nil,
+        onRollback: (() -> Void)? = nil
+    ) async {
+        guard !processingItems.contains(itemId) else { return }
+        processingItems.insert(itemId)
+
+        // Optimistic update
+        onOptimisticUpdate?()
+        // Note: No notification needed, this is just a taste signal
+
+        do {
+            try await apiClient.dislikeItem(itemId: itemId)
+            print("🟢 Item disliked successfully: \(itemId)")
+        } catch {
+            print("🔴 Error disliking item: \(error)")
+            lastError = error
+            // Rollback on failure
+            onRollback?()
+        }
+
+        processingItems.remove(itemId)
+    }
+
     // MARK: - Delete Actions
     
     /// Delete an item with optimistic update

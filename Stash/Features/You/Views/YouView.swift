@@ -5,27 +5,44 @@ import SwiftUI
 struct YouView: View {
     @StateObject private var viewModel = YouViewModel()
     @State private var showingSettings = false
-    
+    @State private var showingAddSheet = false
+
     var body: some View {
         NavigationStack {
             ZStack {
-                StashTheme.Color.bg
-                    .ignoresSafeArea()
-                
-                if viewModel.isLoading && viewModel.items.isEmpty {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(StashTheme.Color.accent)
-                } else {
-                    ScrollView {
-                        VStack(spacing: Spacing.xl) {
-                            // Your Items Section
-                            YourItemsSection(items: viewModel.items)
-                            
-                            // Friends Section
-                            YourFriendsSection(friends: viewModel.friends)
+                // Background and content
+                ZStack {
+                    StashTheme.Color.bg
+                        .ignoresSafeArea()
+
+                    if viewModel.isLoading && viewModel.items.isEmpty {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .tint(StashTheme.Color.accent)
+                    } else {
+                        ScrollView {
+                            VStack(spacing: Spacing.xl) {
+                                // Your Items Section
+                                YourItemsSection(items: viewModel.items)
+
+                                // Friends Section
+                                YourFriendsSection(friends: viewModel.friends)
+                            }
+                            .padding(.vertical)
                         }
-                        .padding(.vertical)
+                    }
+                }
+
+                // Floating add button overlay
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        FloatingAddButton {
+                            showingAddSheet = true
+                        }
+                        .padding(.trailing, Spacing.lg)
+                        .padding(.bottom, Spacing.lg)
                     }
                 }
             }
@@ -43,6 +60,9 @@ struct YouView: View {
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showingAddSheet) {
+                AddItemSheet()
             }
         }
         .task {

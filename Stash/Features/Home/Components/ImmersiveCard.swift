@@ -8,17 +8,22 @@ struct ImmersiveCard: View {
     let item: ItemSummary
     let relatedItems: [ItemSummary]
     let onAskStash: (ItemSummary) -> Void
-    
-    @State private var showingDetail = false
+    @Binding var showingDetail: Bool
+
     @State private var liked: Bool? = nil
-    
-    init(item: ItemSummary, relatedItems: [ItemSummary] = [], onAskStash: @escaping (ItemSummary) -> Void = { _ in }) {
+
+    init(item: ItemSummary, relatedItems: [ItemSummary] = [], showingDetail: Binding<Bool>, onAskStash: @escaping (ItemSummary) -> Void = { _ in }) {
         self.item = item
         self.relatedItems = relatedItems
+        self._showingDetail = showingDetail
         self.onAskStash = onAskStash
     }
     
     var body: some View {
+        cardContent
+    }
+
+    private var cardContent: some View {
         ZStack(alignment: .bottom) {
             // Full-bleed media
             GeometryReader { geo in
@@ -26,7 +31,7 @@ struct ImmersiveCard: View {
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
             }
-            
+
             // Elegant gradient for text readability - more of the image visible
             LinearGradient(
                 colors: [
@@ -171,9 +176,6 @@ struct ImmersiveCard: View {
             Haptics.light()
             showingDetail = true
         }
-        .navigationDestination(isPresented: $showingDetail) {
-            ItemDetailRouter(item: item, relatedItems: relatedItems)
-        }
     }
     
     // MARK: - Media Background
@@ -276,18 +278,20 @@ struct ImmersiveCard: View {
 // MARK: - Preview
 
 #Preview("Card") {
+    @Previewable @State var showingDetail = false
     ScrollView {
-        ImmersiveCard(item: .mockArticle)
+        ImmersiveCard(item: .mockArticle, showingDetail: $showingDetail)
             .padding(.horizontal, 16)
     }
     .background(Color.black)
 }
 
 #Preview("Feed") {
+    @Previewable @State var showingDetail = false
     ScrollView {
         VStack(spacing: 20) {
-            ImmersiveCard(item: .mockArticle)
-            ImmersiveCard(item: .mockSong)
+            ImmersiveCard(item: .mockArticle, showingDetail: $showingDetail)
+            ImmersiveCard(item: .mockSong, showingDetail: $showingDetail)
         }
         .padding(.horizontal, 16)
     }
@@ -295,20 +299,10 @@ struct ImmersiveCard: View {
 }
 
 #Preview("Song Card") {
+    @Previewable @State var showingDetail = false
     ScrollView {
-        ImmersiveCard(item: .mockSong)
+        ImmersiveCard(item: .mockSong, showingDetail: $showingDetail)
             .padding(.horizontal, 16)
-    }
-    .background(Color.black)
-}
-
-#Preview("Feed") {
-    ScrollView {
-        VStack(spacing: 20) {
-            ImmersiveCard(item: .mockArticle)
-            ImmersiveCard(item: .mockSong)
-        }
-        .padding(.horizontal, 16)
     }
     .background(Color.black)
 }

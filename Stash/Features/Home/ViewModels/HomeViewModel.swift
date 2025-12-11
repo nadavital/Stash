@@ -13,18 +13,18 @@ class HomeViewModel: ObservableObject {
     
     func loadFeed() async {
         guard !isLoading else { return }
-        
+
         isLoading = true
         error = nil
-        
+
         do {
             // Load from existing feed-today endpoint
             let feed = try await apiClient.fetchTodayFeed()
-            
+
             // Combine all items and deduplicate
             var allItems: [ItemSummary] = []
             var seenIds = Set<String>()
-            
+
             // Priority order: brain_snack, from_friends, by_you, for_you
             for item in feed.brainSnack where !seenIds.contains(item.id) {
                 allItems.append(item)
@@ -42,20 +42,19 @@ class HomeViewModel: ObservableObject {
                 allItems.append(item)
                 seenIds.insert(item.id)
             }
-            
+
             withAnimation {
                 self.items = allItems
             }
         } catch {
             self.error = error
             print("🔴 Failed to load feed: \(error)")
-            
-            // Fall back to mock data in development
-            #if DEBUG
-            self.items = ItemSummary.mockItems
-            #endif
+
+            // Keep existing items instead of falling back to mock data
+            // This provides better UX - user sees stale data rather than mock/empty
+            print("ℹ️  Keeping existing feed data (\(items.count) items)")
         }
-        
+
         isLoading = false
     }
 }

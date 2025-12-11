@@ -134,6 +134,7 @@ export interface EnrichmentResult {
   primary_emoji: string;
   suggested_prompts: string[];
   type_metadata?: TypeMetadata;
+  source_url?: string;  // Original URL found via Google Search grounding
 }
 
 // CORS headers for responses

@@ -34,20 +34,21 @@ The AI is not just a chatbot. It's an **ambient intelligence** that:
 - **Detail Views = Enhanced Content** — Not wrappers or links, but the actual content itself with Stash controls layered on top
 - Keep users in-app (articles, videos, music all playable/viewable inside Stash)
 
-### 3. **Seamless Discovery Feed**
-The Home tab is a continuous feed (like TikTok For You) that blends:
+### 3. **Seamless Discovery Deck**
+The Home deck is a continuous flow (like flipping through cards) that blends:
 - Your saved items
-- AI-recommended content
-- Things friends shared with you
+- AI-recommended content (with "Picked for you" attribution)
+- Things friends shared with you (with glass pill "from [friend]")
 
 **Users shouldn't notice the difference** — it's just "content I want to see right now."
 
-### 4. **Social Through Taste**
-Friends aren't just contacts — they're **taste vectors**. The AI:
+### 4. **Social Through Taste & Conversation**
+Friends aren't just contacts — they're **taste vectors and conversation partners**. The AI:
 - Computes taste overlap
 - Suggests what to share with whom
-- Surfaces friend shares in your feed
-- Makes sharing feel natural, not forced
+- Surfaces friend shares in your deck (with glass pill attribution)
+- Makes friendships living conversations (items + reactions + AI insights)
+- Can participate in group chats (future)
 
 ### 5. **Prototype Fearlessly**
 We're building the next big thing in AI. **Don't be afraid to:**
@@ -58,63 +59,89 @@ We're building the next big thing in AI. **Don't be afraid to:**
 
 ---
 
-## The Three Spaces
+## The Core Experience
 
-### **Home Tab** — Discovery Feed
+### **Home — The Deck**
 
-**Purpose:** Continuous content consumption. Like TikTok For You, but for enriching content.
+**Interaction Model:**
+- Think of your stash as a **deck of full-screen cards** you flip through
+- Swipe **left/right** to move between items (with fluid 3D card-flip animation)
+- Swipe **up** to dive into detail view (content slides up modally)
+- Swipe **left/right in detail** to move between items without returning to deck
+- Swipe **down** to dismiss back to deck
 
-**What it shows:**
-- Immersive cards (480pt, full-bleed backgrounds)
-- Seamless blend of: your saves + AI recommendations + friend shares
-- Sorted by relevance/time/context (not chronological)
-- Each card has a type-specific primary action (Read, Play, Watch, etc.)
+**What's in the deck:**
+- Your saved items
+- AI recommendations (daily discoveries with "Picked for you" attribution)
+- Friend shares (with glass pill "from [friend]" overlay)
+- All blended seamlessly — one continuous flow
+
+**Card Design (Full-Screen):**
+- Cards fill entire screen (immersive, one thing at a time)
+- Full-bleed background (image or gradient)
+- Minimal overlay UI:
+  - Top: Type pill + share button (glass)
+  - Bottom: Title, summary, friend/AI attribution, action buttons (glass)
+- Floating AI orb (bottom-right, always accessible)
+- Floating + button (bottom-left, add new items)
 
 **How it's populated:**
-- **Daily AI Discovery** — Background job finds new content based on taste profile
-- **Your saves** — Items you've added via Share Extension or in-app
-- **Friend shares** — Items friends send to your stash
-- **On-demand discovery** — AI fetches more if you ask in Search tab
+- **Daily AI Discovery** — Background job finds content, adds to deck with "Picked for you"
+- **Your saves** — Items from Share Extension or in-app
+- **Friend shares** — Items friends send to your stash (appear with "from [friend]" pill)
+- **On-demand discovery** — AI can add more via Chat conversations
 
 ---
 
-### **You Tab** — Your Archive & Friends
+### **Chat — AI Conversations**
 
-**Purpose:** Manage your stash, explore what you've saved (organized by AI), connect with friends.
+**Purpose:** Your conversation history with Stash AI. Not just search, but ongoing dialogue.
 
-**Sections:**
-- **Your Stash** — Searchable, filterable list of all saved items (AI-organized)
-- **Shared With You** — Items friends sent to your stash
-- **Friends** — Connect and share with friends
-- **Settings**
+**Features:**
+- Conversation threads organized by topic/query
+- Large Synapse Lens (200pt) in empty state
+- AI can reference items from your stash
+- AI suggests friends to share with ("Sarah would love this")
+- Quick friend adding via [+] button in toolbar
+
+**Chat replaces traditional search** — AI understands intent and adapts responses.
 
 ---
 
-### **Search Tab** — AI Intelligence Hub
+### **Friends — Contextual, Not a Tab**
 
-**Purpose:** Dynamic AI interface that adapts to your intent. Not just chat — the UI changes based on what you're trying to do.
+**Philosophy:** Real taste connections, not social media followers.
 
-**The Synapse Lens:**
-- Large (200pt) liquid bioluminescent orb
-- Visual anchor for all AI interactions
-- States: idle, listening, thinking, answering
-- Cosmic palette (deep violet #5238B5, magenta, electric blue)
+**How Friends Appear:**
+- **In Home deck:** Friend shares show glass pill "from Sarah" (tappable for quick reply)
+- **In Chat:** AI suggests who to share with based on taste overlap
+- **In Profile:** Manage friends, see taste similarity, shared history
 
-**Dynamic UI Behaviors:**
+**How to Add Friends:**
+1. **Through sharing** (primary) — Share item → see "Add friends" prompt → organic discovery
+2. **Scan code** (like Snapchat) — Profile → Your Code → Friend scans → instant add
+3. **Search handle** — Chat [+] or Profile → Search @username
+4. **Contacts sync** — Find friends already using Stash
+5. **Invite link** — Send to friends not on Stash yet
 
-**1. Finding Something You Saved**
-"that pad thai recipe I saved" → Shows mini immersive card, tap to view
+**Friend Interaction:**
+- Mutual connections (not follow/follower)
+- AI-ranked by taste match when sharing
+- Private by default (your stash is yours)
+- Sharing is conversation, not broadcast
 
-**2. Discovering New Content**
-"find me something new to cook" → Shows stack of AI-found cards, browse and refine
+---
 
-**3. Asking About Current Content**
-Tap "Ask Stash" in detail view → Traditional chat interface
+### **Profile — Your Stash & Settings**
 
-**Daily Discovery Digest:**
-- Lives in Search tab as a tappable element
-- Shows what AI saved for you today and why
-- Tap to explore items and refine future discovery
+**Access:** Tap profile icon (top-right in Home toolbar)
+
+**Profile Sheet Contents:**
+- Your handle + avatar
+- **Your Code** — Scannable code for instant friend adds (like Snapchat)
+- **Your Stash** (1,247 items) → Full searchable/filterable list
+- **Friends** (12) → Manage friends, see taste overlap
+- **Settings** → Account, preferences, sign out
 
 ---
 
@@ -130,29 +157,39 @@ Different content types deserve different treatments. Each should be **engaging 
 
 | Type | Rendering | Primary Action |
 |------|-----------|----------------|
-| **Article** | WKWebView with Stash controls overlay | Read |
-| **Music** | In-app player (MusicKit) | Play |
+| **Article** | WKWebView with floating glass overlay | Read |
+| **Music** | In-app player (MusicKit) or mini-player from card | Play |
 | **Video** | Embedded player (YouTube, native) | Watch |
 | **Recipe** | Enhanced WebView or native view | View/Cook |
 | **Restaurant** | Map + info + WebView | Get Directions |
 | **Event** | Details + map | Add to Calendar |
 | **Product** | WebView + price/specs | View Product |
 
-### Standard Detail Controls
+### Floating Glass Controls
 
-Every detail view includes:
-- **Like/Dislike button** (toolbar) — Explicit taste signal, trains taste profile
-- **Share button** — Send to friend's stash (one-tap, AI-ranked friends)
-- **Ask Stash button** — Floating Synapse Lens (56pt, bottom-right) for context-aware chat
-- **Type-specific action** — Read, Watch, Cook, etc. (contextual)
+**Core actions (always visible):**
+- **Like/Unlike** — Explicit taste signal
+- **Send to friend's stash** — One-tap, AI-ranked friends
+- **Ask Stash** — Double-tap anywhere or tap floating Synapse Lens (56pt, bottom-right)
+- **Delete** — Buried but accessible
+
+**Proactive AI prompts:**
+- For certain content types, suggested questions appear as glass chips
+- Example: Recipes → "What can I substitute for X?"
+- Example: Articles → "Summarize in one sentence"
+
+**Primary actions:**
+- Some content doesn't require entering detail view (music can play from card)
+- Cards make primary action obvious (big glass Play button for music)
 
 **No "Done" button** — Stash items are assets, not tasks. Engagement is tracked implicitly (opens, time spent, returns) to feed the taste profile. Users should continuously refer back to content, not "complete" it.
 
-### Navigation Between Items (TBD — Prototype Required)
+### Navigation Between Items
 
-**Problem:** Avoid the "home → detail → home → detail" loop. Keep users immersed.
-
-**Approach:** Build, test, iterate. Don't lock in until it feels delightful.
+**Gesture-based flow:**
+- Swipe **left/right in detail view** to move to next/previous item
+- Continuous flow — no "detail → deck → detail" loop
+- Swipe **down** to dismiss back to deck
 
 ---
 
@@ -196,22 +233,45 @@ The AI:
 ### MVP Social (Phase 1)
 
 **Core functionality:**
-1. **Add friends** — By handle, contacts sync, QR code, invite link
-2. **Share to stash** — One-tap send item to friend's stash
-3. **Receive shares** — "Shared With You" section in You tab
-4. **In-app sharing** — Custom share sheet, AI-ranked friends
+1. **Add friends** — Multiple organic methods:
+   - **Scan code** (primary) — Profile → Your Code → scan like Snapchat
+   - Search by @handle
+   - Contacts sync
+   - Invite link for non-users
+2. **Share to stash** — One-tap send item to friend's deck (floating glass control)
+3. **Receive shares** — Friend shares appear in deck with glass pill "from [friend]"
+4. **Quick reply** — Tap friend attribution pill → voice note, text, or emoji
+5. **AI-ranked sharing** — Custom share sheet with friends sorted by taste match
 
 **Share Flow:**
-1. Tap Share button on card or detail view
-2. See list of friends (AI-ranked by taste match for this item)
-3. Tap friend → Item sent to their stash
-4. They see it in "Shared With You" + optional push notification
+1. Tap Share button (floating glass control in detail view)
+2. Custom share sheet appears:
+   - **No friends yet:** "Add friends to share instantly" card with [Add Friend] button
+   - **Have friends:** AI-ranked list by taste match for this item
+3. Tap friend → Item sent to their deck
+4. They see it with "from [you]" glass pill + optional push notification
+5. They tap pill → Quick reply or profile view
+
+**Friend Adding Flow:**
+1. **Scan Code (Primary):**
+   - Home → Profile icon → Your Code
+   - Shows scannable code (like Snapchat's Snapcode)
+   - Tap "Scan Friend's Code" → Camera opens
+   - Scan → Instant add (mutual, no approval needed for in-person)
+2. **Search Handle:**
+   - Chat [+] or Profile → Friends → [+ Add]
+   - Search @username
+   - Send request → They approve
+3. **Contacts/Invite:**
+   - Find existing Stash users from contacts
+   - Generate invite link for non-users
 
 ### Future Social (Phase 2)
 
-- Friend profiles with taste overlap visualization
-- AI-powered share suggestions ("Sarah would love this")
-- Shared history and activity
+- **Friendship conversations** — Each friendship = thread of items + reactions + AI insights
+- **Group chats with AI** — AI as participant in group conversations
+- **AI proactive suggestions** — "You both saved 3 recipes this week—want to plan dinner?"
+- **Taste-based recommendations** — "Sarah would love this" (appears in Chat)
 - Combined taste profiles ("What would Jake and I both like?")
 
 ---
@@ -221,11 +281,13 @@ The AI:
 What makes Stash different? These are the **wow** interactions:
 
 1. **Save a URL** → AI instantly enriches it (summary, tags, insights appear in seconds)
-2. **Open Home feed** → See content you forgot you saved, perfectly timed (restaurant you saved weeks ago, now surfaced because you're nearby)
-3. **Ask AI "what should I cook tonight?"** → Get personalized recipe suggestions from your stash
-4. **Share with friends** → Tap Share, see friends ranked by who would actually like it
-5. **Daily Digest** → AI explains what it discovered for you and why
-6. **Detail view navigation** → Seamlessly flow from one piece of content to the next (whatever we build here must feel delightful)
+2. **Open the deck** → Flip through your stash like cards, with fluid animations
+3. **Swipe up** → Dive into content, swipe left/right to move between items without leaving
+4. **Friend sends you something** → Appears in your deck with glass pill "from Sarah"—tap to quick reply
+5. **Double-tap in detail** → Ask AI about what you're looking at, get instant context
+6. **Proactive AI prompts** → For certain content, suggested questions appear without asking
+7. **Daily AI discoveries** → New items appear in your deck with "Picked for you" attribution
+8. **Share with friends** → Tap Share, see friends ranked by who would actually like it
 
 ---
 

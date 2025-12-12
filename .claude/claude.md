@@ -52,11 +52,12 @@ Then **read the technical guides** (`.claude/`):
 5. **Native over custom** — Follow iOS conventions, Liquid Glass aesthetic
 6. **Content over chrome** — Detail views are content, not wrappers
 
-### App Structure: Two Tabs + Search
+### App Structure: Two-Tab Design
 
-- **Home** — Immersive feed of saved content with AI-enriched previews
-- **You** — Items list, Shared With You, Friends
-- **Search** (`.search` role) — Unified AI-powered search via Synapse Lens
+- **Home Tab** — Full-screen deck (swipe left/right), swipe up for detail, floating AI orb + add button
+- **Chat Tab** — AI conversation threads, friend suggestions, [+] to add friends
+- **Profile Sheet** — Your Code (scannable), Your Stash list, Friends management, Settings
+- **No Friends Tab** — Friends are contextual (attribution pills in Home, suggestions in Chat, managed in Profile)
 
 ---
 
@@ -189,30 +190,49 @@ Use liberally for modern iOS aesthetic — buttons, overlays, cards.
 
 ## Key Features & Implementation Patterns
 
-### Home Tab — Immersive Feed
+### Home — The Deck
 
-**Purpose:** AI-curated feed with rich preview cards
+**Interaction Model:**
+- **Full-screen cards** (one card fills entire view)
+- Swipe **left/right** to flip between cards (with 3D rotation animation)
+- Swipe **up** to enter detail view (content slides up modally)
+- Swipe **down** in Home to refresh deck
+- Swipe **left/right in detail** to move between items
+- Swipe **down in detail** to dismiss back to deck
 
-**Card Design:**
-- 480pt height, full-bleed background with gradient overlay
-- Type-specific gradients, glass-effect action buttons
-- Primary CTA uses tinted interactive glass
+**Card Design (Full-Screen):**
+- Cards fill 100% of screen height
+- Full-bleed background (image or type-specific gradient)
+- Minimal glass overlays:
+  - **Top:** Type pill (emoji + name) + share button
+  - **Bottom:** Title, summary, attribution pill, action buttons
+- **Friend attribution:** Glass pill "from Sarah" (tappable for quick reply)
+- **AI attribution:** "Picked for you" pill for discoveries
+- **Floating controls:** AI orb (bottom-right), + button (bottom-left)
 
-**Feed Logic:**
+**Deck Population:**
 - Loads from `feed-today` Edge Function
-- Sections: brainSnack (AI picks), fromFriends, byYou, forYou
+- Blends: your saves, AI recommendations, friend shares
 - Backend handles sorting (temporal relevance, engagement, freshness, social signals)
 
-### Search Tab — AI Interface
+### Chat — AI Conversations
 
-**Purpose:** Context-aware chat with the Synapse Lens
+**Purpose:** Dedicated tab for AI conversation history and friend discovery.
 
 **UI:**
-- Empty state: Large Synapse Lens (200pt) + suggested prompts
-- Conversation view with message bubbles, glass input bar
+- **Empty state:** Large Synapse Lens (200pt) + suggested prompts
+- **Conversation threads:** Organized by topic/query
+- **Message bubbles:** User queries + AI responses with referenced items
+- **Toolbar:** "Chat" title + [+] button to add friends
+
+**AI Integration:**
+- Floating AI orb in Home deck → tapping opens Chat tab with context
+- AI can reference items from user's stash
+- AI suggests friends to share with ("Sarah would love this" → [Share with Sarah] button)
+- Proactive insights ("You both saved 3 recipes this week")
 
 **Chat Logic:**
-- Calls `chat-with-stash` Edge Function with query + conversation history
+- Calls `chat-with-stash` Edge Function with query + conversation history + current context
 - Backend performs vector search, returns AI response + referenced items
 
 ### ItemDetail — Content Consumption
@@ -229,14 +249,19 @@ Routes to type-specific views:
 - `EventDetailView` — Map + calendar integration
 - `ContentDetailView` — WebView for articles/generic URLs
 
-**Standard Detail Structure:**
-- Hero section (320pt) with image + metadata
-- Share with friends (ranked by taste)
-- AI summary card (summary, TLDR, insights)
-- Type-specific actions (Read, Watch, Cook, etc.)
-- Related items (horizontal scroll)
-- Floating "Ask Stash" button (Synapse Lens, 56pt, bottom-right)
-- Like/Dislike in toolbar (explicit taste signal)
+**Floating Glass Controls:**
+- **Like/Unlike** — Always accessible
+- **Send to friend** — One-tap, AI-ranked
+- **Ask Stash** — Floating Synapse Lens (56pt, bottom-right) or double-tap anywhere
+- **Delete** — Buried but accessible
+- **Proactive prompts** — Glass chips with suggested questions for certain content types
+
+**Detail View Features:**
+- Content is primary (full-bleed WebView, player, etc.)
+- Glass controls float on top
+- Swipe **left/right** to move between items (no return to deck needed)
+- Swipe **down** to dismiss back to deck
+- Some content can be consumed from card (music plays from card, no detail needed)
 
 **Engagement Tracking (Implicit):**
 - `markOpened()` on view appear
@@ -244,8 +269,10 @@ Routes to type-specific views:
 - No "Done" button — items are assets, not tasks
 
 **Ask Stash Flow:**
-- Tap button → sheet with suggested prompts → calls `chat-with-stash` with item URL
-- Gemini analyzes live content, no copyrighted content stored
+- Double-tap anywhere or tap Synapse Lens button
+- Proactive prompts appear as glass chips (tap to start conversation)
+- Calls `chat-with-stash` with item URL + conversation history
+- Inline overlay response (doesn't block content)
 
 ---
 
@@ -437,13 +464,36 @@ When working on Stash:
 3. Use tinted glass for primary actions (contextual prominence)
 4. Follow `SWIFT_GUIDE.md` for all Swift/SwiftUI syntax
 
-### Code Quality
+### Code Quality & Modularity
 
-- Break large views into smaller components
+**CRITICAL: Keep files small and modular**
+- **Maximum file length:** ~300 lines. If longer, split into components
+- **One component per file:** Extract reusable UI into separate View structs
+- **Break up large views:** Use `// MARK: -` sections and extract to files
+- **Component organization:**
+  - Main view file (e.g., `HomeView.swift`)
+  - Component folder (e.g., `Home/Components/`) for extracted pieces
+  - Example: `ImmersiveCard.swift`, `FloatingAddButton.swift`, etc.
+
+**Why modularity matters:**
+- Keeps code in AI context window (critical for Claude)
+- Makes code easier to understand and modify
+- Improves reusability across features
+- Simplifies testing and debugging
+
+**When to extract a component:**
+- View logic exceeds 50 lines
+- UI pattern is reused 2+ times
+- Component has its own state or logic
+- Makes the parent view clearer
+
+**Additional quality standards:**
 - Use semantic colors (adapt to dark mode)
 - Provide accessibility labels
 - Handle errors gracefully with user-facing messages
 - Optimize for performance (lazy loading, caching)
+- Prefer composition over inheritance
+- Keep ViewModels focused (single responsibility)
 
 **Additional context:**
 - Product vision: `VISION.md` (root directory)

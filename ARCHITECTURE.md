@@ -151,8 +151,15 @@ shares
 ├── note (text, optional)
 ├── shared_at
 ├── viewed_at (nullable)
+├── replied_at (nullable)
+├── reply_text (text, nullable)
 └── created_at
 ```
+
+**Future: Friendship Conversations**
+- Each friendship becomes a conversation thread
+- Messages = shared items + reactions + AI insights
+- Reactions: voice notes, emoji, text replies
 
 ---
 
@@ -319,8 +326,9 @@ Stash/
 - `ItemActionsManager.shared` — Optimistic updates for like/done/delete
 
 **Navigation:**
-- `NavigationStack` with type-safe routing using `navigationDestination(for:)`
-- Sheets and full-screen covers for modals
+- **Deck interaction:** `TabView` with `.tabViewStyle(.page)` for horizontal card swiping + `.rotation3DEffect()` for card-flip animation
+- **Detail views:** `NavigationStack` with gesture-based left/right swiping between items
+- Sheets and full-screen covers for modals (AI conversations, share flows)
 
 **State Management:**
 - `@State` for local UI state

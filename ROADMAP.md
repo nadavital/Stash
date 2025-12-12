@@ -64,13 +64,15 @@
 
 ### Must-Have Features
 
-#### Home Feed
-- [x] Immersive cards with type-specific layouts
-- [x] Vertical scroll
-- [x] Primary action buttons
-- [ ] AI recommendations blended into feed
+#### Home — The Deck
+- [ ] **Full-screen deck interaction** — Cards fill entire screen, horizontal swipe with 3D flip
+- [ ] **DeckCard component** — Complete redesign (full-screen, minimal overlay UI)
+- [ ] **Gesture navigation** — Swipe up to detail, swipe down to refresh
+- [ ] Friend attribution glass pill "from [friend]" (tappable to reply)
+- [ ] AI discovery attribution "Picked for you"
+- [ ] Floating controls (AI orb bottom-right, + button bottom-left)
+- [ ] AI recommendations blended into deck
 - [ ] Smart sorting (relevance, time, context)
-- [ ] Pull to refresh
 
 #### Detail Views
 - [x] Article detail (WebView)
@@ -81,25 +83,36 @@
 - [x] Social post detail
 - [ ] Restaurant detail with map
 - [ ] Product detail
+- [ ] **Gesture navigation** — Swipe left/right between items, swipe down to dismiss
+- [ ] **Floating glass controls** — Like, share, ask AI, delete
+- [ ] **Double-tap to talk** — Tap anywhere to bring up AI conversation
+- [ ] **Proactive AI prompts** — Glass chips with suggested questions for certain types
 - [ ] Wire Like/Dislike to backend (persist taste signals)
 - [ ] Implicit engagement tracking (opens, time spent)
-- [ ] Navigation between items (TBD design)
 
-#### Search/AI Tab
-- [x] Synapse Lens animation
-- [x] Basic chat interface
-- [ ] Intent detection (find saved vs. discover new)
-- [ ] Dynamic UI (mini card vs. stack vs. chat)
-- [ ] Daily digest display
-- [ ] Custom instructions
+#### Chat Tab (Replaces Search)
+- [x] Synapse Lens animation and states
+- [x] Basic conversation interface
+- [ ] **Rename SearchView → ChatView**
+- [ ] Conversation thread organization
+- [ ] AI suggests friends to share with
+- [ ] [+] button in toolbar to add friends
+- [ ] Extract components (MessageBubble, LensDemoSheet, etc.)
 
-#### You Tab
-- [ ] Redesigned profile header
-- [ ] Your Stash list (searchable, filterable)
-- [ ] AI-powered organization
-- [ ] Filter chips (All, Articles, Music, etc.)
-- [ ] Sort options (Recent, Alphabetical, Most Engaged)
+#### Profile Sheet (Replaces You Tab)
+- [ ] **Your Code** — Scannable code for instant friend adds (like Snapchat)
+- [ ] **Scan Friend's Code** — Camera scanner to add friends in-person
+- [ ] **Your Stash** — Full searchable/filterable list of all items
+- [ ] **Friends** — List with taste similarity, shared history
+- [ ] [+ Add Friend] — Search handle, contacts, invite link
 - [ ] Settings screen
+
+#### Friends (Contextual Integration)
+- [ ] Friend attribution pills in Home deck
+- [ ] Quick reply sheet (tap pill → voice/text/emoji)
+- [ ] Friend profile view (taste match, shared items)
+- [ ] AI-ranked friends in share sheet
+- [ ] Custom share sheet for in-app sharing
 
 #### AI Features
 - [x] Content enrichment on save
@@ -122,10 +135,11 @@
 **Target:** Phase 1 complete = ready for beta testing (individual experience only)
 
 **Focus order:**
-1. Daily AI discovery (makes Home feed valuable)
-2. Intent-aware search (makes Search tab magical)
-3. Detail view navigation (keeps users engaged)
-4. You tab organization (makes library usable)
+1. **Full-screen deck + cards** (DeckView, DeckCard components with 3D flip animation)
+2. **Detail view gesture navigation** (swipe up to detail, left/right between items, down to dismiss)
+3. **Profile sheet with Your Code** (scannable code for friend adds, Your Stash list)
+4. **Chat tab restructure** (rename from Search, add friend discovery)
+5. **Friend features** (attribution pills, share sheet, quick reply)
 
 ---
 
@@ -223,20 +237,25 @@
 
 ---
 
-## Key Decisions Pending
+## Key Decisions Made
 
-### Detail View Navigation (TBD)
+### Deck Interaction Model
 
-**Problem:** Avoid "home → detail → home → detail" loop
+**Decided:**
+- Home is a **deck of cards** (not a scrolling feed)
+- Swipe **left/right** to flip between cards (with 3D rotation animation)
+- Swipe **up** to enter detail view
+- Swipe **left/right in detail** to move between items
+- Swipe **down** to dismiss back to deck
+- **Gesture-based** with visual animation feedback
 
-**Options to prototype:**
-1. Horizontal paging (swipe left/right)
-2. Stack metaphor (swipe down to dismiss, reveals previous)
-3. Floating mini-feed overlay
-4. Auto-advance on Done/Like
-5. Something new
+### Detail View Navigation
 
-**Next step:** Build 2-3 prototypes, test with users, pick winner
+**Solved:**
+- Swipe left/right in detail view moves between items (no return to deck)
+- Swipe down dismisses back to deck
+- Floating glass controls always accessible
+- Double-tap anywhere to talk to AI
 
 ### Daily Discovery Cadence
 
@@ -266,10 +285,11 @@
 
 To reach **beta-ready** (Phase 1 complete):
 
-1. **Daily Discovery** → Makes Home feed valuable
-2. **Intent-Aware Search** → Makes AI feel magical
-3. **Detail Navigation** → Keeps users engaged
-4. **You Tab Polish** → Makes library usable
+1. **Deck Interaction Model** → Core gesture-based navigation
+2. **Detail Gesture Navigation** → Swipe between items, swipe down to dismiss
+3. **Floating Glass Controls** → Like, share, double-tap AI
+4. **Daily Discovery** → Makes deck valuable (AI-picked items with attribution)
+5. **Friend Shares in Deck** → Glass pill "from [friend]", quick reply
 
 To reach **launch-ready** (Phase 2 complete):
 

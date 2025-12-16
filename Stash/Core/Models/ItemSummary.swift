@@ -154,8 +154,16 @@ struct ItemSummary: Codable, Identifiable, Hashable {
     let createdAt: Date
     let canonicalUrl: String?
     let metadata: Metadata
+    let sharedByUser: SharedByUser?
 
     var id: String { itemId }
+
+    /// Information about the friend who shared this item
+    struct SharedByUser: Codable, Hashable {
+        let userId: String
+        let handle: String
+        let name: String?
+    }
     
     // Hashable conformance - use itemId as unique identifier
     func hash(into hasher: inout Hasher) {
@@ -328,6 +336,7 @@ struct ItemSummary: Codable, Identifiable, Hashable {
         case createdAt = "created_at"
         case canonicalUrl = "canonical_url"
         case metadata
+        case sharedByUser = "shared_by_user"
     }
 
     // Custom decoding to handle ISO8601 string dates
@@ -342,6 +351,7 @@ struct ItemSummary: Codable, Identifiable, Hashable {
         summary = try container.decode(String.self, forKey: .summary)
         canonicalUrl = try container.decodeIfPresent(String.self, forKey: .canonicalUrl)
         metadata = try container.decode(Metadata.self, forKey: .metadata)
+        sharedByUser = try container.decodeIfPresent(SharedByUser.self, forKey: .sharedByUser)
 
         // Decode created_at as ISO8601 string
         let dateString = try container.decode(String.self, forKey: .createdAt)
@@ -371,7 +381,8 @@ struct ItemSummary: Codable, Identifiable, Hashable {
     // For mock data and encoding
     init(itemId: String, entityId: String, title: String, type: EntityType,
          primaryEmoji: String, sourceLabel: String, summary: String,
-         createdAt: Date, canonicalUrl: String? = nil, metadata: Metadata) {
+         createdAt: Date, canonicalUrl: String? = nil, metadata: Metadata,
+         sharedByUser: SharedByUser? = nil) {
         self.itemId = itemId
         self.entityId = entityId
         self.title = title
@@ -382,6 +393,7 @@ struct ItemSummary: Codable, Identifiable, Hashable {
         self.createdAt = createdAt
         self.canonicalUrl = canonicalUrl
         self.metadata = metadata
+        self.sharedByUser = sharedByUser
     }
 }
 

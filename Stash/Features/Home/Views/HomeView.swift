@@ -1,15 +1,28 @@
 import SwiftUI
 
+/// Card display modes for morphing transitions
+enum CardDisplayMode {
+    case deck      // Normal card in deck
+    case detail    // Expanded to detail view
+    case chat      // Morphed into AI chat
+}
+
 /// Ultra-simple card swiper - ONE card visible at a time
 /// Swipe left → next card, swipe right → previous card
+/// Tap or swipe up → morph to detail view
+/// Long press → morph to AI chat
 struct HomeView: View {
     @State private var currentIndex = 0
     @State private var dragOffset: CGFloat = 0
     @State private var rotationAngle: Double = 0
     @State private var scale: CGFloat = 1.0
     @State private var verticalOffset: CGFloat = 0
-    @State private var showingAIChat = false
+    @State private var displayMode: CardDisplayMode = .deck
     @State private var showNextCard = true
+    @State private var showControls = true  // Fade controls during morphing
+
+    // For morphing animation - explicit vertical translation
+    @State private var cardVerticalOffset: CGFloat = 0
 
     // For animating previous card sliding back on top
     @State private var previousCardOffset: CGFloat = 0
@@ -27,75 +40,105 @@ struct HomeView: View {
         Color(red: 0.6, green: 0.2, blue: 0.8)  // Purple
     ]
 
+    @Namespace private var cardTransition
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 // Background
                 Color.black.ignoresSafeArea()
 
-                // NEXT CARD (visible underneath when swiping away current)
-                nextCard(screenWidth: geometry.size.width)
+                // Display content based on current mode
+                ZStack {
+                    // Background layer: Detail/Chat views
+                    if displayMode == .detail {
+                        CardDetailView(
+                            emoji: mockEmoji(for: currentIndex),
+                            title: mockTitle(for: currentIndex),
+                            source: mockSource(for: currentIndex),
+                            backgroundColor: testColors[currentIndex % testColors.count],
+                            namespace: cardTransition,
+                            displayMode: $displayMode,
+                            cardVerticalOffset: $cardVerticalOffset
+                        )
+                        .zIndex(0)
+                        .transition(.identity)
+                    }
 
-                // CURRENT CARD
-                currentCard(screenWidth: geometry.size.width)
+                    if displayMode == .chat {
+                        CardChatView(
+                            emoji: mockEmoji(for: currentIndex),
+                            title: mockTitle(for: currentIndex),
+                            source: mockSource(for: currentIndex),
+                            backgroundColor: testColors[currentIndex % testColors.count],
+                            namespace: cardTransition,
+                            displayMode: $displayMode,
+                            cardVerticalOffset: $cardVerticalOffset
+                        )
+                        .zIndex(0)
+                        .transition(.identity)
+                    }
 
-                // PREVIOUS CARD (slides on top when swiping right)
-                if showPreviousCard && currentIndex > 0 {
-                    previousCard(screenWidth: geometry.size.width)
+                    // Middle layer: Next card (only when stable in deck mode)
+                    if displayMode == .deck && abs(cardVerticalOffset) < 1 && showNextCard {
+                        nextCard(screenWidth: geometry.size.width)
+                            .zIndex(1)
+                    }
+
+                    // Top layer: Morphing current card (ONLY in deck mode)
+                    if displayMode == .deck {
+                        currentCard(screenWidth: geometry.size.width)
+                            .zIndex(2)
+                    }
+
+                    // Deck-specific elements
+                    if displayMode == .deck {
+                        // Previous card (slides on top when swiping right)
+                        if showPreviousCard && currentIndex > 0 {
+                            previousCard(screenWidth: geometry.size.width)
+                                .zIndex(3)
+                        }
+
+                        // Floating controls (only in deck mode)
+                        floatingControls
+                            .zIndex(4)
+                            .opacity(showControls ? 1 : 0)
+                    }
                 }
-
-                // Floating controls overlay
-                floatingControls
             }
         }
         .ignoresSafeArea()
-        .sheet(isPresented: $showingAIChat) {
-            VStack(spacing: 20) {
-                Text("Ask Stash About This")
-                    .font(.system(size: 24, weight: .bold))
-
-                Text("💬 AI Chat Interface")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.secondary)
-
-                Button("Close") {
-                    showingAIChat = false
-                }
-                .buttonStyle(.borderedProminent)
+        .onChange(of: displayMode) { oldValue, newValue in
+            // When leaving deck mode, hide controls and next card
+            if newValue != .deck && oldValue == .deck {
+                showControls = false
+                showNextCard = false
             }
-            .padding()
-            .presentationDetents([.medium, .large])
+
+            // When returning to deck mode, restore next card and controls with delay
+            if newValue == .deck && oldValue != .deck {
+                // Show controls immediately (0.2s fade)
+                withAnimation(.easeIn(duration: 0.2)) {
+                    showControls = true
+                }
+                // Show next card after morph completes
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    showNextCard = true
+                }
+            }
         }
     }
 
     // MARK: - Cards
 
     private func cardContent(for index: Int) -> some View {
-        ZStack(alignment: .bottom) {
-            // Background color
-            testColors[index % testColors.count]
-
-            // Content
-            VStack(alignment: .leading, spacing: 12) {
-                Spacer()
-
-                Text(mockEmoji(for: index))
-                    .font(.system(size: 32))
-
-                Text(mockTitle(for: index))
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
-
-                Text(mockSource(for: index))
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.7))
-            }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 120)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 24))
+        CardContent(
+            emoji: mockEmoji(for: index),
+            title: mockTitle(for: index),
+            source: mockSource(for: index),
+            backgroundColor: testColors[index % testColors.count],
+            isFullScreen: true
+        )
     }
 
     private func nextCard(screenWidth: CGFloat) -> some View {
@@ -104,39 +147,122 @@ struct HomeView: View {
     }
 
     private func currentCard(screenWidth: CGFloat) -> some View {
-        cardContent(for: currentIndex)
+        // Card morphs between full-screen (deck) and miniature (detail/chat)
+        CardContent(
+            emoji: mockEmoji(for: currentIndex),
+            title: mockTitle(for: currentIndex),
+            source: mockSource(for: currentIndex),
+            backgroundColor: testColors[currentIndex % testColors.count],
+            isFullScreen: displayMode == .deck,  // Miniature when in detail/chat
+            onTap: displayMode != .deck ? {
+                // Tap miniature card to dismiss back to deck
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    cardVerticalOffset = 0
+                    displayMode = .deck
+                }
+            } : nil
+        )
             .id("card-\(currentIndex)")
-            .scaleEffect(scale)
-            .rotationEffect(.degrees(rotationAngle))
-            .offset(x: dragOffset, y: verticalOffset)
-            .gesture(
+            .matchedGeometryEffect(id: "card-morph", in: cardTransition)
+            .padding(.horizontal, displayMode == .deck ? 0 : 16)
+            .padding(.top, displayMode == .deck ? 0 : 80)
+            .offset(y: cardVerticalOffset)  // Explicit vertical position for morph animation
+            // Only apply deck-mode transforms when in deck mode
+            .if(displayMode == .deck) { view in
+                view
+                    .scaleEffect(scale)
+                    .rotationEffect(.degrees(rotationAngle))
+                    .offset(x: dragOffset, y: verticalOffset)
+            }
+            .onTapGesture {
+                // Tap to open detail view
+                // Reset transforms first for clean morphing
+                dragOffset = 0
+                rotationAngle = 0
+                scale = 1.0
+                verticalOffset = 0
+
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                    // Calculate offset to move card from bottom to top
+                    // Negative value moves up
+                    cardVerticalOffset = -(screenWidth - 180)  // Approximate miniature card height
+                    displayMode = .detail
+                }
+            }
+            .onLongPressGesture(minimumDuration: 0.5) {
+                // Long press to open AI chat
+                Haptics.medium()
+                // Reset transforms first for clean morphing
+                dragOffset = 0
+                rotationAngle = 0
+                scale = 1.0
+                verticalOffset = 0
+
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                    // Calculate offset to move card from bottom to top
+                    cardVerticalOffset = -(screenWidth - 180)
+                    displayMode = .chat
+                }
+            }
+            .simultaneousGesture(
                 DragGesture()
                     .onChanged { value in
-                        if value.translation.width < 0 {
-                            // Swiping LEFT - animate current card
-                            dragOffset = value.translation.width
-                            let rotationAmount = Double(value.translation.width / screenWidth) * 15
-                            rotationAngle = rotationAmount
-                            let dragProgress = abs(value.translation.width) / screenWidth
-                            scale = 1.0 - (dragProgress * 0.1)
-                        } else if value.translation.width > 0 && currentIndex > 0 {
-                            // Swiping RIGHT - animate previous card sliding on top from LEFT
-                            let dragProgress = value.translation.width / screenWidth
-                            showPreviousCard = true
-                            previousCardOffset = -screenWidth * (1.0 - dragProgress)
-                            previousCardRotation = -25 * (1.0 - dragProgress)
-                            previousCardScale = 0.7 + (0.3 * dragProgress)
-                            previousCardVerticalOffset = 100 * (1.0 - dragProgress)
+                        // Only handle gestures in deck mode
+                        guard displayMode == .deck else { return }
+
+                        // Determine gesture direction
+                        let isHorizontal = abs(value.translation.width) > abs(value.translation.height)
+                        let isVerticalUp = value.translation.height < -30 && abs(value.translation.width) < 50
+
+                        if isVerticalUp {
+                            // Swiping UP - preview detail mode (optional animation)
+                            // Could add subtle preview animation here
+                        } else if isHorizontal {
+                            // Horizontal swipe - navigate cards
+                            if value.translation.width < 0 {
+                                // Swiping LEFT - animate current card
+                                dragOffset = value.translation.width
+                                let rotationAmount = Double(value.translation.width / screenWidth) * 15
+                                rotationAngle = rotationAmount
+                                let dragProgress = abs(value.translation.width) / screenWidth
+                                scale = 1.0 - (dragProgress * 0.1)
+                            } else if value.translation.width > 0 && currentIndex > 0 {
+                                // Swiping RIGHT - animate previous card sliding on top from LEFT
+                                let dragProgress = value.translation.width / screenWidth
+                                showPreviousCard = true
+                                previousCardOffset = -screenWidth * (1.0 - dragProgress)
+                                previousCardRotation = -25 * (1.0 - dragProgress)
+                                previousCardScale = 0.7 + (0.3 * dragProgress)
+                                previousCardVerticalOffset = 100 * (1.0 - dragProgress)
+                            }
                         }
                     }
                     .onEnded { value in
-                        handleSwipe(value: value, screenWidth: screenWidth)
+                        // Only handle gestures in deck mode
+                        guard displayMode == .deck else { return }
+
+                        // Check for vertical swipe up first
+                        let isVerticalUp = value.translation.height < -100 && abs(value.translation.width) < 80
+
+                        if isVerticalUp {
+                            // Swiped UP - open detail view
+                            // Reset transforms first for clean morphing
+                            dragOffset = 0
+                            rotationAngle = 0
+                            scale = 1.0
+                            verticalOffset = 0
+
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
+                                // Calculate offset to move card from bottom to top
+                                cardVerticalOffset = -(screenWidth - 180)
+                                displayMode = .detail
+                            }
+                        } else {
+                            // Handle horizontal swipe
+                            handleSwipe(value: value, screenWidth: screenWidth)
+                        }
                     }
             )
-            .onTapGesture(count: 2) {
-                Haptics.medium()
-                showingAIChat = true
-            }
     }
 
     private func previousCard(screenWidth: CGFloat) -> some View {
@@ -215,6 +341,8 @@ struct HomeView: View {
                 rotationAngle = 0
                 scale = 1.0
                 verticalOffset = 0
+                // Reset display mode to deck
+                displayMode = .deck
             }
         } else if value.translation.width > threshold && currentIndex > 0 {
             // Swiped RIGHT → previous card slides on top from LEFT and becomes current
@@ -234,6 +362,8 @@ struct HomeView: View {
                 previousCardRotation = -25
                 previousCardScale = 0.7
                 previousCardVerticalOffset = 100
+                // Reset display mode to deck
+                displayMode = .deck
             }
         } else {
             // Snap back to center

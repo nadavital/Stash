@@ -8,11 +8,16 @@ struct MorphingCard<Background: View>: View {
     let source: String
     let background: Background
 
+    // Background morphing for horizontal navigation
+    var nextBackground: Background? = nil
+    var backgroundMorphProgress: CGFloat = 0
+
     var body: some View {
         GeometryReader { geometry in
             let currentHeight = geometry.size.height
             let screenHeight = UIScreen.main.bounds.height
-            let collapsedHeight: CGFloat = 120
+            // Height = safe area (behind Dynamic Island) + fixed content height (visible area)
+            let collapsedHeight: CGFloat = geometry.safeAreaInsets.top + 60
 
             // Calculate progress (0.0 = Full Screen, 1.0 = Header Mode)
             let expansionRange = max(screenHeight - collapsedHeight, 1)
@@ -20,65 +25,86 @@ struct MorphingCard<Background: View>: View {
             let progress = max(0, min(1, rawProgress))
 
             // Interpolated layout values
-            let emojiSize = 42.0 - (progress * 18.0)       // 42 → 24
-            let titleSize = 32.0 - (progress * 16.0)       // 32 → 16
-            let cornerRadius = 16.0 - (progress * 16.0)    // 16 → 0 (subtle rounding)
-            let horizontalPadding = 24.0 - (progress * 4.0) // 24 → 20
+            let emojiSize = 42.0 - (progress * 14.0)       // 42 → 28
+            let titleSize = 32.0 - (progress * 14.0)       // 32 → 18
+            let cornerRadius = 16.0 - (progress * 4.0)     // 16 → 12
+            let horizontalPadding = 24.0 - (progress * 8.0) // 24 → 16
 
             // Position interpolation
-            let emojiTopPadding = 60.0 - (progress * 46.0) // 60 → 14
+            let emojiTopPadding = 60.0 - (progress * 44.0) // 60 → 16
             let titleBottomPadding = 100.0 - (progress * 86.0) // 100 → 14
 
             ZStack(alignment: .topLeading) {
-                // BACKGROUND
-                background
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                    .shadow(color: .black.opacity(0.2 * (1.0 - progress)), radius: 10, y: 5)
-
-                // CONTENT
-                ZStack(alignment: .topLeading) {
-                    // Top Row: Emoji & Source Label (visible when collapsed)
-                    HStack(alignment: .center) {
-                        Text(emoji)
-                            .font(.system(size: emojiSize))
-
-                        // Fade in Source Label when becoming a header
-                        if progress > 0.5 {
-                            Spacer()
-                            Text(source.uppercased())
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.7))
-                                .opacity((progress - 0.5) * 2.0)
-                        }
-                    }
-                    .padding(.top, emojiTopPadding)
-                    .padding(.horizontal, horizontalPadding)
-
-                    // Bottom Row: Title & Source Label (visible when expanded)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Spacer()
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(title)
-                                .font(.system(size: titleSize, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(progress > 0.8 ? 1 : 3)
-
-                            // Fade out Source Label when shrinking
-                            if progress < 0.5 {
-                                Text(source.uppercased())
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.white.opacity(0.6))
-                                    .opacity(1.0 - (progress * 2.0))
-                            }
-                        }
-                        .padding(.bottom, titleBottomPadding)
-                        .padding(.horizontal, horizontalPadding)
+                // BACKGROUND with morphing support (ignores safe area)
+                ZStack {
+                    background  // Current background
+                    if let nextBackground {
+                        nextBackground
+                            .opacity(backgroundMorphProgress)
                     }
                 }
-                .padding(.top, geometry.safeAreaInsets.top)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                .shadow(color: .black.opacity(0.2 - (progress * 0.12)), radius: 10, y: 5)  // 20% → 8%
+
+                // CONTENT - Dual layout system with crossfade
+                // Full-screen layout (fade out) - has its own safe area handling
+                if progress < 0.3 {
+                    fullScreenLayout
+                        .opacity(1.0 - (progress / 0.3))
+                        .padding(.top, geometry.safeAreaInsets.top)
+                }
+
+                // Mini header layout (fade in) - positioned at BOTTOM of card
+                if progress > 0.3 {
+                    VStack(spacing: 0) {
+                        Spacer()
+                        miniHeaderLayout
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .opacity((progress - 0.3) / 0.7)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+    }
+
+    // MARK: - Layout Variants
+
+    private var fullScreenLayout: some View {
+        ZStack(alignment: .topLeading) {
+            // Emoji top-left
+            Text(emoji)
+                .font(.system(size: 42))
+                .padding(.top, 60)
+                .padding(.horizontal, 24)
+
+            // Title + source bottom-left
+            VStack(alignment: .leading, spacing: 4) {
+                Spacer()
+                Text(title)
+                    .font(.system(size: 32, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(3)
+                Text(source.uppercased())
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .padding(.bottom, 100)
+            .padding(.horizontal, 24)
+        }
+    }
+
+    private var miniHeaderLayout: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(emoji)
+                .font(.system(size: 28))
+            Text(title)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 }

@@ -12,6 +12,7 @@ struct DetailScrollContent: View {
     var onDismiss: () -> Void
     var onNavigateNext: (() -> Void)?
     var onNavigatePrevious: (() -> Void)?
+    var onBackgroundMorphProgress: ((CGFloat) -> Void)? = nil
     var canNavigateNext: Bool = true
     var canNavigatePrevious: Bool = true
 
@@ -50,14 +51,10 @@ struct DetailScrollContent: View {
             ZStack {
                 ScrollView {
                     VStack(spacing: 0) {
-                        // Spacer for header
-                        Color.clear.frame(height: 120 + geometry.safeAreaInsets.top + 16)
+                        // Spacer for header (safe area + content height + gap)
+                        Color.clear.frame(height: geometry.safeAreaInsets.top + 60 + 48)
 
                         VStack(alignment: .leading, spacing: 20) {
-                            Text("Detail View")
-                                .font(.system(size: 32, weight: .bold))
-                                .foregroundStyle(.white)
-
                             Text("This content is now revealed underneath the morphing header.")
                                 .font(.system(size: 17))
                                 .foregroundStyle(.white.opacity(0.8))
@@ -122,6 +119,9 @@ struct DetailScrollContent: View {
                                         interactiveDragOpacity = 1.0 - (progress * 0.5)
                                         interactiveDragScale = 1.0 - (progress * 0.05)
                                         horizontalDragOffset = value.translation.width
+
+                                        // Interactive background morphing
+                                        onBackgroundMorphProgress?(progress)
                                     } else {
                                         // Rubber band effect at boundaries
                                         horizontalDragOffset = value.translation.width * 0.3
@@ -155,6 +155,7 @@ struct DetailScrollContent: View {
 
                                 if left && abs(value.translation.width) > threshold && canNavigateNext {
                                     onNavigateNext?()
+                                    onBackgroundMorphProgress?(0)  // Reset
                                     interactiveDragOpacity = 1.0
                                     interactiveDragScale = 1.0
                                     horizontalDragOffset = 0
@@ -162,6 +163,7 @@ struct DetailScrollContent: View {
 
                                 } else if !left && abs(value.translation.width) > threshold && canNavigatePrevious {
                                     onNavigatePrevious?()
+                                    onBackgroundMorphProgress?(0)  // Reset
                                     interactiveDragOpacity = 1.0
                                     interactiveDragScale = 1.0
                                     horizontalDragOffset = 0
@@ -174,6 +176,7 @@ struct DetailScrollContent: View {
                                         interactiveDragScale = 1.0
                                         horizontalDragOffset = 0
                                     }
+                                    onBackgroundMorphProgress?(0)  // Reset
                                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 }
 

@@ -37,6 +37,9 @@ struct HomeView: View {
     @State private var horizontalTransitionState: HorizontalTransitionState = .stable
     @State private var scrollToTopTrigger: UUID = UUID()
 
+    // Background morphing for horizontal navigation
+    @State private var backgroundMorphProgress: CGFloat = 0
+
     // Test colors
     private let testColors: [Color] = [
         Color(red: 0.8, green: 0.2, blue: 0.2), // Red
@@ -114,14 +117,16 @@ struct HomeView: View {
                 emoji: mockEmoji(for: currentIndex),
                 title: mockTitle(for: currentIndex),
                 source: mockSource(for: currentIndex),
-                background: testBackground(for: currentIndex)
+                background: testBackground(for: currentIndex),
+                nextBackground: displayMode == .detail ? testBackground(for: currentIndex + 1) : nil,
+                backgroundMorphProgress: backgroundMorphProgress
             )
             .frame(
                 height: cardHeight(screenHeight: screenHeight),
                 alignment: .top
             )
             .clipped()
-            .ignoresSafeArea(.container, edges: transitionProgress > 0.5 ? [] : .top)
+            .ignoresSafeArea(.container, edges: .top)
             .zIndex(1)
             // Lock horizontal transforms during vertical gestures
             .scaleEffect(isVerticalGesture ? 1.0 : currentCardScale)
@@ -143,7 +148,11 @@ struct HomeView: View {
     // Calculate card height based on mode and gesture
     private func cardHeight(screenHeight: CGFloat) -> CGFloat {
         let deckHeight = screenHeight
-        let detailHeight: CGFloat = 120
+        // Detail height = safe area + fixed content height (text sits at bottom in safe area)
+        let safeAreaTop = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.top ?? 59
+        let detailHeight: CGFloat = safeAreaTop + 60
 
         // During drag, use interactive progress
         if isDragging {
@@ -174,6 +183,9 @@ struct HomeView: View {
             },
             onNavigatePrevious: {
                 navigateToPreviousInDetail()
+            },
+            onBackgroundMorphProgress: { progress in
+                backgroundMorphProgress = progress
             },
             canNavigateNext: true, // In real app: check if not at end
             canNavigatePrevious: currentIndex > 0
@@ -369,9 +381,10 @@ struct HomeView: View {
     private func navigateToNextInDetail() {
         guard horizontalTransitionState == .stable else { return }
 
-        // Phase 1: Fade out both components
+        // Phase 1: Fade out both components + morph background
         withAnimation(.easeOut(duration: 0.15)) {
             horizontalTransitionState = .fadingOut(direction: .next)
+            backgroundMorphProgress = 1.0  // Morph to next background
         }
 
         // Phase 2: Update index + fade in
@@ -379,6 +392,7 @@ struct HomeView: View {
             try? await Task.sleep(for: .milliseconds(150))
 
             currentIndex += 1
+            backgroundMorphProgress = 0  // Reset morph
             scrollToTopTrigger = UUID()
             horizontalTransitionState = .fadingIn(from: .next)
 
@@ -393,9 +407,10 @@ struct HomeView: View {
     private func navigateToPreviousInDetail() {
         guard currentIndex > 0, horizontalTransitionState == .stable else { return }
 
-        // Phase 1: Fade out both components
+        // Phase 1: Fade out both components + morph background
         withAnimation(.easeOut(duration: 0.15)) {
             horizontalTransitionState = .fadingOut(direction: .previous)
+            backgroundMorphProgress = 1.0  // Morph to previous background
         }
 
         // Phase 2: Update index + fade in
@@ -403,6 +418,7 @@ struct HomeView: View {
             try? await Task.sleep(for: .milliseconds(150))
 
             currentIndex -= 1
+            backgroundMorphProgress = 0  // Reset morph
             scrollToTopTrigger = UUID()
             horizontalTransitionState = .fadingIn(from: .previous)
 

@@ -89,7 +89,8 @@ struct HomeView: View {
 
         ZStack(alignment: .top) {
             // DECK MODE: Background cards
-            if displayMode == .deck {
+            // Only show background cards when fully in deck mode (transitionProgress = 0)
+            if displayMode == .deck && transitionProgress == 0 {
                 // Next card (Static Background)
                 if showNextCard && !isDragging {
                     nextCard()
@@ -103,12 +104,19 @@ struct HomeView: View {
                 }
             }
 
-            // DETAIL MODE: Content and cards
-            if displayMode == .detail {
-                // Detail content (scrollable body)
-                detailContent()
-                    .zIndex(0)
+            // DETAIL CONTENT - Always rendered for smooth transitions
+            // In deck mode, it's behind the full-height card and invisible
+            // In detail mode, it's revealed as the card shrinks upward
+            // Stays visible during entire transition (even during spring animation back to deck)
+            detailContent()
+                .opacity((isDragging || displayMode == .detail || transitionProgress > 0) ? 1 : 0)
+                .animation(.none, value: isDragging)
+                .animation(StashTheme.Gesture.completionSpring, value: displayMode)
+                .animation(StashTheme.Gesture.completionSpring, value: transitionProgress)
+                .zIndex(0)
 
+            // DETAIL MODE: Additional cards for horizontal navigation
+            if displayMode == .detail {
                 // Next card (slides in from right)
                 if showNextDetailCard {
                     detailCard(for: currentIndex + 1, screenHeight: screenHeight)
@@ -124,31 +132,26 @@ struct HomeView: View {
                 }
             }
 
-            // MAIN CARD - common for both modes
-            if displayMode == .deck {
-                // Deck mode card
-                MorphingCard(
-                    emoji: mockEmoji(for: currentIndex),
-                    title: mockTitle(for: currentIndex),
-                    source: mockSource(for: currentIndex),
-                    background: testBackground(for: currentIndex)
-                )
-                .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
-                .clipped()
-                .ignoresSafeArea(.container, edges: .top)
-                .scaleEffect(currentCardScale)
-                .offset(x: currentCardOffset)
-                .rotationEffect(.degrees(currentCardRotation))
-                .allowsHitTesting(true)
-                .onTapGesture { expandToDetail() }
-                .zIndex(100)
-
-            } else {
-                // Detail mode card (slides during horizontal drag)
-                detailCard(for: currentIndex, screenHeight: screenHeight)
-                    .offset(x: isVerticalGesture ? 0 : detailHorizontalDragOffset)
-                    .zIndex(100)
+            // MAIN CARD - Single card that morphs between modes
+            MorphingCard(
+                emoji: mockEmoji(for: currentIndex),
+                title: mockTitle(for: currentIndex),
+                source: mockSource(for: currentIndex),
+                background: testBackground(for: currentIndex)
+            )
+            .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
+            .clipped()
+            .ignoresSafeArea(.container, edges: .top)
+            .scaleEffect(displayMode == .deck ? currentCardScale : 1.0)
+            .offset(x: displayMode == .deck ? currentCardOffset : (isVerticalGesture ? 0 : detailHorizontalDragOffset))
+            .rotationEffect(.degrees(displayMode == .deck ? currentCardRotation : 0))
+            .allowsHitTesting(true)
+            .onTapGesture {
+                if displayMode == .deck {
+                    expandToDetail()
+                }
             }
+            .zIndex(100)
         }
     }
 
@@ -175,13 +178,9 @@ struct HomeView: View {
             .first?.windows.first?.safeAreaInsets.top ?? 59
         let detailHeight: CGFloat = safeAreaTop + 60
 
-        // During drag, use interactive progress
-        if isDragging {
-            return deckHeight - (deckHeight - detailHeight) * transitionProgress
-        }
-
-        // When not dragging, use animated progress
-        return displayMode == .deck ? deckHeight : detailHeight
+        // Always interpolate using transitionProgress for smooth animations
+        // transitionProgress: 0 = deck (full height), 1 = detail (collapsed height)
+        return deckHeight - (deckHeight - detailHeight) * transitionProgress
     }
 
     // MARK: - Detail Content
@@ -361,8 +360,15 @@ struct HomeView: View {
                     // Cancel - spring back
                     withAnimation(StashTheme.Gesture.cancelSpring) {
                         transitionProgress = 0
+                    }
+
+                    // Only set isDragging to false after animation completes
+                    // so detail content stays visible during spring back
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(300))
                         isDragging = false
                     }
+
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
             }
@@ -389,6 +395,9 @@ struct HomeView: View {
     private func expandToDetail() {
         let isHighVelocity = transitionProgress > 0.5
 
+        // Hide next card immediately to prevent it from showing during transitions
+        showNextCard = false
+
         withAnimation(isHighVelocity
             ? Animation.spring(response: 0.28, dampingFraction: 0.84)
             : StashTheme.Gesture.completionSpring) {
@@ -405,13 +414,14 @@ struct HomeView: View {
         withAnimation(StashTheme.Gesture.completionSpring) {
             displayMode = .deck
             transitionProgress = 0
-            isDragging = false
             showControls = true
         }
 
-        // Re-enable next card after animation
+        // Delay isDragging and showNextCard until animation completes
+        // This keeps detail content visible during the entire transition
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
+            isDragging = false
             showNextCard = true
         }
 

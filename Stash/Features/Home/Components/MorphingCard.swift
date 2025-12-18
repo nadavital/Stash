@@ -31,8 +31,9 @@ struct MorphingCard<Background: View>: View {
             let titleBottomPadding = 140.0 - (progress * 126.0) // 140 → 14
 
             ZStack(alignment: .topLeading) {
-                // BACKGROUND (ignores safe area)
+                // BACKGROUND (ignores safe area, fills entire frame)
                 background
+                    .ignoresSafeArea()
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                     .shadow(color: .black.opacity(0.2 - (progress * 0.12)), radius: 10, y: 5)  // 20% → 8%
 

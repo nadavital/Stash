@@ -121,12 +121,16 @@ struct DetailScrollContent: View {
                             }
                         }
                         .onEnded { value in
+                            var shouldResetDragging = true
+
                             switch detectedDirection {
                             case .vertical:
                                 if isDragging {
                                     let shouldDismiss = dragOffset > 150 || value.velocity.height > 500
 
                                     if shouldDismiss {
+                                        // Don't reset isDragging - let parent handle it after animation completes
+                                        shouldResetDragging = false
                                         onDismiss()
                                     } else {
                                         // Cancel - spring back
@@ -135,6 +139,7 @@ struct DetailScrollContent: View {
                                             isDragging = false
                                             dragOffset = 0
                                         }
+                                        shouldResetDragging = false // Already reset in animation
                                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                     }
                                 }
@@ -153,9 +158,12 @@ struct DetailScrollContent: View {
                             default: break
                             }
 
+                            // Reset states
                             detectedDirection = .none
                             dragOffset = 0
-                            isDragging = false
+                            if shouldResetDragging {
+                                isDragging = false
+                            }
                         }
                 )
                 .opacity(combinedOpacity)
@@ -189,6 +197,7 @@ struct DetailScrollContent: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
+            .ignoresSafeArea()
         )
     }
 }

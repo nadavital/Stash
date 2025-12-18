@@ -8,10 +8,6 @@ struct MorphingCard<Background: View>: View {
     let source: String
     let background: Background
 
-    // Background morphing for horizontal navigation
-    var nextBackground: Background? = nil
-    var backgroundMorphProgress: CGFloat = 0
-
     var body: some View {
         GeometryReader { geometry in
             let currentHeight = geometry.size.height
@@ -35,16 +31,10 @@ struct MorphingCard<Background: View>: View {
             let titleBottomPadding = 100.0 - (progress * 86.0) // 100 → 14
 
             ZStack(alignment: .topLeading) {
-                // BACKGROUND with morphing support (ignores safe area)
-                ZStack {
-                    background  // Current background
-                    if let nextBackground {
-                        nextBackground
-                            .opacity(backgroundMorphProgress)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                .shadow(color: .black.opacity(0.2 - (progress * 0.12)), radius: 10, y: 5)  // 20% → 8%
+                // BACKGROUND (ignores safe area)
+                background
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                    .shadow(color: .black.opacity(0.2 - (progress * 0.12)), radius: 10, y: 5)  // 20% → 8%
 
                 // CONTENT - Dual layout system with crossfade
                 // Full-screen layout (fade out) - has its own safe area handling

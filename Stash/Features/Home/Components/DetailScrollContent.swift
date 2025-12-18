@@ -7,12 +7,10 @@ struct DetailScrollContent: View {
     let source: String
     @Binding var transitionProgress: CGFloat
     @Binding var isDragging: Bool
-    let horizontalTransitionState: HorizontalTransitionState
     let scrollToTopTrigger: UUID
     var onDismiss: () -> Void
-    var onNavigateNext: (() -> Void)?
-    var onNavigatePrevious: (() -> Void)?
-    var onBackgroundMorphProgress: ((CGFloat) -> Void)? = nil
+    var onHorizontalDragChanged: ((CGFloat, Bool) -> Void)?  // offset, isLeft
+    var onHorizontalDragEnded: ((CGFloat, Bool) -> Void)?    // offset, isLeft
     var canNavigateNext: Bool = true
     var canNavigatePrevious: Bool = true
 
@@ -24,25 +22,16 @@ struct DetailScrollContent: View {
     @State private var interactiveDragScale: CGFloat = 1.0
     @State private var scrollViewID: UUID = UUID()
 
-    // Combine transition state with interactive drag feedback
+    // Interactive drag feedback
     private var combinedOpacity: CGFloat {
-        if horizontalTransitionState != .stable {
-            return horizontalTransitionState.contentOpacity
-        }
         return interactiveDragOpacity
     }
 
     private var combinedScale: CGFloat {
-        if horizontalTransitionState != .stable {
-            return horizontalTransitionState.contentScale
-        }
         return interactiveDragScale
     }
 
     private var combinedBlur: CGFloat {
-        if horizontalTransitionState != .stable {
-            return horizontalTransitionState.blurRadius
-        }
         return (1.0 - interactiveDragOpacity) * 8
     }
 
@@ -116,12 +105,12 @@ struct DetailScrollContent: View {
 
                                     // Apply interactive fade and scale
                                     if (left && canNavigateNext) || (!left && canNavigatePrevious) {
-                                        interactiveDragOpacity = 1.0 - (progress * 0.5)
-                                        interactiveDragScale = 1.0 - (progress * 0.05)
+                                        interactiveDragOpacity = 1.0 - (progress * 0.3)
+                                        interactiveDragScale = 1.0 - (progress * 0.02)
                                         horizontalDragOffset = value.translation.width
 
-                                        // Interactive background morphing
-                                        onBackgroundMorphProgress?(progress)
+                                        // Notify parent of drag progress
+                                        onHorizontalDragChanged?(value.translation.width, left)
                                     } else {
                                         // Rubber band effect at boundaries
                                         horizontalDragOffset = value.translation.width * 0.3
@@ -151,33 +140,14 @@ struct DetailScrollContent: View {
                                 }
 
                             case .horizontal(let left):
-                                let threshold: CGFloat = 100
+                                // Notify parent of drag end
+                                onHorizontalDragEnded?(value.translation.width, left)
 
-                                if left && abs(value.translation.width) > threshold && canNavigateNext {
-                                    onNavigateNext?()
-                                    onBackgroundMorphProgress?(0)  // Reset
+                                // Reset interactive states
+                                withAnimation(StashTheme.Gesture.cancelSpring) {
                                     interactiveDragOpacity = 1.0
                                     interactiveDragScale = 1.0
                                     horizontalDragOffset = 0
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-
-                                } else if !left && abs(value.translation.width) > threshold && canNavigatePrevious {
-                                    onNavigatePrevious?()
-                                    onBackgroundMorphProgress?(0)  // Reset
-                                    interactiveDragOpacity = 1.0
-                                    interactiveDragScale = 1.0
-                                    horizontalDragOffset = 0
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-
-                                } else {
-                                    // Cancel - spring back
-                                    withAnimation(StashTheme.Gesture.cancelSpring) {
-                                        interactiveDragOpacity = 1.0
-                                        interactiveDragScale = 1.0
-                                        horizontalDragOffset = 0
-                                    }
-                                    onBackgroundMorphProgress?(0)  // Reset
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 }
 
                             default: break

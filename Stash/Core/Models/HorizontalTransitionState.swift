@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Represents the state of horizontal navigation transitions in detail view
 enum HorizontalTransitionState: Equatable {
@@ -11,7 +12,19 @@ enum HorizontalTransitionState: Equatable {
         case next
     }
 
-    /// Opacity for content during transition (0.0 to 1.0)
+    /// Horizontal offset for card during transition
+    var cardOffset: CGFloat {
+        let screenWidth = UIScreen.main.bounds.width
+        switch self {
+        case .stable: return 0
+        case .fadingOut(direction: .next): return -screenWidth  // Slide left
+        case .fadingOut(direction: .previous): return screenWidth  // Slide right
+        case .fadingIn(from: .next): return screenWidth  // Enter from right
+        case .fadingIn(from: .previous): return -screenWidth  // Enter from left
+        }
+    }
+
+    /// Opacity for scrollable content during transition (crossfade)
     var contentOpacity: CGFloat {
         switch self {
         case .stable: return 1.0
@@ -20,17 +33,7 @@ enum HorizontalTransitionState: Equatable {
         }
     }
 
-    /// Scale for content during transition
-    var contentScale: CGFloat {
-        switch self {
-        case .stable: return 1.0
-        case .fadingOut: return 0.95
-        case .fadingIn(from: .next): return 1.05  // Enter from right (next item)
-        case .fadingIn(from: .previous): return 1.05  // Enter from left (previous item)
-        }
-    }
-
-    /// Blur radius during transition
+    /// Blur radius for content during transition
     var blurRadius: CGFloat {
         switch self {
         case .stable: return 0

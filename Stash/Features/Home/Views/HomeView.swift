@@ -33,12 +33,13 @@ struct HomeView: View {
     @State private var previousCardScale: CGFloat = 0.7
     @State private var showPreviousCard = false
 
-    // Horizontal transition state for detail mode
-    @State private var horizontalTransitionState: HorizontalTransitionState = .stable
+    // Detail mode state
     @State private var scrollToTopTrigger: UUID = UUID()
 
-    // Background morphing for horizontal navigation
-    @State private var backgroundMorphProgress: CGFloat = 0
+    // Interactive horizontal drag in detail mode
+    @State private var detailHorizontalDragOffset: CGFloat = 0
+    @State private var showNextDetailCard = false
+    @State private var showPreviousDetailCard = false
 
     // Test colors
     private let testColors: [Color] = [
@@ -111,38 +112,63 @@ struct HomeView: View {
                     .zIndex(0)
             }
 
-            // The morphing card header
-            // This is the ONLY card being rendered - no conflicts
-            MorphingCard(
-                emoji: mockEmoji(for: currentIndex),
-                title: mockTitle(for: currentIndex),
-                source: mockSource(for: currentIndex),
-                background: testBackground(for: currentIndex),
-                nextBackground: displayMode == .detail ? testBackground(for: currentIndex + 1) : nil,
-                backgroundMorphProgress: backgroundMorphProgress
-            )
-            .frame(
-                height: cardHeight(screenHeight: screenHeight),
-                alignment: .top
-            )
-            .clipped()
-            .ignoresSafeArea(.container, edges: .top)
-            .zIndex(1)
-            // Lock horizontal transforms during vertical gestures
-            .scaleEffect(isVerticalGesture ? 1.0 : currentCardScale)
-            .offset(x: isVerticalGesture ? 0 : currentCardOffset)
-            .rotationEffect(.degrees(isVerticalGesture ? 0 : currentCardRotation))
-            // Apply horizontal transition effects in detail mode
-            .opacity(displayMode == .detail ? horizontalTransitionState.contentOpacity : 1.0)
-            .scaleEffect(displayMode == .detail ? horizontalTransitionState.contentScale : 1.0)
-            .blur(radius: displayMode == .detail ? horizontalTransitionState.blurRadius : 0)
-            .allowsHitTesting(displayMode == .deck)
-            .onTapGesture {
-                if displayMode == .deck {
-                    expandToDetail()
+            // Detail mode: Show next/previous cards during horizontal drag
+            if displayMode == .detail {
+                // Next card (slides in from right)
+                if showNextDetailCard {
+                    detailCard(for: currentIndex + 1, screenHeight: screenHeight)
+                        .offset(x: UIScreen.main.bounds.width + detailHorizontalDragOffset)
+                        .zIndex(1)
+                }
+
+                // Previous card (slides in from left)
+                if showPreviousDetailCard && currentIndex > 0 {
+                    detailCard(for: currentIndex - 1, screenHeight: screenHeight)
+                        .offset(x: -UIScreen.main.bounds.width + detailHorizontalDragOffset)
+                        .zIndex(1)
                 }
             }
+
+            // Main card - different handling for deck vs detail
+            if displayMode == .deck {
+                // Deck mode card
+                MorphingCard(
+                    emoji: mockEmoji(for: currentIndex),
+                    title: mockTitle(for: currentIndex),
+                    source: mockSource(for: currentIndex),
+                    background: testBackground(for: currentIndex)
+                )
+                .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
+                .clipped()
+                .ignoresSafeArea(.container, edges: .top)
+                .scaleEffect(currentCardScale)
+                .offset(x: currentCardOffset)
+                .rotationEffect(.degrees(currentCardRotation))
+                .allowsHitTesting(true)
+                .onTapGesture { expandToDetail() }
+                .zIndex(100)
+
+            } else {
+                // Detail mode card (slides during horizontal drag)
+                detailCard(for: currentIndex, screenHeight: screenHeight)
+                    .offset(x: isVerticalGesture ? 0 : detailHorizontalDragOffset)
+                    .zIndex(100)
+            }
         }
+    }
+
+    // Helper to create a detail mode card
+    @ViewBuilder
+    private func detailCard(for index: Int, screenHeight: CGFloat) -> some View {
+        MorphingCard(
+            emoji: mockEmoji(for: index),
+            title: mockTitle(for: index),
+            source: mockSource(for: index),
+            background: testBackground(for: index)
+        )
+        .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
+        .clipped()
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     // Calculate card height based on mode and gesture
@@ -173,19 +199,15 @@ struct HomeView: View {
             source: mockSource(for: currentIndex),
             transitionProgress: $transitionProgress,
             isDragging: $isDragging,
-            horizontalTransitionState: horizontalTransitionState,
             scrollToTopTrigger: scrollToTopTrigger,
             onDismiss: {
                 collapseToCard()
             },
-            onNavigateNext: {
-                navigateToNextInDetail()
+            onHorizontalDragChanged: { offset, isLeft in
+                handleDetailHorizontalDragChanged(offset: offset, isLeft: isLeft)
             },
-            onNavigatePrevious: {
-                navigateToPreviousInDetail()
-            },
-            onBackgroundMorphProgress: { progress in
-                backgroundMorphProgress = progress
+            onHorizontalDragEnded: { offset, isLeft in
+                handleDetailHorizontalDragEnded(offset: offset, isLeft: isLeft)
             },
             canNavigateNext: true, // In real app: check if not at end
             canNavigatePrevious: currentIndex > 0
@@ -378,58 +400,6 @@ struct HomeView: View {
 
     // MARK: - Navigation Helpers
 
-    private func navigateToNextInDetail() {
-        guard horizontalTransitionState == .stable else { return }
-
-        // Phase 1: Fade out both components + morph background
-        withAnimation(.easeOut(duration: 0.15)) {
-            horizontalTransitionState = .fadingOut(direction: .next)
-            backgroundMorphProgress = 1.0  // Morph to next background
-        }
-
-        // Phase 2: Update index + fade in
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(150))
-
-            currentIndex += 1
-            backgroundMorphProgress = 0  // Reset morph
-            scrollToTopTrigger = UUID()
-            horizontalTransitionState = .fadingIn(from: .next)
-
-            withAnimation(.easeIn(duration: 0.15)) {
-                horizontalTransitionState = .stable
-            }
-
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
-    }
-
-    private func navigateToPreviousInDetail() {
-        guard currentIndex > 0, horizontalTransitionState == .stable else { return }
-
-        // Phase 1: Fade out both components + morph background
-        withAnimation(.easeOut(duration: 0.15)) {
-            horizontalTransitionState = .fadingOut(direction: .previous)
-            backgroundMorphProgress = 1.0  // Morph to previous background
-        }
-
-        // Phase 2: Update index + fade in
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(150))
-
-            currentIndex -= 1
-            backgroundMorphProgress = 0  // Reset morph
-            scrollToTopTrigger = UUID()
-            horizontalTransitionState = .fadingIn(from: .previous)
-
-            withAnimation(.easeIn(duration: 0.15)) {
-                horizontalTransitionState = .stable
-            }
-
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
-    }
-
     private func navigateToNextCard(screenWidth: CGFloat) {
         withAnimation(StashTheme.Gesture.completionSpring) {
             currentCardOffset = -screenWidth * 1.5
@@ -480,6 +450,71 @@ struct HomeView: View {
                 try? await Task.sleep(for: .milliseconds(300))
                 showPreviousCard = false
             }
+        }
+    }
+
+    // MARK: - Detail Horizontal Drag Handlers
+
+    private func handleDetailHorizontalDragChanged(offset: CGFloat, isLeft: Bool) {
+        detailHorizontalDragOffset = offset
+
+        // Show appropriate card
+        if isLeft {
+            showNextDetailCard = true
+            showPreviousDetailCard = false
+        } else {
+            showPreviousDetailCard = currentIndex > 0
+            showNextDetailCard = false
+        }
+    }
+
+    private func handleDetailHorizontalDragEnded(offset: CGFloat, isLeft: Bool) {
+        let threshold: CGFloat = 100
+        let screenWidth = UIScreen.main.bounds.width
+
+        if isLeft && abs(offset) > threshold {
+            // Commit: slide to next
+            withAnimation(StashTheme.Gesture.completionSpring) {
+                detailHorizontalDragOffset = -screenWidth
+            }
+
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                currentIndex += 1
+                scrollToTopTrigger = UUID()
+                detailHorizontalDragOffset = 0
+                showNextDetailCard = false
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }
+
+        } else if !isLeft && abs(offset) > threshold && currentIndex > 0 {
+            // Commit: slide to previous
+            withAnimation(StashTheme.Gesture.completionSpring) {
+                detailHorizontalDragOffset = screenWidth
+            }
+
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                currentIndex -= 1
+                scrollToTopTrigger = UUID()
+                detailHorizontalDragOffset = 0
+                showPreviousDetailCard = false
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }
+
+        } else {
+            // Cancel: spring back
+            withAnimation(StashTheme.Gesture.cancelSpring) {
+                detailHorizontalDragOffset = 0
+            }
+
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                showNextDetailCard = false
+                showPreviousDetailCard = false
+            }
+
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
     }
 

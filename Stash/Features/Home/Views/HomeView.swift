@@ -33,6 +33,10 @@ struct HomeView: View {
     @State private var previousCardScale: CGFloat = 0.7
     @State private var showPreviousCard = false
 
+    // Horizontal transition state for detail mode
+    @State private var horizontalTransitionState: HorizontalTransitionState = .stable
+    @State private var scrollToTopTrigger: UUID = UUID()
+
     // Test colors
     private let testColors: [Color] = [
         Color(red: 0.8, green: 0.2, blue: 0.2), // Red
@@ -123,6 +127,10 @@ struct HomeView: View {
             .scaleEffect(isVerticalGesture ? 1.0 : currentCardScale)
             .offset(x: isVerticalGesture ? 0 : currentCardOffset)
             .rotationEffect(.degrees(isVerticalGesture ? 0 : currentCardRotation))
+            // Apply horizontal transition effects in detail mode
+            .opacity(displayMode == .detail ? horizontalTransitionState.contentOpacity : 1.0)
+            .scaleEffect(displayMode == .detail ? horizontalTransitionState.contentScale : 1.0)
+            .blur(radius: displayMode == .detail ? horizontalTransitionState.blurRadius : 0)
             .allowsHitTesting(displayMode == .deck)
             .onTapGesture {
                 if displayMode == .deck {
@@ -156,9 +164,19 @@ struct HomeView: View {
             source: mockSource(for: currentIndex),
             transitionProgress: $transitionProgress,
             isDragging: $isDragging,
+            horizontalTransitionState: horizontalTransitionState,
+            scrollToTopTrigger: scrollToTopTrigger,
             onDismiss: {
                 collapseToCard()
-            }
+            },
+            onNavigateNext: {
+                navigateToNextInDetail()
+            },
+            onNavigatePrevious: {
+                navigateToPreviousInDetail()
+            },
+            canNavigateNext: true, // In real app: check if not at end
+            canNavigatePrevious: currentIndex > 0
         )
     }
 
@@ -347,6 +365,54 @@ struct HomeView: View {
     }
 
     // MARK: - Navigation Helpers
+
+    private func navigateToNextInDetail() {
+        guard horizontalTransitionState == .stable else { return }
+
+        // Phase 1: Fade out both components
+        withAnimation(.easeOut(duration: 0.15)) {
+            horizontalTransitionState = .fadingOut(direction: .next)
+        }
+
+        // Phase 2: Update index + fade in
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+
+            currentIndex += 1
+            scrollToTopTrigger = UUID()
+            horizontalTransitionState = .fadingIn(from: .next)
+
+            withAnimation(.easeIn(duration: 0.15)) {
+                horizontalTransitionState = .stable
+            }
+
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
+    private func navigateToPreviousInDetail() {
+        guard currentIndex > 0, horizontalTransitionState == .stable else { return }
+
+        // Phase 1: Fade out both components
+        withAnimation(.easeOut(duration: 0.15)) {
+            horizontalTransitionState = .fadingOut(direction: .previous)
+        }
+
+        // Phase 2: Update index + fade in
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+
+            currentIndex -= 1
+            scrollToTopTrigger = UUID()
+            horizontalTransitionState = .fadingIn(from: .previous)
+
+            withAnimation(.easeIn(duration: 0.15)) {
+                horizontalTransitionState = .stable
+            }
+
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
 
     private func navigateToNextCard(screenWidth: CGFloat) {
         withAnimation(StashTheme.Gesture.completionSpring) {

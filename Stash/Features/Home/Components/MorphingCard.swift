@@ -28,7 +28,7 @@ struct MorphingCard<Background: View>: View {
 
             // Position interpolation
             let emojiTopPadding = 60.0 - (progress * 44.0) // 60 → 16
-            let titleBottomPadding = 100.0 - (progress * 86.0) // 100 → 14
+            let titleBottomPadding = 140.0 - (progress * 126.0) // 140 → 14
 
             ZStack(alignment: .topLeading) {
                 // BACKGROUND (ignores safe area)
@@ -79,7 +79,7 @@ struct MorphingCard<Background: View>: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.white.opacity(0.6))
             }
-            .padding(.bottom, 100)
+            .padding(.bottom, 140)  // Increased from 100 to give more space above controls
             .padding(.horizontal, 24)
         }
     }

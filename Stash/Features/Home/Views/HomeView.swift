@@ -57,26 +57,8 @@ struct HomeView: View {
                 Color.black.ignoresSafeArea()
 
                 ZStack(alignment: .top) {
-
-                    // DECK LAYER (behind)
-                    if displayMode == .deck {
-                        // Next card (Static Background)
-                        if showNextCard && !isDragging {
-                            nextCard()
-                                .zIndex(1)
-                        }
-
-                        // Previous Card (when swiping right)
-                        if showPreviousCard && currentIndex > 0 {
-                            previousCard(screenWidth: geometry.size.width)
-                                .zIndex(3)
-                        }
-                    }
-
-                    // MAIN CARD - single source of truth
-                    // This morphs between deck and detail states
-                    mainCardStack(screenHeight: geometry.size.height)
-                        .zIndex(100)
+                    // MAIN CARD STACK - contains all cards and transitions
+                    mainCardStack(screenHeight: geometry.size.height, screenWidth: geometry.size.width)
 
                     // CONTROLS
                     if displayMode == .deck {
@@ -102,18 +84,31 @@ struct HomeView: View {
     // MARK: - Main Card Stack
 
     @ViewBuilder
-    private func mainCardStack(screenHeight: CGFloat) -> some View {
+    private func mainCardStack(screenHeight: CGFloat, screenWidth: CGFloat) -> some View {
         let isVerticalGesture = detectedDirection.isVertical || isDragging
 
         ZStack(alignment: .top) {
-            // Detail content (scrollable body)
-            if displayMode == .detail {
-                detailContent()
-                    .zIndex(0)
+            // DECK MODE: Background cards
+            if displayMode == .deck {
+                // Next card (Static Background)
+                if showNextCard && !isDragging {
+                    nextCard()
+                        .zIndex(1)
+                }
+
+                // Previous Card (when swiping right) - appears ABOVE main card
+                if showPreviousCard && currentIndex > 0 {
+                    previousCard(screenWidth: screenWidth)
+                        .zIndex(150)  // Above main card (100) but below controls (200)
+                }
             }
 
-            // Detail mode: Show next/previous cards during horizontal drag
+            // DETAIL MODE: Content and cards
             if displayMode == .detail {
+                // Detail content (scrollable body)
+                detailContent()
+                    .zIndex(0)
+
                 // Next card (slides in from right)
                 if showNextDetailCard {
                     detailCard(for: currentIndex + 1, screenHeight: screenHeight)
@@ -129,7 +124,7 @@ struct HomeView: View {
                 }
             }
 
-            // Main card - different handling for deck vs detail
+            // MAIN CARD - common for both modes
             if displayMode == .deck {
                 // Deck mode card
                 MorphingCard(
@@ -259,6 +254,7 @@ struct HomeView: View {
 
     private var floatingControls: some View {
         VStack {
+            // Top: Profile button
             HStack {
                 Spacer()
                 Button {} label: {
@@ -270,7 +266,28 @@ struct HomeView: View {
                 .padding(.trailing, 20)
             }
             .padding(.top, 60)
+
             Spacer()
+
+            // Bottom: Add button (left) and AI orb (right)
+            HStack(alignment: .bottom) {
+                // Add button
+                Button {} label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.white)
+                        .background(Circle().fill(.black.opacity(0.3)).frame(width: 56, height: 56))
+                }
+
+                Spacer()
+
+                // Synapse Lens (AI orb)
+                Button {} label: {
+                    SynapseLensView(size: 56, state: .idle)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 40)
         }
     }
 
@@ -300,14 +317,17 @@ struct HomeView: View {
         case .horizontal(let left):
             let translation = value.translation.width
             if left {
-                // Swipe left - next card
+                // Swipe left - next card (current card moves left)
                 currentCardOffset = translation
                 currentCardRotation = Double(translation / screenWidth) * 15
                 currentCardScale = 1.0 - (abs(translation) / screenWidth * 0.1)
             } else {
-                // Swipe right - previous card
+                // Swipe right - previous card slides on top from left
                 if currentIndex > 0 {
                     showPreviousCard = true
+
+                    // Current card stays in place (no offset)
+                    // Previous card slides in from left, ON TOP
                     let progress = translation / screenWidth
                     previousCardOffset = -screenWidth * (1.0 - progress)
                     previousCardRotation = -25 + (25 * progress)

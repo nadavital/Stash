@@ -1,10 +1,8 @@
 import type { EnrichmentResult, EntityType, TypeMetadata } from './types.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
-// Use 2.5 Flash for chat, image analysis, and enrichment with grounding
-// Use 2.0 Flash Lite only for simple URL enrichment
-const GEMINI_FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-const GEMINI_FLASH_LITE_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+// Use Gemini 3 Flash Preview for all operations
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 const GEMINI_EMBEDDING_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent';
 
 // Default prompts by entity type when AI doesn't generate them
@@ -107,7 +105,7 @@ Provide engaging summaries. For recipes, mention key qualities. For songs, inclu
 
   try {
     console.log('🔵 Calling Gemini API with structured output + grounding...');
-    const response = await fetch(`${GEMINI_FLASH_LITE_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -300,7 +298,7 @@ Help the user by referencing their saved items. Use exact titles in quotes. Be c
       console.log('🔵 Using URL context for:', focusedItem.url);
     }
 
-    const response = await fetch(`${GEMINI_FLASH_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
@@ -403,7 +401,7 @@ Return all findings as detailed text. Be thorough - include everything you find 
 
   try {
     console.log('🔵 Stage 1: Vision + Grounding (analyzing image with web search)...');
-    const visionResponse = await fetch(`${GEMINI_FLASH_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+    const visionResponse = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -478,7 +476,7 @@ Classify the content type based on the info:
 Create an engaging summary. For recipes, mention key qualities. For songs, include genre/mood. For social posts, capture the main point.`;
 
     console.log('🔵 Stage 2: Structured output (formatting enriched data)...');
-    const structuredResponse = await fetch(`${GEMINI_FLASH_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+    const structuredResponse = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -565,7 +563,7 @@ Don't be creepy or overly specific. Just capture the vibe.
 Your sentence:`;
 
   try {
-    const response = await fetch(`${GEMINI_FLASH_LITE_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

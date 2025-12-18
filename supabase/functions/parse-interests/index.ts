@@ -3,7 +3,7 @@ import { corsHeaders } from '../_shared/types.ts';
 import { generateEmbedding } from '../_shared/gemini-client.ts';
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY');
-const GEMINI_FLASH_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent';
 
 // Validate environment variables at startup
 if (!GEMINI_API_KEY) {
@@ -59,7 +59,7 @@ Rules:
 Be generous in interpretation. "music" implies interest in songs, "food" implies recipes, etc.`;
 
   try {
-    const response = await fetch(`${GEMINI_FLASH_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

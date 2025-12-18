@@ -80,4 +80,18 @@ struct StashTheme {
         static let medium: Double = 0.22    // 220ms
         static let slow: Double = 0.32      // 320ms
     }
+
+    struct Gesture {
+        // Interactive spring - used during live gesture dragging
+        static let interactiveSpring = Animation.spring(response: 0.25, dampingFraction: 0.85)
+
+        // Completion spring - used when gesture completes successfully
+        static let completionSpring = Animation.spring(response: 0.35, dampingFraction: 0.82)
+
+        // Cancel spring - used when gesture cancels/snaps back
+        static let cancelSpring = Animation.spring(response: 0.3, dampingFraction: 0.8)
+
+        // Completion delay - standard delay before transitioning modes after gesture animation
+        static let completionDelay: TimeInterval = 0.25
+    }
 }

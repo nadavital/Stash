@@ -1,24 +1,7 @@
 import { createSupabaseClient, getUserIdFromRequest } from '../_shared/supabase-client.ts';
-import { chatWithStash, generateEmbedding } from '../_shared/gemini-client.ts';
+import { chatWithStash, generateEmbedding, type ToolHandlers } from '../_shared/gemini-client.ts';
 import { corsHeaders, type ItemSummary, type EntityType } from '../_shared/types.ts';
-
-// Cosine similarity helper
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  
-  const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
-  return magnitude === 0 ? 0 : dotProduct / magnitude;
-}
+import { cosineSimilarity } from '../_shared/vector-utils.ts';
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -190,8 +173,109 @@ Deno.serve(async (req) => {
       url: focusedItem.entities.canonical_url,
     } : null;
 
-    // Get AI response with relevant context, conversation history, and taste profile
-    const answer = await chatWithStash(message, relevantEntities, focusedContext, conversationHistory, tasteContext);
+    // Define tool handlers for AI function calling
+    const toolHandlers: ToolHandlers = {
+      // searchUserStash: semantic search through user's saved items
+      searchUserStash: async (query: string, limit = 10) => {
+        console.log(`🔧 Tool: searchUserStash("${query}", ${limit})`);
+
+        try {
+          // Generate embedding for search query
+          const searchEmbedding = await generateEmbedding(query);
+
+          // Get all items with their embeddings
+          const { data: searchItems, error: searchError } = await supabase
+            .from('stash_items')
+            .select(`
+              id,
+              entities (
+                id,
+                type,
+                title,
+                summary,
+                tags,
+                embedding
+              )
+            `)
+            .eq('user_id', userId)
+            .eq('is_deleted', false);
+
+          if (searchError || !searchItems) {
+            console.error('❌ Search error:', searchError);
+            return [];
+          }
+
+          // Score and rank by similarity
+          const scored = searchItems
+            .filter(item => item.entities?.embedding)
+            .map(item => {
+              const embedding = typeof item.entities.embedding === 'string'
+                ? JSON.parse(item.entities.embedding)
+                : item.entities.embedding;
+              const score = cosineSimilarity(searchEmbedding, embedding);
+              return { item, score };
+            })
+            .sort((a, b) => b.score - a.score)
+            .slice(0, limit);
+
+          const results = scored.map(s => ({
+            id: s.item.entities.id,
+            title: s.item.entities.title || 'Untitled',
+            summary: s.item.entities.summary || '',
+            tags: s.item.entities.tags || [],
+          }));
+
+          console.log(`✅ Found ${results.length} results for "${query}"`);
+          return results;
+        } catch (error) {
+          console.error('❌ searchUserStash error:', error);
+          return [];
+        }
+      },
+
+      // getItemDetails: fetch full metadata for a specific item
+      getItemDetails: async (itemId: string) => {
+        console.log(`🔧 Tool: getItemDetails("${itemId}")`);
+
+        try {
+          const { data: itemData, error: itemError } = await supabase
+            .from('entities')
+            .select(`
+              id,
+              type,
+              title,
+              summary,
+              tags,
+              canonical_url,
+              metadata
+            `)
+            .eq('id', itemId)
+            .single();
+
+          if (itemError || !itemData) {
+            console.error('❌ getItemDetails error:', itemError);
+            return null;
+          }
+
+          console.log(`✅ Retrieved details for "${itemData.title}"`);
+
+          return {
+            id: itemData.id,
+            title: itemData.title || 'Untitled',
+            summary: itemData.summary || '',
+            tags: itemData.tags || [],
+            url: itemData.canonical_url,
+            metadata: itemData.metadata,
+          };
+        } catch (error) {
+          console.error('❌ getItemDetails error:', error);
+          return null;
+        }
+      }
+    };
+
+    // Get AI response with relevant context, conversation history, taste profile, and tool handlers
+    const answer = await chatWithStash(message, relevantEntities, focusedContext, conversationHistory, tasteContext, toolHandlers);
 
     // Find items mentioned in the AI response by matching quoted titles
     const mentionedItems: typeof rankedItems = [];

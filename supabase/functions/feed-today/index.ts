@@ -1,38 +1,7 @@
 import { createSupabaseClient, getUserIdFromRequest } from '../_shared/supabase-client.ts';
 import { generateTodaySubtitle } from '../_shared/gemini-client.ts';
 import { corsHeaders, type ItemSummary, type EntityType } from '../_shared/types.ts';
-
-// Cosine similarity helper
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  
-  const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
-  return magnitude === 0 ? 0 : dotProduct / magnitude;
-}
-
-// Parse embedding from string or array
-function parseEmbedding(emb: unknown): number[] | null {
-  if (!emb) return null;
-  if (Array.isArray(emb)) return emb;
-  if (typeof emb === 'string') {
-    try {
-      return JSON.parse(emb);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
+import { cosineSimilarity, parseEmbedding } from '../_shared/vector-utils.ts';
 
 // Thresholds for friend-taste-boosted discovery
 const FRIEND_SIMILARITY_THRESHOLD = 0.6;  // Only consider high-similarity friends
@@ -350,9 +319,37 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Fetch AI discoveries from daily-discovery function
+    const aiDiscoveries: Array<{
+      title: string;
+      description: string;
+      source_url: string;
+      category: string;
+      relevance_score: number;
+    }> = [];
+
+    try {
+      const { data: recommendations } = await supabase
+        .from('ai_recommendations')
+        .select('title, description, source_url, category, relevance_score')
+        .eq('user_id', userId)
+        .eq('status', 'pending')
+        .order('relevance_score', { ascending: false })
+        .limit(3);
+
+      if (recommendations && recommendations.length > 0) {
+        aiDiscoveries.push(...recommendations);
+        console.log(`🤖 Including ${aiDiscoveries.length} AI discoveries in feed`);
+      }
+    } catch (error) {
+      console.error('⚠️ Error fetching AI discoveries:', error);
+      // Don't fail feed generation if discoveries fail
+    }
+
     return new Response(
       JSON.stringify({
         ai_subtitle: aiSubtitle,
+        ai_discoveries: aiDiscoveries,
         brain_snack: brainSnack,
         from_friends: fromFriends,
         by_you: byYou,

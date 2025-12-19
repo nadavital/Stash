@@ -125,6 +125,45 @@ class APIClient: ObservableObject {
         }
     }
 
+    // MARK: - Search Intent
+
+    /// Classify user search query to determine intent and optimal UI mode
+    func classifySearchIntent(query: String) async throws -> SearchIntent {
+        if useMockData {
+            // Simulate network delay
+            try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            return SearchIntent(
+                intent: .findSaved,
+                uiMode: .stack,
+                confidence: 0.9,
+                cached: false,
+                latencyMs: 5
+            )
+        }
+
+        // Real API call
+        do {
+            print("🔵 Classifying search intent for query: \(query)")
+
+            struct IntentPayload: Encodable {
+                let query: String
+            }
+
+            let payload = IntentPayload(query: query)
+
+            let response: SearchIntent = try await supabase.functions.invoke(
+                "search-intent",
+                options: FunctionInvokeOptions(body: payload)
+            )
+
+            print("🟢 Intent classified: \(response.intent.rawValue) → \(response.uiMode.rawValue) (confidence: \(response.confidence), latency: \(response.latencyMs)ms)")
+            return response
+        } catch {
+            print("🔴 Intent classification error: \(error)")
+            throw APIError.networkError(error)
+        }
+    }
+
     // MARK: - Items
 
     /// Create a new stash item from a URL

@@ -40,3 +40,12 @@ enable_signup = true
 enable_signup = true
 double_confirm_changes = true
 enable_confirmations = false
+
+# Edge Functions configuration
+[functions.compute-taste-profile]
+# Run daily at 2 AM to update user taste profiles
+schedule = "0 2 * * *"
+
+[functions.daily-discovery]
+# Run daily at 3 AM to generate fresh discoveries
+schedule = "0 3 * * *"

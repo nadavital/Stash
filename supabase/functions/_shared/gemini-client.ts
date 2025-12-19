@@ -210,7 +210,8 @@ export async function chatWithStash(
   relevantEntities: Array<{ id: string; title: string; summary: string; tags: string[] }>,
   focusedItem?: { id: string; title: string; summary: string; tags: string[]; url?: string } | null,
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }> | null,
-  tasteContext?: { top_interests: string[]; preferred_types: string[] } | null
+  tasteContext?: { top_interests: string[]; preferred_types: string[] } | null,
+  toolHandlers?: ToolHandlers | null
 ): Promise<string> {
   // Handle empty stash case
   if (relevantEntities.length === 0 && !focusedItem) {
@@ -232,18 +233,18 @@ export async function chatWithStash(
   // Build taste context string for personalization
   let tasteText = '';
   if (tasteContext && (tasteContext.top_interests.length > 0 || tasteContext.preferred_types.length > 0)) {
-    const interests = tasteContext.top_interests.length > 0 
-      ? `interests: ${tasteContext.top_interests.join(', ')}` 
+    const interests = tasteContext.top_interests.length > 0
+      ? `interests: ${tasteContext.top_interests.join(', ')}`
       : '';
-    const types = tasteContext.preferred_types.length > 0 
-      ? `prefers: ${tasteContext.preferred_types.join(', ')}` 
+    const types = tasteContext.preferred_types.length > 0
+      ? `prefers: ${tasteContext.preferred_types.join(', ')}`
       : '';
     tasteText = `\nUser's taste: ${[interests, types].filter(Boolean).join('; ')}`;
   }
 
   // Build the prompt based on whether we have a focused item with URL
   let prompt: string;
-  
+
   if (focusedItem?.url) {
     // When we have a URL, ask Gemini to fetch it for detailed info
     prompt = `You are Stash, a helpful AI assistant that knows the user's taste.${tasteText}
@@ -278,53 +279,149 @@ ${contextText}
 ${historyText ? `Recent conversation:\n${historyText}\n` : ''}
 User: ${userMessage}
 
-Help the user by referencing their saved items. Use exact titles in quotes. Be concise (2-3 sentences). Consider their interests when making suggestions.`;
+Help the user by referencing their saved items. Use exact titles in quotes. Be concise (2-3 sentences). Consider their interests when making suggestions.${toolHandlers ? ' You can use searchUserStash to find specific items or getItemDetails for detailed information.' : ''}`;
   }
 
   try {
-    const requestBody: Record<string, unknown> = {
-      contents: [{
+    // Build conversation messages for multi-turn
+    const messages: Array<{ role: string; parts: Array<{ text?: string; functionCall?: any; functionResponse?: any }> }> = [
+      {
+        role: 'user',
         parts: [{ text: prompt }]
-      }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 500,
       }
-    };
-    
-    // Add URL context tool when we have a focused item URL
-    if (focusedItem?.url) {
-      requestBody.tools = [{ urlContext: {} }];
-      console.log('🔵 Using URL context for:', focusedItem.url);
+    ];
+
+    // Multi-turn loop for tool execution (max 5 turns to prevent infinite loops)
+    const MAX_TURNS = 5;
+    let turnCount = 0;
+
+    while (turnCount < MAX_TURNS) {
+      turnCount++;
+      console.log(`🔄 Turn ${turnCount}/${MAX_TURNS}`);
+
+      const requestBody: Record<string, unknown> = {
+        contents: messages,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 500,
+        }
+      };
+
+      // Add tools based on context
+      const tools: any[] = [];
+      if (focusedItem?.url) {
+        tools.push({ urlContext: {} });
+      }
+      if (toolHandlers) {
+        tools.push(chatTools);
+      }
+      if (tools.length > 0) {
+        requestBody.tools = tools;
+      }
+
+      const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Chat API error:', response.status, errorText);
+        throw new Error(`Chat API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const candidate = data.candidates?.[0];
+
+      if (!candidate) {
+        console.error('❌ No candidate in response:', JSON.stringify(data));
+        return "I'm having trouble understanding that right now. Could you rephrase your question?";
+      }
+
+      // Log URL context metadata if available
+      if (candidate.urlContextMetadata) {
+        console.log('🟢 URL fetched:', JSON.stringify(candidate.urlContextMetadata));
+      }
+
+      const content = candidate.content;
+      if (!content) {
+        return "I'm having trouble understanding that right now. Could you rephrase your question?";
+      }
+
+      // Add assistant response to conversation
+      messages.push({
+        role: 'model',
+        parts: content.parts
+      });
+
+      // Check if response contains function calls
+      const functionCalls = content.parts?.filter((part: any) => part.functionCall);
+
+      if (!functionCalls || functionCalls.length === 0) {
+        // No function calls - this is the final answer
+        const textPart = content.parts?.find((part: any) => part.text);
+        if (textPart?.text) {
+          console.log(`✅ Final answer received (turn ${turnCount})`);
+          return textPart.text;
+        }
+        return "I'm having trouble understanding that right now. Could you rephrase your question?";
+      }
+
+      // Execute function calls
+      console.log(`🔧 Executing ${functionCalls.length} function call(s)...`);
+      const functionResponses: any[] = [];
+
+      for (const fc of functionCalls) {
+        const functionCall = fc.functionCall;
+        const functionName = functionCall.name;
+        const functionArgs = functionCall.args || {};
+
+        console.log(`  - ${functionName}(${JSON.stringify(functionArgs)})`);
+
+        let functionResult: any;
+
+        try {
+          if (!toolHandlers) {
+            functionResult = { error: 'Tool handlers not available' };
+          } else if (functionName === 'searchUserStash') {
+            const results = await toolHandlers.searchUserStash(
+              functionArgs.query,
+              functionArgs.limit || 10
+            );
+            functionResult = { results };
+          } else if (functionName === 'getItemDetails') {
+            const item = await toolHandlers.getItemDetails(functionArgs.itemId);
+            functionResult = item ? { item } : { error: 'Item not found' };
+          } else {
+            functionResult = { error: `Unknown function: ${functionName}` };
+          }
+        } catch (error) {
+          console.error(`❌ Error executing ${functionName}:`, error);
+          functionResult = { error: error instanceof Error ? error.message : 'Function execution failed' };
+        }
+
+        functionResponses.push({
+          functionResponse: {
+            name: functionName,
+            response: functionResult
+          }
+        });
+      }
+
+      // Add function responses to conversation
+      messages.push({
+        role: 'user',
+        parts: functionResponses
+      });
+
+      // Continue to next turn to get final answer
     }
 
-    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
+    // Reached max turns without final answer
+    console.warn('⚠️ Reached max turns without final answer');
+    return "I found some information but need more time to process it. Could you rephrase your question?";
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ Chat API error:', response.status, errorText);
-      throw new Error(`Chat API error: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    
-    // Log URL context metadata if available
-    if (data.candidates?.[0]?.urlContextMetadata) {
-      console.log('🟢 URL fetched:', JSON.stringify(data.candidates[0].urlContextMetadata));
-    }
-    
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!text) {
-      console.error('❌ No text in response:', JSON.stringify(data));
-      return "I'm having trouble understanding that right now. Could you rephrase your question?";
-    }
-    
-    return text;
   } catch (error) {
     console.error('❌ Chat error:', error);
     if (focusedItem) {
@@ -333,6 +430,50 @@ Help the user by referencing their saved items. Use exact titles in quotes. Be c
     return "Sorry, I'm having trouble right now. Please try again in a moment.";
   }
 }
+
+// Tool declarations for chat function calling
+export const chatTools = {
+  function_declarations: [
+    {
+      name: 'searchUserStash',
+      description: 'Search the user\'s saved items by query. Use this when the user asks to find specific content in their stash.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'The search query to match against saved items'
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of results to return (default: 10)'
+          }
+        },
+        required: ['query']
+      }
+    },
+    {
+      name: 'getItemDetails',
+      description: 'Get full metadata for a specific saved item by ID. Use this when the user asks for details about a particular item.',
+      parameters: {
+        type: 'object',
+        properties: {
+          itemId: {
+            type: 'string',
+            description: 'The UUID of the item to retrieve'
+          }
+        },
+        required: ['itemId']
+      }
+    }
+  ]
+};
+
+// Type for tool handlers
+export type ToolHandlers = {
+  searchUserStash: (query: string, limit?: number) => Promise<Array<{ id: string; title: string; summary: string; tags: string[] }>>;
+  getItemDetails: (itemId: string) => Promise<{ id: string; title: string; summary: string; tags: string[]; url?: string; metadata?: any } | null>;
+};
 
 // JSON Schema for structured image enrichment output
 const imageEnrichmentSchema = {
@@ -377,10 +518,110 @@ const imageEnrichmentSchema = {
   required: ["entity_type", "clean_title", "summary", "tags", "primary_emoji", "suggested_prompts"]
 };
 
-// Analyze image using two-stage process (required because structured outputs + tools not supported together)
+// Single-stage image enrichment with vision + grounding + structured output
+// Gemini 3.0 Flash Preview supports tools + structured output together!
+async function enrichImageSingleStage(imageBase64: string): Promise<EnrichmentResult> {
+  const prompt = `Analyze this image and use Google Search to find additional context.
+
+Extract and identify:
+1. Content type (recipe, event, tweet, article, song, video, etc.)
+2. Title or main heading
+3. All visible text and URLs
+4. Use Google Search to find:
+   - Original source URL if this is a screenshot
+   - Recipe ingredients if it's food
+   - Event date/venue if it's an event
+   - Song artist/album if it's music
+   - Article author/publication if it's an article
+   - Any other relevant metadata
+
+Classify the content type based on URLs/context:
+- twitter.com, x.com → "tweet"
+- threads.net → "threads_post"
+- instagram.com/p/ → "instagram_post"
+- instagram.com/reel/ → "instagram_reel"
+- tiktok.com → "tiktok"
+- youtube.com/watch → "youtube_video"
+- youtube.com/shorts → "youtube_short"
+- music.apple.com, spotify.com → "song"
+- eventbrite.com, ticketmaster.com → "event"
+- Recipe/cooking content → "recipe"
+- News/blog → "article"
+- Otherwise → "generic"
+
+Create an engaging summary. For recipes, mention key qualities. For songs, include genre/mood. For social posts, capture the main point.`;
+
+  try {
+    console.log('🔵 Single-stage enrichment: Vision + Grounding + Structured Output...');
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: prompt },
+            {
+              inline_data: {
+                mime_type: 'image/jpeg',
+                data: imageBase64
+              }
+            }
+          ]
+        }],
+        tools: [{ google_search: {} }],  // Grounding enabled
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 1500,
+          responseMimeType: "application/json",  // Structured output enabled
+          responseSchema: imageEnrichmentSchema  // Together with tools - NEW in 3.0!
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Single-stage enrichment failed:', response.status, errorText);
+      throw new Error(`Gemini API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Log grounding metadata
+    const groundingMetadata = data.candidates?.[0]?.groundingMetadata;
+    if (groundingMetadata) {
+      console.log('🔍 Google Search grounding used');
+      console.log('  - Queries:', JSON.stringify(groundingMetadata.webSearchQueries));
+      console.log('  - Sources found:', groundingMetadata.groundingChunks?.length || 0);
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      throw new Error('No response from Gemini');
+    }
+
+    console.log('✅ Single-stage enrichment complete');
+    const result: EnrichmentResult = JSON.parse(text);
+
+    return {
+      entity_type: result.entity_type || 'generic',
+      clean_title: result.clean_title || 'Image',
+      summary: result.summary || 'An image was saved',
+      tags: result.tags?.slice(0, 5) || ['image'],
+      primary_emoji: result.primary_emoji || '📷',
+      suggested_prompts: result.suggested_prompts?.slice(0, 3) || ['What is this?', 'Tell me more', 'Details?'],
+      type_metadata: result.type_metadata || undefined,
+      source_url: result.source_url || undefined,
+    };
+  } catch (error) {
+    console.error('❌ Single-stage enrichment error:', error);
+    throw error;  // Propagate to fallback
+  }
+}
+
+// Two-stage fallback (kept for compatibility if single-stage fails)
 // Stage 1: Vision + Google Search grounding (unstructured output)
 // Stage 2: Text + Structured output (no grounding needed, already enriched)
-export async function enrichImage(imageBase64: string): Promise<EnrichmentResult> {
+async function enrichImageTwoStage(imageBase64: string): Promise<EnrichmentResult> {
   // Stage 1: Vision analysis WITH grounding (no structured output)
   const visionPrompt = `Analyze this image and use Google Search to find additional context.
 
@@ -541,6 +782,37 @@ Create an engaging summary. For recipes, mention key qualities. For songs, inclu
       suggested_prompts: ['What is this?', 'Tell me more', 'Details?'],
       type_metadata: undefined,
     };
+  }
+}
+
+// Main enrichImage function with automatic fallback
+// Tries single-stage (faster, 1 API call) → falls back to two-stage if it fails
+export async function enrichImage(imageBase64: string): Promise<EnrichmentResult> {
+  try {
+    // Try single-stage first (Gemini 3.0 Flash Preview feature)
+    return await enrichImageSingleStage(imageBase64);
+  } catch (singleStageError) {
+    console.log('⚠️ Single-stage enrichment failed, falling back to two-stage...');
+    console.error('Single-stage error:', singleStageError);
+
+    try {
+      // Fallback to proven two-stage approach
+      return await enrichImageTwoStage(imageBase64);
+    } catch (twoStageError) {
+      console.error('❌ Both enrichment strategies failed');
+      console.error('Two-stage error:', twoStageError);
+
+      // Final fallback response
+      return {
+        entity_type: 'generic',
+        clean_title: 'Image',
+        summary: 'An image was saved to your stash',
+        tags: ['image'],
+        primary_emoji: '📷',
+        suggested_prompts: ['What is this?', 'Tell me more', 'Details?'],
+        type_metadata: undefined,
+      };
+    }
   }
 }
 

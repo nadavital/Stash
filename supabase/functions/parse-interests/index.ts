@@ -10,6 +10,41 @@ if (!GEMINI_API_KEY) {
   console.warn('⚠️ GEMINI_API_KEY not set - AI parsing will use fallback');
 }
 
+// Structured output schema for interest parsing
+const parseInterestsSchema = {
+  type: 'object',
+  properties: {
+    categories: {
+      type: 'object',
+      description: 'Interest categories with confidence scores (0.0-1.0)',
+      additionalProperties: {
+        type: 'number',
+        minimum: 0.0,
+        maximum: 1.0,
+      },
+    },
+    entity_types: {
+      type: 'object',
+      description: 'Content type preferences (0.0-1.0)',
+      properties: {
+        article: { type: 'number', minimum: 0.0, maximum: 1.0 },
+        song: { type: 'number', minimum: 0.0, maximum: 1.0 },
+        recipe: { type: 'number', minimum: 0.0, maximum: 1.0 },
+        event: { type: 'number', minimum: 0.0, maximum: 1.0 },
+      },
+      required: ['article', 'song', 'recipe', 'event'],
+    },
+    keywords: {
+      type: 'array',
+      description: 'Specific keywords/topics for matching',
+      items: { type: 'string' },
+      minItems: 5,
+      maxItems: 15,
+    },
+  },
+  required: ['categories', 'entity_types', 'keywords'],
+};
+
 // Parse natural language interests into structured categories
 async function parseInterestsWithAI(freeformText: string): Promise<{
   categories: Record<string, number>;
@@ -27,25 +62,11 @@ async function parseInterestsWithAI(freeformText: string): Promise<{
     };
   }
 
-  const prompt = `Parse the following user interests into structured categories. Return ONLY a JSON object.
+  const prompt = `Parse the following user interests into structured categories.
 
 User input: "${freeformText}"
 
-Return JSON in this exact format:
-{
-  "categories": {
-    "category_name": confidence_score
-  },
-  "entity_types": {
-    "article": preference_score,
-    "song": preference_score,
-    "recipe": preference_score,
-    "event": preference_score
-  },
-  "keywords": ["keyword1", "keyword2", ...]
-}
-
-Rules:
+Instructions:
 - categories: Extract 3-8 interest categories with confidence scores (0.0-1.0)
   Examples: "technology", "ai", "indie music", "cooking", "basketball", "travel", "startups"
 - entity_types: Infer what content types they might prefer (0.0-1.0)
@@ -69,6 +90,8 @@ Be generous in interpretation. "music" implies interest in songs, "food" implies
         generationConfig: {
           temperature: 0.3,
           maxOutputTokens: 500,
+          responseMimeType: 'application/json',
+          responseSchema: parseInterestsSchema,
         }
       })
     });
@@ -84,9 +107,8 @@ Be generous in interpretation. "music" implies interest in songs, "food" implies
       throw new Error('No response from Gemini');
     }
 
-    // Parse JSON from response
-    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const result = JSON.parse(jsonText);
+    // Parse JSON directly - guaranteed to be valid by structured output
+    const result = JSON.parse(text);
 
     return {
       categories: result.categories || {},

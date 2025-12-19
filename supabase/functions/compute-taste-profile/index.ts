@@ -1,5 +1,6 @@
 import { createSupabaseClient, getUserIdFromRequest } from '../_shared/supabase-client.ts';
 import { corsHeaders } from '../_shared/types.ts';
+import { cosineSimilarity, normalizeVector } from '../_shared/vector-utils.ts';
 
 // Signal weights for taste computation
 const SIGNAL_WEIGHTS: Record<string, number> = {
@@ -18,31 +19,6 @@ const SIGNAL_WEIGHTS: Record<string, number> = {
 
 // Time decay half-life in days
 const DECAY_HALF_LIFE_DAYS = 30;
-
-// Cosine similarity helper
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  
-  const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
-  return magnitude === 0 ? 0 : dotProduct / magnitude;
-}
-
-// Normalize a vector to unit length
-function normalizeVector(v: number[]): number[] {
-  const norm = Math.sqrt(v.reduce((sum, x) => sum + x * x, 0));
-  if (norm === 0) return v;
-  return v.map(x => x / norm);
-}
 
 // Compute time decay factor
 function computeDecay(daysAgo: number): number {

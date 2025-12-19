@@ -42,6 +42,13 @@ struct HomeView: View {
     @State private var showPreviousDetailCard = false
     @State private var isHorizontalDragging = false
 
+    // Race condition prevention flags
+    @State private var isHorizontalTransitioning = false
+    @State private var isVerticalTransitioning = false
+
+    // Background morphing during horizontal transitions
+    @State private var backgroundMorphProgress: Double = 0.0
+
     // Test colors
     private let testColors: [Color] = [
         Color(red: 0.8, green: 0.2, blue: 0.2), // Red
@@ -89,6 +96,34 @@ struct HomeView: View {
         let isVerticalGesture = detectedDirection.isVertical || isDragging
 
         ZStack(alignment: .top) {
+            // BACKGROUND MORPHING LAYER (Detail mode only)
+            // Dual-layer crossfade system for smooth background transitions
+            if displayMode == .detail {
+                ZStack {
+                    // Base layer: current item background
+                    testBackground(for: currentIndex)
+                        .opacity(1.0 - abs(backgroundMorphProgress))
+                        .ignoresSafeArea()
+
+                    // Transition layer: previous/next background
+                    Group {
+                        if backgroundMorphProgress < 0, currentIndex > 0 {
+                            // Swiping right → show previous background
+                            testBackground(for: currentIndex - 1)
+                                .opacity(abs(backgroundMorphProgress))
+                                .ignoresSafeArea()
+                        } else if backgroundMorphProgress > 0 {
+                            // Swiping left → show next background
+                            testBackground(for: currentIndex + 1)
+                                .opacity(abs(backgroundMorphProgress))
+                                .ignoresSafeArea()
+                        }
+                    }
+                }
+                .zIndex(-1)  // Behind all content
+                .animation(.none, value: backgroundMorphProgress)  // No animation during drag
+            }
+
             // DECK MODE: Background cards
             // Only show background cards when fully in deck mode (transitionProgress = 0)
             if displayMode == .deck && transitionProgress == 0 {
@@ -113,21 +148,26 @@ struct HomeView: View {
                 .opacity((isDragging || displayMode == .detail || transitionProgress > 0) ? 1 : 0)
                 .animation(.none, value: isDragging)
                 .animation(StashTheme.Gesture.completionSpring, value: displayMode)
-                .animation(StashTheme.Gesture.completionSpring, value: transitionProgress)
                 .zIndex(0)
 
             // DETAIL MODE: Additional cards for horizontal navigation
-            // Always render both cards to avoid rebuilds during wobbling
+            // Always render both cards, use opacity for smooth fade-in
             if displayMode == .detail {
-                // Next card (slides in from right)
+                let screenWidth = UIScreen.main.bounds.width
+
+                // Next card (slides in from right when swiping left)
+                let nextCardProgress = detailHorizontalDragOffset <= 0 ? min(abs(detailHorizontalDragOffset) / screenWidth, 1.0) : 0
                 detailCard(for: currentIndex + 1, screenHeight: screenHeight)
-                    .offset(x: UIScreen.main.bounds.width + detailHorizontalDragOffset)
+                    .offset(x: screenWidth + detailHorizontalDragOffset)
+                    .opacity(nextCardProgress)  // Gradual fade-in as it slides
                     .zIndex(1)
 
-                // Previous card (slides in from left)
+                // Previous card (slides in from left when swiping right)
                 if currentIndex > 0 {
+                    let previousCardProgress = detailHorizontalDragOffset >= 0 ? min(abs(detailHorizontalDragOffset) / screenWidth, 1.0) : 0
                     detailCard(for: currentIndex - 1, screenHeight: screenHeight)
-                        .offset(x: -UIScreen.main.bounds.width + detailHorizontalDragOffset)
+                        .offset(x: -screenWidth + detailHorizontalDragOffset)
+                        .opacity(previousCardProgress)  // Gradual fade-in as it slides
                         .zIndex(1)
                 }
             }
@@ -296,6 +336,9 @@ struct HomeView: View {
         // Only handle gestures in deck mode (detail has its own gesture handler)
         guard displayMode == .deck else { return }
 
+        // Prevent gesture handling during transitions
+        guard !isHorizontalTransitioning && !isVerticalTransitioning else { return }
+
         // Detect direction on first move
         if detectedDirection == .none {
             detectedDirection = GestureDirection.detect(translation: value.translation, threshold: 15)
@@ -318,7 +361,7 @@ struct HomeView: View {
             if left {
                 // Swipe left - next card (current card moves left)
                 currentCardOffset = translation
-                currentCardRotation = Double(translation / screenWidth) * 15
+                currentCardRotation = Double(translation / screenWidth) * StashTheme.Gesture.rotationAngle
                 currentCardScale = 1.0 - (abs(translation) / screenWidth * 0.1)
             } else {
                 // Swipe right - previous card slides on top from left
@@ -365,7 +408,7 @@ struct HomeView: View {
                     // Only set isDragging to false after animation completes
                     // so detail content stays visible during spring back
                     Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(300))
+                        try? await Task.sleep(for: .seconds(StashTheme.Gesture.completionDelay))
                         isDragging = false
                     }
 
@@ -393,6 +436,9 @@ struct HomeView: View {
     // MARK: - Transition Actions
 
     private func expandToDetail() {
+        guard !isVerticalTransitioning else { return }
+        isVerticalTransitioning = true
+
         let isHighVelocity = transitionProgress > 0.5
 
         // Hide next card immediately to prevent it from showing during transitions
@@ -407,10 +453,18 @@ struct HomeView: View {
             showControls = false
         }
 
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
+            isVerticalTransitioning = false
+        }
+
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 
     private func collapseToCard() {
+        guard !isVerticalTransitioning else { return }
+        isVerticalTransitioning = true
+
         withAnimation(StashTheme.Gesture.completionSpring) {
             displayMode = .deck
             transitionProgress = 0
@@ -420,9 +474,11 @@ struct HomeView: View {
         // Delay isDragging and showNextCard until animation completes
         // This keeps detail content visible during the entire transition
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
+            // Reduced delay for faster re-expand responsiveness
+            try? await Task.sleep(for: .milliseconds(150))
             isDragging = false
             showNextCard = true
+            isVerticalTransitioning = false
         }
 
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -431,6 +487,9 @@ struct HomeView: View {
     // MARK: - Navigation Helpers
 
     private func navigateToNextCard(screenWidth: CGFloat) {
+        guard !isHorizontalTransitioning else { return }
+        isHorizontalTransitioning = true
+
         withAnimation(StashTheme.Gesture.completionSpring) {
             currentCardOffset = -screenWidth * 1.5
             currentCardRotation = -25
@@ -438,15 +497,24 @@ struct HomeView: View {
         }
 
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
-            currentIndex += 1
-            currentCardOffset = 0
-            currentCardRotation = 0
-            currentCardScale = 1.0
+            try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
+            guard isHorizontalTransitioning else { return }
+            // Reset transforms and update index atomically with no animation
+            withAnimation(.none) {
+                currentIndex += 1
+                currentCardOffset = 0
+                currentCardRotation = 0
+                currentCardScale = 1.0
+                isHorizontalTransitioning = false
+            }
         }
     }
 
     private func navigateToPreviousCard(screenWidth: CGFloat) {
+        guard !isHorizontalTransitioning else { return }
+        guard currentIndex > 0 else { return }  // Bounds check
+        isHorizontalTransitioning = true
+
         withAnimation(StashTheme.Gesture.completionSpring) {
             previousCardOffset = 0
             previousCardRotation = 0
@@ -454,12 +522,17 @@ struct HomeView: View {
         }
 
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(350))
-            currentIndex -= 1
-            showPreviousCard = false
-            previousCardOffset = -screenWidth * 1.5
-            previousCardRotation = -25
-            previousCardScale = 0.7
+            try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
+            guard isHorizontalTransitioning else { return }
+            // Reset state atomically with no animation
+            withAnimation(.none) {
+                currentIndex -= 1
+                showPreviousCard = false
+                previousCardOffset = -screenWidth * 1.5
+                previousCardRotation = -25
+                previousCardScale = 0.7
+                isHorizontalTransitioning = false
+            }
         }
     }
 
@@ -477,7 +550,7 @@ struct HomeView: View {
 
         if !isLeft {
             Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(300))
+                try? await Task.sleep(for: .seconds(StashTheme.Gesture.completionDelay))
                 showPreviousCard = false
             }
         }
@@ -486,39 +559,64 @@ struct HomeView: View {
     // MARK: - Detail Horizontal Drag Handlers
 
     private func handleDetailHorizontalDragChanged(offset: CGFloat, isLeft: Bool) {
-        // Just update offset - cards are always rendered
+        // Prevent gesture updates during active transitions
+        guard !isHorizontalTransitioning else { return }
+
+        // Update offset and background morph progress
+        let screenWidth = UIScreen.main.bounds.width
+        let progress = offset / screenWidth  // Range: -1.0 to 1.0
+
         detailHorizontalDragOffset = offset
+        backgroundMorphProgress = progress
     }
 
     private func handleDetailHorizontalDragEnded(offset: CGFloat, isLeft: Bool) {
-        let threshold: CGFloat = 100
+        guard !isHorizontalTransitioning else { return }
+
         let screenWidth = UIScreen.main.bounds.width
+        let threshold = screenWidth * StashTheme.Gesture.horizontalSwipeThreshold
 
         if isLeft && abs(offset) > threshold {
             // Commit: slide to next
+            isHorizontalTransitioning = true
+
             withAnimation(StashTheme.Gesture.completionSpring) {
                 detailHorizontalDragOffset = -screenWidth
+                backgroundMorphProgress = 1.0  // Complete morph to next
             }
 
             Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(350))
+                try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
+                guard isHorizontalTransitioning else { return }
                 currentIndex += 1
                 scrollToTopTrigger = UUID()
-                detailHorizontalDragOffset = 0
+                withAnimation(.none) {
+                    detailHorizontalDragOffset = 0
+                    backgroundMorphProgress = 0.0  // Reset
+                    isHorizontalTransitioning = false
+                }
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
 
         } else if !isLeft && abs(offset) > threshold && currentIndex > 0 {
             // Commit: slide to previous
+            isHorizontalTransitioning = true
+
             withAnimation(StashTheme.Gesture.completionSpring) {
                 detailHorizontalDragOffset = screenWidth
+                backgroundMorphProgress = -1.0  // Complete morph to previous
             }
 
             Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(350))
+                try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
+                guard isHorizontalTransitioning else { return }
                 currentIndex -= 1
                 scrollToTopTrigger = UUID()
-                detailHorizontalDragOffset = 0
+                withAnimation(.none) {
+                    detailHorizontalDragOffset = 0
+                    backgroundMorphProgress = 0.0  // Reset
+                    isHorizontalTransitioning = false
+                }
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
 
@@ -526,6 +624,7 @@ struct HomeView: View {
             // Cancel: spring back
             withAnimation(StashTheme.Gesture.cancelSpring) {
                 detailHorizontalDragOffset = 0
+                backgroundMorphProgress = 0.0  // Reset morph
             }
 
             UIImpactFeedbackGenerator(style: .light).impactOccurred()

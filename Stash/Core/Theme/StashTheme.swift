@@ -93,5 +93,14 @@ struct StashTheme {
 
         // Completion delay - standard delay before transitioning modes after gesture animation
         static let completionDelay: TimeInterval = 0.25
+
+        // Card rotation angle for horizontal swipes (degrees)
+        static let rotationAngle: Double = 10.0
+
+        // Horizontal swipe threshold as proportion of screen width
+        static let horizontalSwipeThreshold: CGFloat = 0.25
+
+        // Detail transition delay - for Task.sleep after animations
+        static let detailTransitionDelay: Double = 0.25
     }
 }

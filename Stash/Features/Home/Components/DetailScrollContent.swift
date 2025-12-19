@@ -20,7 +20,7 @@ struct DetailScrollContent: View {
     @State private var detectedDirection: GestureDirection = .none
     @State private var interactiveDragOpacity: CGFloat = 1.0
     @State private var interactiveDragScale: CGFloat = 1.0
-    @State private var scrollViewID: UUID = UUID()
+    @State private var isHorizontalDragging: Bool = false
 
     // Interactive drag feedback
     private var combinedOpacity: CGFloat {
@@ -38,12 +38,18 @@ struct DetailScrollContent: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // Spacer for header (safe area + content height + gap)
-                        Color.clear.frame(height: geometry.safeAreaInsets.top + 60 + 48)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            // Scroll anchor for resetting position
+                            Color.clear
+                                .frame(height: 1)
+                                .id("top")
 
-                        VStack(alignment: .leading, spacing: 20) {
+                            // Spacer for header (safe area + content height + gap)
+                            Color.clear.frame(height: geometry.safeAreaInsets.top + 60 + 48)
+
+                            VStack(alignment: .leading, spacing: 20) {
                             Text("This content is now revealed underneath the morphing header.")
                                 .font(.system(size: 17))
                                 .foregroundStyle(.white.opacity(0.8))
@@ -64,17 +70,22 @@ struct DetailScrollContent: View {
                             }
                         }
                         .padding(24)
+                        }
                     }
-                }
-                .id(scrollViewID)
-                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    .onScrollGeometryChange(for: Bool.self) { geometry in
                     // Check if we're at the top of the scroll view
                     geometry.contentOffset.y <= 0
-                } action: { oldValue, newValue in
-                    isScrolledToTop = newValue
-                }
-                .scrollDisabled(isDragging)
-                .simultaneousGesture(
+                    } action: { oldValue, newValue in
+                        isScrolledToTop = newValue
+                    }
+                    .scrollDisabled(isDragging || isHorizontalDragging)
+                    .onChange(of: scrollToTopTrigger) {
+                        // Smooth scroll to top instead of nuking the ScrollView
+                        withAnimation(StashTheme.Gesture.completionSpring) {
+                            proxy.scrollTo("top", anchor: .top)
+                        }
+                    }
+                    .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             // Detect direction on first move
@@ -98,9 +109,9 @@ struct DetailScrollContent: View {
                                 }
 
                             case .horizontal:
-                                // Horizontal swipes don't need to disable scrolling
-                                // Update direction dynamically based on current translation for smooth wobbling
+                                // Disable scrolling during horizontal swipes to prevent conflicts
                                 if isScrolledToTop {
+                                    isHorizontalDragging = true
                                     let isCurrentlyLeft = value.translation.width < 0
                                     let translation = abs(value.translation.width)
                                     let progress = min(translation / 200.0, 1.0)
@@ -163,17 +174,19 @@ struct DetailScrollContent: View {
                             // Reset states
                             detectedDirection = .none
                             dragOffset = 0
+                            isHorizontalDragging = false
                             if shouldResetDragging {
                                 isDragging = false
                             }
                         }
-                )
-                .opacity(combinedOpacity)
-                .scaleEffect(combinedScale)
-                .blur(radius: combinedBlur)
-                .animation(.none, value: interactiveDragOpacity)
-                .animation(.none, value: interactiveDragScale)
-                .animation(.none, value: horizontalDragOffset)
+                    )
+                    .opacity(combinedOpacity)
+                    .scaleEffect(combinedScale)
+                    .blur(radius: combinedBlur)
+                    .animation(.none, value: interactiveDragOpacity)
+                    .animation(.none, value: interactiveDragScale)
+                    .animation(.none, value: horizontalDragOffset)
+                }
 
                 // Dismiss button overlay
                 VStack {
@@ -191,9 +204,6 @@ struct DetailScrollContent: View {
                     }
                     .padding(24)
                 }
-            }
-            .onChange(of: scrollToTopTrigger) {
-                scrollViewID = UUID()
             }
         }
         .background(

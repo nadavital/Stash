@@ -40,6 +40,7 @@ struct HomeView: View {
     @State private var detailHorizontalDragOffset: CGFloat = 0
     @State private var showNextDetailCard = false
     @State private var showPreviousDetailCard = false
+    @State private var isHorizontalDragging = false
 
     // Test colors
     private let testColors: [Color] = [
@@ -116,16 +117,15 @@ struct HomeView: View {
                 .zIndex(0)
 
             // DETAIL MODE: Additional cards for horizontal navigation
+            // Always render both cards to avoid rebuilds during wobbling
             if displayMode == .detail {
                 // Next card (slides in from right)
-                if showNextDetailCard {
-                    detailCard(for: currentIndex + 1, screenHeight: screenHeight)
-                        .offset(x: UIScreen.main.bounds.width + detailHorizontalDragOffset)
-                        .zIndex(1)
-                }
+                detailCard(for: currentIndex + 1, screenHeight: screenHeight)
+                    .offset(x: UIScreen.main.bounds.width + detailHorizontalDragOffset)
+                    .zIndex(1)
 
                 // Previous card (slides in from left)
-                if showPreviousDetailCard && currentIndex > 0 {
+                if currentIndex > 0 {
                     detailCard(for: currentIndex - 1, screenHeight: screenHeight)
                         .offset(x: -UIScreen.main.bounds.width + detailHorizontalDragOffset)
                         .zIndex(1)
@@ -486,16 +486,8 @@ struct HomeView: View {
     // MARK: - Detail Horizontal Drag Handlers
 
     private func handleDetailHorizontalDragChanged(offset: CGFloat, isLeft: Bool) {
+        // Just update offset - cards are always rendered
         detailHorizontalDragOffset = offset
-
-        // Show appropriate card
-        if isLeft {
-            showNextDetailCard = true
-            showPreviousDetailCard = false
-        } else {
-            showPreviousDetailCard = currentIndex > 0
-            showNextDetailCard = false
-        }
     }
 
     private func handleDetailHorizontalDragEnded(offset: CGFloat, isLeft: Bool) {
@@ -513,7 +505,6 @@ struct HomeView: View {
                 currentIndex += 1
                 scrollToTopTrigger = UUID()
                 detailHorizontalDragOffset = 0
-                showNextDetailCard = false
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
 
@@ -528,7 +519,6 @@ struct HomeView: View {
                 currentIndex -= 1
                 scrollToTopTrigger = UUID()
                 detailHorizontalDragOffset = 0
-                showPreviousDetailCard = false
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
 
@@ -536,12 +526,6 @@ struct HomeView: View {
             // Cancel: spring back
             withAnimation(StashTheme.Gesture.cancelSpring) {
                 detailHorizontalDragOffset = 0
-            }
-
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(300))
-                showNextDetailCard = false
-                showPreviousDetailCard = false
             }
 
             UIImpactFeedbackGenerator(style: .light).impactOccurred()

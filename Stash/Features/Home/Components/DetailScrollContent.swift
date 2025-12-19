@@ -97,20 +97,22 @@ struct DetailScrollContent: View {
                                     transitionProgress = max(1.0 - (dragOffset / totalDistance), 0)
                                 }
 
-                            case .horizontal(let left):
+                            case .horizontal:
                                 // Horizontal swipes don't need to disable scrolling
+                                // Update direction dynamically based on current translation for smooth wobbling
                                 if isScrolledToTop {
+                                    let isCurrentlyLeft = value.translation.width < 0
                                     let translation = abs(value.translation.width)
                                     let progress = min(translation / 200.0, 1.0)
 
                                     // Apply interactive fade and scale
-                                    if (left && canNavigateNext) || (!left && canNavigatePrevious) {
+                                    if (isCurrentlyLeft && canNavigateNext) || (!isCurrentlyLeft && canNavigatePrevious) {
                                         interactiveDragOpacity = 1.0 - (progress * 0.3)
                                         interactiveDragScale = 1.0 - (progress * 0.02)
                                         horizontalDragOffset = value.translation.width
 
-                                        // Notify parent of drag progress
-                                        onHorizontalDragChanged?(value.translation.width, left)
+                                        // Notify parent of drag progress (use current direction)
+                                        onHorizontalDragChanged?(value.translation.width, isCurrentlyLeft)
                                     } else {
                                         // Rubber band effect at boundaries
                                         horizontalDragOffset = value.translation.width * 0.3
@@ -169,6 +171,9 @@ struct DetailScrollContent: View {
                 .opacity(combinedOpacity)
                 .scaleEffect(combinedScale)
                 .blur(radius: combinedBlur)
+                .animation(.none, value: interactiveDragOpacity)
+                .animation(.none, value: interactiveDragScale)
+                .animation(.none, value: horizontalDragOffset)
 
                 // Dismiss button overlay
                 VStack {

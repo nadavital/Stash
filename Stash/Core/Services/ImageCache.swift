@@ -62,6 +62,26 @@ class ImageCache {
         }
     }
 
+    /// Pre-load an image into cache
+    func preload(_ url: String) async {
+        // Already cached
+        if get(url) != nil {
+            return
+        }
+
+        // Download and cache
+        guard let imageURL = URL(string: url) else { return }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: imageURL)
+            if let image = UIImage(data: data) {
+                set(image, forURL: url)
+            }
+        } catch {
+            // Silent fail for preloading
+        }
+    }
+
     // MARK: - Disk Cache Operations
 
     private func cacheKey(for url: String) -> String {
@@ -178,24 +198,37 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
         self.url = url
         self.content = content
         self.placeholder = placeholder
+
+        // Check cache synchronously on init to prevent flicker
+        if let url = url,
+           let cachedImage = ImageCache.shared.get(url.absoluteString) {
+            _image = State(initialValue: cachedImage)
+        }
     }
 
     var body: some View {
         Group {
             if let image = image {
                 content(Image(uiImage: image))
-            } else if isLoading {
-                placeholder()
             } else {
                 placeholder()
-                    .onAppear {
-                        loadImage()
-                    }
             }
+        }
+        .onChange(of: url) { oldValue, newValue in
+            // Immediately update to cached image if available when URL changes
+            if let newURL = newValue,
+               let cachedImage = ImageCache.shared.get(newURL.absoluteString) {
+                image = cachedImage
+            } else {
+                image = nil
+            }
+        }
+        .task(id: url) {
+            await loadImage()
         }
     }
 
-    private func loadImage() {
+    private func loadImage() async {
         guard let url = url else { return }
 
         // Check cache first (now checks both memory and disk)
@@ -206,22 +239,16 @@ struct CachedAsyncImage<Content: View, Placeholder: View>: View {
 
         // Download if not in cache
         isLoading = true
-        Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                if let downloadedImage = UIImage(data: data) {
-                    await MainActor.run {
-                        ImageCache.shared.set(downloadedImage, forURL: url.absoluteString)
-                        self.image = downloadedImage
-                        self.isLoading = false
-                    }
-                }
-            } catch {
-                print("🔴 Error loading image: \(error)")
-                await MainActor.run {
-                    self.isLoading = false
-                }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let downloadedImage = UIImage(data: data) {
+                ImageCache.shared.set(downloadedImage, forURL: url.absoluteString)
+                self.image = downloadedImage
+                self.isLoading = false
             }
+        } catch {
+            print("🔴 Error loading image: \(error)")
+            self.isLoading = false
         }
     }
 }

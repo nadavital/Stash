@@ -8,6 +8,7 @@ enum CardDisplayMode {
 }
 
 struct HomeView: View {
+    @State private var viewModel = HomeViewModel()
     @State private var currentIndex = 0
     @State private var displayMode: CardDisplayMode = .deck
     @State private var showControls = true
@@ -49,6 +50,11 @@ struct HomeView: View {
     // Background morphing during horizontal transitions
     @State private var backgroundMorphProgress: Double = 0.0
 
+    // Sheet presentation state
+    @State private var showingAddItem = false
+    @State private var showingChat = false
+    @State private var showingProfile = false
+
     // Test colors
     private let testColors: [Color] = [
         Color(red: 0.8, green: 0.2, blue: 0.2), // Red
@@ -64,29 +70,82 @@ struct HomeView: View {
                 // Background
                 Color.black.ignoresSafeArea()
 
-                ZStack(alignment: .top) {
-                    // MAIN CARD STACK - contains all cards and transitions
-                    mainCardStack(screenHeight: geometry.size.height, screenWidth: geometry.size.width)
-
-                    // CONTROLS
-                    if displayMode == .deck {
-                        floatingControls
-                            .opacity(showControls ? (1.0 - transitionProgress) : 0)
-                            .zIndex(200)
+                // Show content only when items loaded
+                if !viewModel.items.isEmpty {
+                    ZStack(alignment: .top) {
+                        // MAIN CARD STACK - contains all cards and transitions
+                        mainCardStack(screenHeight: geometry.size.height, screenWidth: geometry.size.width)
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 10)
+                            .onChanged { value in
+                                handleDragChanged(value: value, screenWidth: geometry.size.width, screenHeight: geometry.size.height)
+                            }
+                            .onEnded { value in
+                                handleDragEnded(value: value, screenWidth: geometry.size.width, screenHeight: geometry.size.height)
+                            }
+                    )
+                    .onChange(of: currentIndex) { oldValue, newValue in
+                        // Pre-load adjacent card images
+                        Task {
+                            await preloadAdjacentImages()
+                        }
                     }
                 }
-                .gesture(
-                    DragGesture(minimumDistance: 10)
-                        .onChanged { value in
-                            handleDragChanged(value: value, screenWidth: geometry.size.width, screenHeight: geometry.size.height)
-                        }
-                        .onEnded { value in
-                            handleDragEnded(value: value, screenWidth: geometry.size.width, screenHeight: geometry.size.height)
-                        }
-                )
+
+                // Loading state
+                if viewModel.isLoading && viewModel.items.isEmpty {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .tint(.white)
+                        Text("Loading your stash...")
+                            .font(.system(size: 17))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+
+                // Empty state
+                if !viewModel.isLoading && viewModel.items.isEmpty {
+                    VStack(spacing: 16) {
+                        Text("🎴")
+                            .font(.system(size: 64))
+                        Text("Your deck is empty")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text("Tap + below to add your first item")
+                            .font(.system(size: 17))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+
+                // CONTROLS - Always show in deck mode
+                if displayMode == .deck {
+                    floatingControls
+                        .opacity(showControls ? (1.0 - transitionProgress) : 0)
+                        .zIndex(200)
+                }
             }
         }
         .ignoresSafeArea()
+        .task {
+            await viewModel.loadFeed()
+            // Pre-load initial images
+            await preloadAdjacentImages()
+        }
+        .sheet(isPresented: $showingAddItem) {
+            AddItemSheet()
+        }
+        .sheet(isPresented: $showingChat) {
+            ChatView()
+        }
+        .sheet(isPresented: $showingProfile) {
+            Text("Profile Sheet")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+        }
     }
 
     // MARK: - Main Card Stack
@@ -101,7 +160,7 @@ struct HomeView: View {
             if displayMode == .detail {
                 ZStack {
                     // Base layer: current item background
-                    testBackground(for: currentIndex)
+                    itemBackground(for: currentIndex)
                         .opacity(1.0 - abs(backgroundMorphProgress))
                         .ignoresSafeArea()
 
@@ -109,12 +168,12 @@ struct HomeView: View {
                     Group {
                         if backgroundMorphProgress < 0, currentIndex > 0 {
                             // Swiping right → show previous background
-                            testBackground(for: currentIndex - 1)
+                            itemBackground(for: currentIndex - 1)
                                 .opacity(abs(backgroundMorphProgress))
                                 .ignoresSafeArea()
                         } else if backgroundMorphProgress > 0 {
                             // Swiping left → show next background
-                            testBackground(for: currentIndex + 1)
+                            itemBackground(for: currentIndex + 1)
                                 .opacity(abs(backgroundMorphProgress))
                                 .ignoresSafeArea()
                         }
@@ -174,10 +233,10 @@ struct HomeView: View {
 
             // MAIN CARD - Single card that morphs between modes
             MorphingCard(
-                emoji: mockEmoji(for: currentIndex),
-                title: mockTitle(for: currentIndex),
-                source: mockSource(for: currentIndex),
-                background: testBackground(for: currentIndex)
+                emoji: emoji(for: currentIndex),
+                title: title(for: currentIndex),
+                source: source(for: currentIndex),
+                background: itemBackground(for: currentIndex)
             )
             .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
             .clipped()
@@ -191,6 +250,7 @@ struct HomeView: View {
                     expandToDetail()
                 }
             }
+            .id("card-\(currentIndex)")  // Force new view instance when index changes
             .zIndex(100)
         }
     }
@@ -199,10 +259,10 @@ struct HomeView: View {
     @ViewBuilder
     private func detailCard(for index: Int, screenHeight: CGFloat) -> some View {
         MorphingCard(
-            emoji: mockEmoji(for: index),
-            title: mockTitle(for: index),
-            source: mockSource(for: index),
-            background: testBackground(for: index)
+            emoji: emoji(for: index),
+            title: title(for: index),
+            source: source(for: index),
+            background: itemBackground(for: index)
         )
         .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
         .clipped()
@@ -228,9 +288,9 @@ struct HomeView: View {
     @ViewBuilder
     private func detailContent() -> some View {
         DetailScrollContent(
-            emoji: mockEmoji(for: currentIndex),
-            title: mockTitle(for: currentIndex),
-            source: mockSource(for: currentIndex),
+            emoji: emoji(for: currentIndex),
+            title: title(for: currentIndex),
+            source: source(for: currentIndex),
             transitionProgress: $transitionProgress,
             isDragging: $isDragging,
             scrollToTopTrigger: scrollToTopTrigger,
@@ -243,7 +303,7 @@ struct HomeView: View {
             onHorizontalDragEnded: { offset, isLeft in
                 handleDetailHorizontalDragEnded(offset: offset, isLeft: isLeft)
             },
-            canNavigateNext: true, // In real app: check if not at end
+            canNavigateNext: currentIndex < viewModel.items.count - 1,
             canNavigatePrevious: currentIndex > 0
         )
     }
@@ -252,20 +312,20 @@ struct HomeView: View {
 
     private func nextCard() -> some View {
         MorphingCard(
-            emoji: mockEmoji(for: currentIndex + 1),
-            title: mockTitle(for: currentIndex + 1),
-            source: mockSource(for: currentIndex + 1),
-            background: testBackground(for: currentIndex + 1)
+            emoji: emoji(for: currentIndex + 1),
+            title: title(for: currentIndex + 1),
+            source: source(for: currentIndex + 1),
+            background: itemBackground(for: currentIndex + 1)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func previousCard(screenWidth: CGFloat) -> some View {
         MorphingCard(
-            emoji: mockEmoji(for: currentIndex - 1),
-            title: mockTitle(for: currentIndex - 1),
-            source: mockSource(for: currentIndex - 1),
-            background: testBackground(for: currentIndex - 1)
+            emoji: emoji(for: currentIndex - 1),
+            title: title(for: currentIndex - 1),
+            source: source(for: currentIndex - 1),
+            background: itemBackground(for: currentIndex - 1)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scaleEffect(previousCardScale)
@@ -289,6 +349,75 @@ struct HomeView: View {
         }
     }
 
+    @ViewBuilder
+    private func itemBackground(for index: Int) -> some View {
+        if let item = viewModel.items[safe: index] {
+            let colors = backgroundColors(for: item.type)
+
+            // Show image if available, otherwise gradient
+            if let iconUrlString = item.metadata.iconUrl,
+               let iconUrl = URL(string: iconUrlString) {
+                // GeometryReader ensures we know the exact size available
+                GeometryReader { geometry in
+                    CachedAsyncImage(url: iconUrl) { image in
+                        ZStack {
+                            Color.black
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .clipped()
+                            LinearGradient(
+                                colors: [.black.opacity(0.3), .black.opacity(0.8)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
+                    } placeholder: {
+                        ZStack {
+                            Color.black
+                            LinearGradient(
+                                colors: [colors.primary, .black],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
+                    }
+                }
+            } else {
+                ZStack {
+                    Color.black
+                    LinearGradient(
+                        colors: [colors.primary, .black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+            }
+        } else {
+            testBackground(for: index)
+        }
+    }
+
+    private func backgroundColors(for type: EntityType) -> (primary: Color, secondary: Color) {
+        switch type {
+        case .article:
+            return (Color(red: 0.2, green: 0.4, blue: 0.8), .black)  // Blue
+        case .song:
+            return (Color(red: 0.9, green: 0.5, blue: 0.1), .black)  // Orange
+        case .recipe:
+            return (Color(red: 0.2, green: 0.7, blue: 0.3), .black)  // Green
+        case .event:
+            return (Color(red: 0.6, green: 0.2, blue: 0.8), .black)  // Purple
+        case .tweet, .instagramPost, .threadsPost:
+            return (Color(red: 0.8, green: 0.2, blue: 0.4), .black)  // Pink
+        case .youtubeVideo, .youtubeShort, .tiktok:
+            return (Color(red: 0.8, green: 0.2, blue: 0.2), .black)  // Red
+        default:
+            return (Color(red: 0.4, green: 0.4, blue: 0.4), .black)  // Gray
+        }
+    }
+
     // MARK: - Controls
 
     private var floatingControls: some View {
@@ -296,7 +425,10 @@ struct HomeView: View {
             // Top: Profile button
             HStack {
                 Spacer()
-                Button {} label: {
+                Button {
+                    Haptics.light()
+                    showingProfile = true
+                } label: {
                     Image(systemName: "person.circle.fill")
                         .font(.system(size: 32))
                         .foregroundStyle(.white)
@@ -311,7 +443,10 @@ struct HomeView: View {
             // Bottom: Add button (left) and AI orb (right)
             HStack(alignment: .bottom) {
                 // Add button
-                Button {} label: {
+                Button {
+                    Haptics.light()
+                    showingAddItem = true
+                } label: {
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 56))
                         .foregroundStyle(.white)
@@ -321,7 +456,10 @@ struct HomeView: View {
                 Spacer()
 
                 // Synapse Lens (AI orb)
-                Button {} label: {
+                Button {
+                    Haptics.light()
+                    showingChat = true
+                } label: {
                     SynapseLensView(size: 56, state: .idle)
                 }
             }
@@ -499,12 +637,13 @@ struct HomeView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
             guard isHorizontalTransitioning else { return }
-            // Reset transforms and update index atomically with no animation
+
+            // Reset everything atomically - .id() ensures clean new card
             withAnimation(.none) {
-                currentIndex += 1
                 currentCardOffset = 0
                 currentCardRotation = 0
                 currentCardScale = 1.0
+                currentIndex += 1
                 isHorizontalTransitioning = false
             }
         }
@@ -631,18 +770,34 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Mocks
+    // MARK: - Data Accessors
 
-    private func mockEmoji(for index: Int) -> String {
-        ["📰", "🎵", "🍝", "🎬", "✈️"][index % 5]
+    private func emoji(for index: Int) -> String {
+        viewModel.items[safe: index]?.primaryEmoji ?? "📄"
     }
 
-    private func mockTitle(for index: Int) -> String {
-        ["How AI is Changing Everything", "Best Songs of the Year", "Perfect Pasta Carbonara", "Must-Watch Documentary", "Travel Guide to Iceland"][index % 5]
+    private func title(for index: Int) -> String {
+        viewModel.items[safe: index]?.title ?? "Untitled"
     }
 
-    private func mockSource(for index: Int) -> String {
-        ["The New York Times", "Spotify", "Bon Appétit", "Netflix", "Lonely Planet"][index % 5]
+    private func source(for index: Int) -> String {
+        viewModel.items[safe: index]?.sourceLabel ?? "STASH"
+    }
+
+    // MARK: - Image Pre-loading
+
+    private func preloadAdjacentImages() async {
+        // Pre-load previous, current, and next images
+        let indicesToPreload = [currentIndex - 1, currentIndex, currentIndex + 1]
+
+        for index in indicesToPreload {
+            guard let item = viewModel.items[safe: index],
+                  let iconUrlString = item.metadata.iconUrl else {
+                continue
+            }
+
+            await ImageCache.shared.preload(iconUrlString)
+        }
     }
 }
 

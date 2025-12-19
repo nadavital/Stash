@@ -43,7 +43,7 @@ struct LensDemoSheet: View {
                                             }
                                         }
                                         .padding(8)
-                                        .background(selectedPalette == palette ? StashTheme.Color.accent.opacity(0.15) : Color(.systemGray6))
+                                        .background(selectedPalette == palette ? StashTheme.Color.accent.opacity(0.15) : Color.gray.opacity(0.08))
                                         .clipShape(RoundedRectangle(cornerRadius: 10))
                                         .overlay(
                                             RoundedRectangle(cornerRadius: 10)
@@ -242,7 +242,7 @@ struct LensDemoSheet: View {
                 .padding(20)
                 .padding(.bottom, 40)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(.background.secondary)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {

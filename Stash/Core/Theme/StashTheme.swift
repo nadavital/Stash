@@ -1,49 +1,12 @@
 import SwiftUI
 
+/// Minimal theme for brand colors and animation constants
+/// All other styling uses native SwiftUI (`.primary`, `.secondary`, etc.)
 struct StashTheme {
     struct Color {
-        // Backgrounds - adaptive for dark/light mode
-        static var bg: SwiftUI.Color {
-            SwiftUI.Color("StashBackground", bundle: nil)
-        }
-        static var surface: SwiftUI.Color {
-            SwiftUI.Color("StashSurface", bundle: nil)
-        }
-        static var surfaceSoft: SwiftUI.Color {
-            SwiftUI.Color("StashSurfaceSoft", bundle: nil)
-        }
-        static var surfaceElevated: SwiftUI.Color {
-            SwiftUI.Color("StashSurfaceElevated", bundle: nil)
-        }
-
-        // Borders & dividers - adaptive
-        static var borderSubtle: SwiftUI.Color {
-            SwiftUI.Color("StashBorderSubtle", bundle: nil)
-        }
-        static var borderStrong: SwiftUI.Color {
-            SwiftUI.Color("StashBorderStrong", bundle: nil)
-        }
-
-        // Text - adaptive
-        static var textPrimary: SwiftUI.Color {
-            SwiftUI.Color("StashTextPrimary", bundle: nil)
-        }
-        static var textSecondary: SwiftUI.Color {
-            SwiftUI.Color("StashTextSecondary", bundle: nil)
-        }
-        static var textMuted: SwiftUI.Color {
-            SwiftUI.Color("StashTextMuted", bundle: nil)
-        }
-
         // Brand accent (Stash actions) - uses AccentColor from assets
         static var accent: SwiftUI.Color {
             SwiftUI.Color("AccentColor", bundle: nil)
-        }
-        static var accentSoft: SwiftUI.Color {
-            SwiftUI.Color("AccentColor", bundle: nil).opacity(0.14)
-        }
-        static var accentStrong: SwiftUI.Color {
-            SwiftUI.Color("AccentColor", bundle: nil).opacity(0.8)
         }
 
         // AI identity (cosmic violet/blue) - matches Synapse Lens
@@ -55,30 +18,6 @@ struct StashTheme {
         static let success = SwiftUI.Color(hex: "#22C55E")
         static let warning = SwiftUI.Color(hex: "#FACC15")
         static let danger = SwiftUI.Color(hex: "#F97373")
-    }
-
-    struct Radius {
-        static let card: CGFloat = 16
-        static let sheet: CGFloat = 24
-        static let button: CGFloat = 999  // Fully rounded
-        static let pill: CGFloat = 999
-        static let tile: CGFloat = 12
-    }
-
-    struct Shadow {
-        // Adaptive shadows - darker in dark mode, lighter in light mode
-        static var soft: (color: SwiftUI.Color, radius: CGFloat, x: CGFloat, y: CGFloat) {
-            (SwiftUI.Color.black.opacity(0.15), 12, 0, 4)
-        }
-        static var subtle: (color: SwiftUI.Color, radius: CGFloat, x: CGFloat, y: CGFloat) {
-            (SwiftUI.Color.black.opacity(0.08), 2, 0, 1)
-        }
-    }
-
-    struct Motion {
-        static let fast: Double = 0.15      // 150ms
-        static let medium: Double = 0.22    // 220ms
-        static let slow: Double = 0.32      // 320ms
     }
 
     struct Gesture {
@@ -102,5 +41,34 @@ struct StashTheme {
 
         // Detail transition delay - for Task.sleep after animations
         static let detailTransitionDelay: Double = 0.25
+    }
+}
+
+// MARK: - Color+Hex Helper
+
+extension SwiftUI.Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue:  Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }

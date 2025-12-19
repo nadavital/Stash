@@ -39,8 +39,8 @@ struct ChatView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("Chat")
-                        .font(Typography.headline)
-                        .foregroundStyle(StashTheme.Color.textPrimary)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                 }
 
                 // Add friend button
@@ -63,30 +63,27 @@ struct ChatView: View {
                     .fontWeight(.medium)
                 }
             }
-            .sheet(isPresented: $showingAddFriend) {
-                AddFriendSheet()
-            }
+            // TODO: Recreate AddFriendSheet to match new design language
+            // .sheet(isPresented: $showingAddFriend) {
+            //     AddFriendSheet()
+            // }
         }
     }
 
     // MARK: - Background
 
     private var backgroundGradient: some View {
-        ZStack {
-            StashTheme.Color.bg
-
-            // Subtle glow behind where orb appears
-            RadialGradient(
-                colors: [
-                    StashTheme.Color.accent.opacity(0.06),
-                    StashTheme.Color.accent.opacity(0.02),
-                    .clear
-                ],
-                center: .init(x: 0.5, y: 0.25),
-                startRadius: 50,
-                endRadius: 300
-            )
-        }
+        // Subtle glow behind where orb appears
+        RadialGradient(
+            colors: [
+                StashTheme.Color.accent.opacity(0.06),
+                StashTheme.Color.accent.opacity(0.02),
+                .clear
+            ],
+            center: .init(x: 0.5, y: 0.25),
+            startRadius: 50,
+            endRadius: 300
+        )
     }
 
     // MARK: - Empty State (Synapse Lens Front & Center)
@@ -96,7 +93,7 @@ struct ChatView: View {
 
     private var emptyStateView: some View {
         ScrollView {
-            VStack(spacing: Spacing.xxl) {
+            VStack(spacing: 32) {
                 Spacer(minLength: 60)
 
                 // The Synapse Lens - large and prominent
@@ -113,18 +110,18 @@ struct ChatView: View {
                     }
 
                 // Welcome text
-                VStack(spacing: Spacing.sm) {
+                VStack(spacing: 8) {
                     Text("What can I help you find?")
                         .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(StashTheme.Color.textPrimary)
+                        .foregroundStyle(.primary)
 
                     Text("Search your stash or ask me anything")
-                        .font(Typography.body)
-                        .foregroundStyle(StashTheme.Color.textSecondary)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
                 }
 
                 // Quick suggestions as pills
-                VStack(spacing: Spacing.lg) {
+                VStack(spacing: 16) {
                     suggestionPills(
                         suggestions: [
                             "What recipes did I save?",
@@ -141,7 +138,7 @@ struct ChatView: View {
                         ]
                     )
                 }
-                .padding(.top, Spacing.lg)
+                .padding(.top, 16)
 
                 Spacer(minLength: 120)
             }
@@ -151,7 +148,7 @@ struct ChatView: View {
 
     private func suggestionPills(suggestions: [String]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Spacing.sm) {
+            HStack(spacing: 8) {
                 ForEach(suggestions, id: \.self) { suggestion in
                     Button {
                         Haptics.light()
@@ -159,15 +156,15 @@ struct ChatView: View {
                         viewModel.sendMessage()
                     } label: {
                         Text(suggestion)
-                            .font(Typography.body)
-                            .foregroundStyle(StashTheme.Color.textPrimary)
-                            .padding(.horizontal, Spacing.md)
-                            .padding(.vertical, Spacing.sm)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
                             .background(.ultraThinMaterial)
                             .clipShape(Capsule())
                             .overlay(
                                 Capsule()
-                                    .stroke(StashTheme.Color.borderSubtle, lineWidth: 1)
+                                    .stroke(.quaternary, lineWidth: 1)
                             )
                     }
                     .buttonStyle(.plain)
@@ -182,10 +179,10 @@ struct ChatView: View {
     private var conversationView: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: Spacing.md) {
+                LazyVStack(spacing: 12) {
                     // Small lens at top of conversation
                     AdaptiveSynapseLens(size: 48, state: lensState)
-                        .padding(.vertical, Spacing.md)
+                        .padding(.vertical, 12)
 
                     ForEach(viewModel.messages) { message in
                         MessageBubble(message: message)
@@ -210,7 +207,7 @@ struct ChatView: View {
 
     private var searchResultsView: some View {
         ScrollView {
-            LazyVStack(spacing: Spacing.md) {
+            LazyVStack(spacing: 12) {
                 ForEach(viewModel.searchResults) { item in
                     SearchResultCard(item: item)
                 }
@@ -226,14 +223,14 @@ struct ChatView: View {
             Divider()
                 .opacity(0.5)
 
-            HStack(spacing: Spacing.md) {
+            HStack(spacing: 12) {
                 // Text input with glass effect
-                HStack(spacing: Spacing.sm) {
+                HStack(spacing: 8) {
                     // Stash glyph indicator
-                    StashGlyph(size: 22, color: StashTheme.Color.textMuted)
+                    StashGlyph(size: 22, color: .secondary)
 
                     TextField("Ask Stash anything...", text: $viewModel.searchText, axis: .vertical)
-                        .font(Typography.body)
+                        .font(.body)
                         .focused($isSearchFocused)
                         .lineLimit(1...4)
                         .submitLabel(.send)
@@ -241,13 +238,13 @@ struct ChatView: View {
                             viewModel.sendMessage()
                         }
                 }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.sm)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(StashTheme.Color.borderSubtle, lineWidth: 1)
+                        .stroke(.quaternary, lineWidth: 1)
                 )
 
                 // Send button
@@ -260,7 +257,7 @@ struct ChatView: View {
                         .frame(width: 40, height: 40)
                         .background(
                             viewModel.searchText.isEmpty
-                                ? StashTheme.Color.textMuted
+                                ? Color.gray.opacity(0.5)
                                 : StashTheme.Color.accent
                         )
                         .clipShape(Circle())
@@ -269,7 +266,7 @@ struct ChatView: View {
                 .animation(.easeInOut(duration: 0.15), value: viewModel.searchText.isEmpty)
             }
             .padding()
-            .background(StashTheme.Color.bg.opacity(0.8))
+            .background(.background.opacity(0.8))
         }
     }
 }

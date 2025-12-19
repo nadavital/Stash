@@ -61,7 +61,7 @@ class AddItemViewModel {
 
         do {
             log("📤 Calling API to create item...")
-            let response = try await apiClient.createItem(url: urlText, source: .self)
+            let response = try await apiClient.createItem(url: urlText)
             let duration = Date().timeIntervalSince(loadingStartTime)
 
             log("✅ Item created successfully - ID: \(response.itemId), Status: \(response.status), Duration: \(String(format: "%.2f", duration))s")
@@ -128,8 +128,7 @@ class AddItemViewModel {
         do {
             log("📤 Calling API to create item from image...")
             let response = try await apiClient.createItemFromImage(
-                imageData: compressedData,
-                source: .self
+                imageData: compressedData
             )
             let duration = Date().timeIntervalSince(loadingStartTime)
 

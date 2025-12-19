@@ -9,36 +9,36 @@ struct SearchResultCard: View {
         Button {
             // Placeholder
         } label: {
-            HStack(spacing: Spacing.md) {
+            HStack(spacing: 12) {
                 // Emoji icon
                 Text(item.primaryEmoji)
                     .font(.system(size: 32))
                     .frame(width: 50, height: 50)
-                    .background(StashTheme.Color.surfaceSoft)
+                    .background(Color.gray.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title)
-                        .font(Typography.body.weight(.semibold))
-                        .foregroundStyle(StashTheme.Color.textPrimary)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text(item.summary)
-                        .font(Typography.caption)
-                        .foregroundStyle(StashTheme.Color.textSecondary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .lineLimit(2)
 
-                    HStack(spacing: Spacing.xs) {
+                    HStack(spacing: 4) {
                         Text(item.type.displayName)
-                            .font(Typography.caption2)
-                            .foregroundStyle(StashTheme.Color.textMuted)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
 
                         if let source = item.metadata.sourceName {
                             Text("•")
-                                .foregroundStyle(StashTheme.Color.textMuted)
+                                .foregroundStyle(.tertiary)
                             Text(source)
-                                .font(Typography.caption2)
-                                .foregroundStyle(StashTheme.Color.textMuted)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
                         }
                     }
                 }
@@ -47,10 +47,10 @@ struct SearchResultCard: View {
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(StashTheme.Color.textMuted)
+                    .foregroundStyle(.tertiary)
             }
             .padding()
-            .background(StashTheme.Color.surface)
+            .background(Color.gray.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)

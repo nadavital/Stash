@@ -6,7 +6,7 @@ struct MessageBubble: View {
     let message: ChatMessage
 
     var body: some View {
-        HStack(alignment: .top, spacing: Spacing.sm) {
+        HStack(alignment: .top, spacing: 8) {
             if message.isUser {
                 Spacer(minLength: 60)
             } else {
@@ -15,23 +15,23 @@ struct MessageBubble: View {
                     .padding(.top, 4)
             }
 
-            VStack(alignment: message.isUser ? .trailing : .leading, spacing: Spacing.sm) {
+            VStack(alignment: message.isUser ? .trailing : .leading, spacing: 8) {
                 Text(message.text)
-                    .font(Typography.body)
-                    .foregroundStyle(message.isUser ? .white : StashTheme.Color.textPrimary)
-                    .padding(.horizontal, Spacing.md)
-                    .padding(.vertical, Spacing.sm)
+                    .font(.body)
+                    .foregroundStyle(message.isUser ? .white : .primary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                     .background(
                         message.isUser
                             ? StashTheme.Color.accent
-                            : StashTheme.Color.surface
+                            : Color.gray.opacity(0.15)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 
                 // Show items if present
                 if !message.referencedItems.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: Spacing.sm) {
+                        HStack(spacing: 8) {
                             ForEach(message.referencedItems) { item in
                                 CompactResultCard(item: item)
                             }
@@ -51,7 +51,7 @@ struct MessageBubble: View {
 
 struct LoadingBubble: View {
     var body: some View {
-        HStack(alignment: .top, spacing: Spacing.sm) {
+        HStack(alignment: .top, spacing: 8) {
             AdaptiveSynapseLens(size: 32, state: .thinking)
                 .padding(.top, 4)
 
@@ -70,22 +70,22 @@ struct CompactResultCard: View {
         Button {
             // Placeholder
         } label: {
-            VStack(alignment: .leading, spacing: Spacing.xs) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.primaryEmoji)
                     .font(.system(size: 24))
 
                 Text(item.title)
-                    .font(Typography.caption.weight(.medium))
-                    .foregroundStyle(StashTheme.Color.textPrimary)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
 
                 Text(item.type.displayName)
-                    .font(Typography.caption2)
-                    .foregroundStyle(StashTheme.Color.textMuted)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
             .frame(width: 130, alignment: .leading)
             .padding()
-            .background(StashTheme.Color.surfaceSoft)
+            .background(Color.gray.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)

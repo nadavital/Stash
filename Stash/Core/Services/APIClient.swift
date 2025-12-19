@@ -128,7 +128,7 @@ class APIClient: ObservableObject {
     // MARK: - Items
 
     /// Create a new stash item from a URL
-    func createItem(url: String, source: ItemSource = .self, note: String? = nil) async throws -> CreateItemResponse {
+    func createItem(url: String, note: String? = nil) async throws -> CreateItemResponse {
         if useMockData {
             // Simulate network delay
             try await Task.sleep(nanoseconds: 800_000_000) // 0.8 seconds
@@ -144,17 +144,15 @@ class APIClient: ObservableObject {
         do {
             let startTime = Date()
             let sanitizedURL = url.count > 100 ? "\(url.prefix(100))..." : url
-            print("🔵 [APIClient] Calling create-item with URL: \(sanitizedURL), source: \(source.rawValue)")
+            print("🔵 [APIClient] Calling create-item with URL: \(sanitizedURL)")
 
             struct CreateItemPayload: Encodable {
                 let url: String
-                let source: String
                 let note: String?
             }
 
             let payload = CreateItemPayload(
                 url: url,
-                source: source.rawValue,
                 note: note
             )
 
@@ -185,7 +183,7 @@ class APIClient: ObservableObject {
     }
 
     /// Create a new stash item from an image (screenshot analysis)
-    func createItemFromImage(imageData: Data, source: ItemSource = .self, note: String? = nil) async throws -> CreateItemResponse {
+    func createItemFromImage(imageData: Data, note: String? = nil) async throws -> CreateItemResponse {
         if useMockData {
             // Simulate network delay
             try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds (image analysis takes longer)
@@ -201,11 +199,10 @@ class APIClient: ObservableObject {
         do {
             let startTime = Date()
             let imageSizeMB = Double(imageData.count) / 1_048_576
-            print("📸 [APIClient] Calling create-item with image - Size: \(String(format: "%.2f", imageSizeMB))MB, source: \(source.rawValue)")
+            print("📸 [APIClient] Calling create-item with image - Size: \(String(format: "%.2f", imageSizeMB))MB")
 
             struct CreateItemFromImagePayload: Encodable {
                 let imageBase64: String
-                let source: String
                 let note: String?
             }
 
@@ -214,7 +211,6 @@ class APIClient: ObservableObject {
 
             let payload = CreateItemFromImagePayload(
                 imageBase64: base64,
-                source: source.rawValue,
                 note: note
             )
 

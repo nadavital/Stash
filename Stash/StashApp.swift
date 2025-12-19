@@ -17,12 +17,8 @@ struct StashApp: App {
             Group {
                 if authManager.isCheckingAuth {
                     // Show loading while checking auth state
-                    ZStack {
-                        StashTheme.Color.bg
-                            .ignoresSafeArea()
-                        ProgressView()
-                            .tint(StashTheme.Color.accent)
-                    }
+                    ProgressView()
+                        .tint(StashTheme.Color.accent)
                 } else if authManager.isAuthenticated {
                     if authManager.needsHandleSetup {
                         // User is authenticated but needs to set up handle
@@ -72,7 +68,7 @@ struct StashApp: App {
                 // The "friend" source just indicates user wants to share it
                 // They can use the "Share with Friend" button in the detail view
                 do {
-                    let response = try await apiClient.createItem(url: urlString, source: .self)
+                    let response = try await apiClient.createItem(url: urlString)
                     print("✅ App: Successfully saved item \(response.itemId)")
                     successCount += 1
 

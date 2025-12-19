@@ -107,7 +107,7 @@ struct AddItemOptionsView: View {
     let onSelectImage: () -> Void
 
     var body: some View {
-        VStack(spacing: Spacing.lg) {
+        VStack(spacing: 16) {
             OptionCard(
                 icon: "link",
                 title: "Paste URL",
@@ -136,7 +136,7 @@ struct OptionCard: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Spacing.md) {
+            HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.system(size: 24))
                     .foregroundStyle(StashTheme.Color.accent)
@@ -144,23 +144,23 @@ struct OptionCard: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(Typography.body.weight(.medium))
-                        .foregroundStyle(StashTheme.Color.textPrimary)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
 
                     Text(subtitle)
-                        .font(Typography.caption)
-                        .foregroundStyle(StashTheme.Color.textMuted)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
 
                 Spacer()
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(StashTheme.Color.textMuted)
+                    .foregroundStyle(.tertiary)
             }
             .padding()
-            .background(StashTheme.Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: StashTheme.Radius.tile))
+            .background(Color.gray.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
     }
@@ -174,13 +174,13 @@ struct URLInputView: View {
     let onSave: () -> Void
 
     var body: some View {
-        VStack(spacing: Spacing.xl) {
-            VStack(alignment: .leading, spacing: Spacing.sm) {
+        VStack(spacing: 24) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Enter or paste a URL")
-                    .font(Typography.caption)
-                    .foregroundStyle(StashTheme.Color.textSecondary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                HStack(spacing: Spacing.sm) {
+                HStack(spacing: 8) {
                     TextField("https://...", text: $viewModel.urlText)
                         .textFieldStyle(.roundedBorder)
                         .textInputAutocapitalization(.never)
@@ -202,7 +202,7 @@ struct URLInputView: View {
 
             if let error = viewModel.errorMessage {
                 Text(error)
-                    .font(Typography.caption)
+                    .font(.caption)
                     .foregroundStyle(StashTheme.Color.danger)
             }
 
@@ -215,10 +215,10 @@ struct URLInputView: View {
                         .tint(.white)
                 } else {
                     Text("Save")
-                        .font(Typography.body.weight(.semibold))
+                        .font(.body.weight(.semibold))
                 }
             }
-            .glassEffect(.regular.tint(StashTheme.Color.accent).interactive(), in: .rect(cornerRadius: StashTheme.Radius.button))
+            .glassEffect(.regular.tint(StashTheme.Color.accent).interactive(), in: .rect(cornerRadius: 999))
             .frame(height: 52)
             .frame(maxWidth: .infinity)
             .disabled(viewModel.urlText.isEmpty || viewModel.isLoading)
@@ -248,23 +248,23 @@ struct LoadingOverlay: View {
 
     var body: some View {
         ZStack {
-            StashTheme.Color.bg.opacity(0.95)
+            Color.black.opacity(0.3)
                 .ignoresSafeArea()
 
-            VStack(spacing: Spacing.lg) {
+            VStack(spacing: 16) {
                 ProgressView()
                     .progressViewStyle(.circular)
                     .tint(StashTheme.Color.accent)
                     .scaleEffect(1.2)
 
                 Text(currentMessage)
-                    .font(Typography.body)
-                    .foregroundStyle(StashTheme.Color.textSecondary)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
             }
-            .padding(Spacing.xl)
-            .background(StashTheme.Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: StashTheme.Radius.card))
-            .shadow(color: StashTheme.Shadow.soft.color, radius: 8)
+            .padding(24)
+            .background(Color.gray.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.1), radius: 8)
             .padding()
         }
         .transition(.opacity)
@@ -297,30 +297,30 @@ struct SuccessOverlay: View {
 
     var body: some View {
         ZStack {
-            StashTheme.Color.bg.opacity(0.95)
+            Color.black.opacity(0.3)
                 .ignoresSafeArea()
 
-            VStack(spacing: Spacing.md) {
+            VStack(spacing: 12) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(StashTheme.Color.success)
 
-                VStack(spacing: Spacing.xs) {
+                VStack(spacing: 4) {
                     Text("Saved!")
-                        .font(Typography.headline)
-                        .foregroundStyle(StashTheme.Color.textPrimary)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
 
                     Text(title)
-                        .font(Typography.body)
-                        .foregroundStyle(StashTheme.Color.textSecondary)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                 }
             }
-            .padding(Spacing.xl)
-            .background(StashTheme.Color.surface)
-            .clipShape(RoundedRectangle(cornerRadius: StashTheme.Radius.card))
-            .shadow(color: StashTheme.Shadow.soft.color, radius: 8)
+            .padding(24)
+            .background(Color.gray.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.1), radius: 8)
             .padding()
         }
         .transition(.scale.combined(with: .opacity))

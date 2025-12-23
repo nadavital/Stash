@@ -12,6 +12,7 @@ struct HomeView: View {
     @State private var currentIndex = 0
     @State private var displayMode: CardDisplayMode = .deck
     @State private var showControls = true
+    @Namespace private var glassNamespace
 
     // Gesture state
     @State private var dragTranslation: CGSize = .zero
@@ -236,8 +237,13 @@ struct HomeView: View {
                 emoji: emoji(for: currentIndex),
                 title: title(for: currentIndex),
                 source: source(for: currentIndex),
-                background: itemBackground(for: currentIndex)
+                summary: summary(for: currentIndex),
+                type: type(for: currentIndex),
+                sharedByUser: sharedByUser(for: currentIndex),
+                background: itemBackground(for: currentIndex),
+                onAction: cardAction(for: currentIndex)
             )
+            .animation(.none, value: currentIndex)  // Disable animations on card content
             .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
             .clipped()
             .ignoresSafeArea(.container, edges: .top)
@@ -252,6 +258,12 @@ struct HomeView: View {
             }
             .id("card-\(currentIndex)")  // Force new view instance when index changes
             .zIndex(100)
+
+            // FLOATING CARD OVERLAYS - Glass pill and action button (deck mode only)
+            if displayMode == .deck && transitionProgress == 0 {
+                floatingCardOverlays
+                    .zIndex(200)
+            }
         }
     }
 
@@ -262,7 +274,11 @@ struct HomeView: View {
             emoji: emoji(for: index),
             title: title(for: index),
             source: source(for: index),
-            background: itemBackground(for: index)
+            summary: summary(for: index),
+            type: type(for: index),
+            sharedByUser: sharedByUser(for: index),
+            background: itemBackground(for: index),
+            onAction: cardAction(for: index)
         )
         .frame(height: cardHeight(screenHeight: screenHeight), alignment: .top)
         .clipped()
@@ -287,25 +303,25 @@ struct HomeView: View {
 
     @ViewBuilder
     private func detailContent() -> some View {
-        DetailScrollContent(
-            emoji: emoji(for: currentIndex),
-            title: title(for: currentIndex),
-            source: source(for: currentIndex),
-            transitionProgress: $transitionProgress,
-            isDragging: $isDragging,
-            scrollToTopTrigger: scrollToTopTrigger,
-            onDismiss: {
-                collapseToCard()
-            },
-            onHorizontalDragChanged: { offset, isLeft in
-                handleDetailHorizontalDragChanged(offset: offset, isLeft: isLeft)
-            },
-            onHorizontalDragEnded: { offset, isLeft in
-                handleDetailHorizontalDragEnded(offset: offset, isLeft: isLeft)
-            },
-            canNavigateNext: currentIndex < viewModel.items.count - 1,
-            canNavigatePrevious: currentIndex > 0
-        )
+        if let item = viewModel.items[safe: currentIndex] {
+            DetailScrollContent(
+                item: item,
+                transitionProgress: $transitionProgress,
+                isDragging: $isDragging,
+                scrollToTopTrigger: scrollToTopTrigger,
+                onDismiss: {
+                    collapseToCard()
+                },
+                onHorizontalDragChanged: { offset, isLeft in
+                    handleDetailHorizontalDragChanged(offset: offset, isLeft: isLeft)
+                },
+                onHorizontalDragEnded: { offset, isLeft in
+                    handleDetailHorizontalDragEnded(offset: offset, isLeft: isLeft)
+                },
+                canNavigateNext: currentIndex < viewModel.items.count - 1,
+                canNavigatePrevious: currentIndex > 0
+            )
+        }
     }
 
     // MARK: - Card Views
@@ -315,7 +331,11 @@ struct HomeView: View {
             emoji: emoji(for: currentIndex + 1),
             title: title(for: currentIndex + 1),
             source: source(for: currentIndex + 1),
-            background: itemBackground(for: currentIndex + 1)
+            summary: summary(for: currentIndex + 1),
+            type: type(for: currentIndex + 1),
+            sharedByUser: sharedByUser(for: currentIndex + 1),
+            background: itemBackground(for: currentIndex + 1),
+            onAction: cardAction(for: currentIndex + 1)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -325,7 +345,11 @@ struct HomeView: View {
             emoji: emoji(for: currentIndex - 1),
             title: title(for: currentIndex - 1),
             source: source(for: currentIndex - 1),
-            background: itemBackground(for: currentIndex - 1)
+            summary: summary(for: currentIndex - 1),
+            type: type(for: currentIndex - 1),
+            sharedByUser: sharedByUser(for: currentIndex - 1),
+            background: itemBackground(for: currentIndex - 1),
+            onAction: cardAction(for: currentIndex - 1)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scaleEffect(previousCardScale)
@@ -440,8 +464,8 @@ struct HomeView: View {
 
             Spacer()
 
-            // Bottom: Add button (left) and AI orb (right)
-            HStack(alignment: .bottom) {
+            // Bottom: Add button (left), Action button (center), AI orb (right)
+            HStack(alignment: .bottom, spacing: 0) {
                 // Add button
                 Button {
                     Haptics.light()
@@ -452,6 +476,14 @@ struct HomeView: View {
                         .foregroundStyle(.white)
                         .background(Circle().fill(.black.opacity(0.3)).frame(width: 56, height: 56))
                 }
+
+                Spacer()
+
+                // Action button (center) - always visible
+                CardActionButton(
+                    type: type(for: currentIndex),
+                    action: cardAction(for: currentIndex) ?? { expandToDetail() }
+                )
 
                 Spacer()
 
@@ -638,14 +670,17 @@ struct HomeView: View {
             try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
             guard isHorizontalTransitioning else { return }
 
-            // Reset everything atomically - .id() ensures clean new card
-            withAnimation(.none) {
+            // Reset card position without animation
+            var transaction = Transaction(animation: .none)
+            withTransaction(transaction) {
                 currentCardOffset = 0
                 currentCardRotation = 0
                 currentCardScale = 1.0
-                currentIndex += 1
                 isHorizontalTransitioning = false
             }
+
+            // Update index - glass overlays will animate via .glassEffectTransition
+            currentIndex += 1
         }
     }
 
@@ -663,15 +698,19 @@ struct HomeView: View {
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
             guard isHorizontalTransitioning else { return }
-            // Reset state atomically with no animation
-            withAnimation(.none) {
-                currentIndex -= 1
+
+            // Reset card position without animation
+            var transaction = Transaction(animation: .none)
+            withTransaction(transaction) {
                 showPreviousCard = false
                 previousCardOffset = -screenWidth * 1.5
                 previousCardRotation = -25
                 previousCardScale = 0.7
                 isHorizontalTransitioning = false
             }
+
+            // Update index - glass overlays will animate via .glassEffectTransition
+            currentIndex -= 1
         }
     }
 
@@ -727,13 +766,14 @@ struct HomeView: View {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
                 guard isHorizontalTransitioning else { return }
-                currentIndex += 1
+
+                // Reset everything atomically - no animation
                 scrollToTopTrigger = UUID()
-                withAnimation(.none) {
-                    detailHorizontalDragOffset = 0
-                    backgroundMorphProgress = 0.0  // Reset
-                    isHorizontalTransitioning = false
-                }
+                detailHorizontalDragOffset = 0
+                backgroundMorphProgress = 0.0
+                currentIndex += 1
+                isHorizontalTransitioning = false
+
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
 
@@ -749,13 +789,14 @@ struct HomeView: View {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(StashTheme.Gesture.detailTransitionDelay))
                 guard isHorizontalTransitioning else { return }
-                currentIndex -= 1
+
+                // Reset everything atomically - no animation
                 scrollToTopTrigger = UUID()
-                withAnimation(.none) {
-                    detailHorizontalDragOffset = 0
-                    backgroundMorphProgress = 0.0  // Reset
-                    isHorizontalTransitioning = false
-                }
+                detailHorizontalDragOffset = 0
+                backgroundMorphProgress = 0.0
+                currentIndex -= 1
+                isHorizontalTransitioning = false
+
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             }
 
@@ -782,6 +823,63 @@ struct HomeView: View {
 
     private func source(for index: Int) -> String {
         viewModel.items[safe: index]?.sourceLabel ?? "STASH"
+    }
+
+    private func summary(for index: Int) -> String {
+        viewModel.items[safe: index]?.summary ?? ""
+    }
+
+    private func type(for index: Int) -> EntityType {
+        viewModel.items[safe: index]?.type ?? .generic
+    }
+
+    private func sharedByUser(for index: Int) -> ItemSummary.SharedByUser? {
+        viewModel.items[safe: index]?.sharedByUser
+    }
+
+    private func cardAction(for index: Int) -> (() -> Void)? {
+        guard let item = viewModel.items[safe: index] else { return nil }
+
+        switch item.type {
+        case .song:
+            // TODO: Play music preview
+            return {
+                print("🎵 Play preview for: \(item.title)")
+                // Future: Play previewUrl
+            }
+        case .youtubeVideo, .youtubeShort, .tiktok, .instagramReel:
+            // TODO: Play video inline or expand to detail
+            return {
+                print("▶️ Play video: \(item.title)")
+                expandToDetail()
+            }
+        default:
+            return nil  // No quick action for other types
+        }
+    }
+
+    // MARK: - Floating Card Overlays
+
+    private var floatingCardOverlays: some View {
+        GlassEffectContainer(spacing: 40.0) {
+            VStack(alignment: .leading, spacing: 0) {
+                // Glass pill at top-left
+                HStack {
+                    CardGlassPill(
+                        emoji: emoji(for: currentIndex),
+                        type: type(for: currentIndex),
+                        source: source(for: currentIndex),
+                        sharedByUser: sharedByUser(for: currentIndex)
+                    )
+                    .padding(.top, 60)
+                    .padding(.leading, 24)
+                    Spacer()
+                }
+
+                Spacer()
+            }
+            .allowsHitTesting(true)
+        }
     }
 
     // MARK: - Image Pre-loading

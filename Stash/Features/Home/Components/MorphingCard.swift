@@ -6,7 +6,11 @@ struct MorphingCard<Background: View>: View {
     let emoji: String
     let title: String
     let source: String
+    let summary: String
+    let type: EntityType
+    let sharedByUser: ItemSummary.SharedByUser?
     let background: Background
+    var onAction: (() -> Void)?  // Optional quick action (e.g., play music)
 
     var body: some View {
         GeometryReader { geometry in
@@ -62,27 +66,29 @@ struct MorphingCard<Background: View>: View {
     // MARK: - Layout Variants
 
     private var fullScreenLayout: some View {
-        ZStack(alignment: .topLeading) {
-            // Emoji top-left
-            Text(emoji)
-                .font(.system(size: 42))
-                .padding(.top, 60)
-                .padding(.horizontal, 24)
+        VStack(alignment: .leading, spacing: 8) {
+            Spacer()
+            Text(title)
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(3)
 
-            // Title + source bottom-left
-            VStack(alignment: .leading, spacing: 4) {
-                Spacer()
-                Text(title)
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(3)
-                Text(source.uppercased())
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.6))
+            // AI Summary (only for articles/generic)
+            if shouldShowSummary {
+                Text(summary)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(2)
+                    .lineSpacing(4)
             }
-            .padding(.bottom, 140)  // Increased from 100 to give more space above controls
-            .padding(.horizontal, 24)
         }
+        .padding(.bottom, 140)
+        .padding(.horizontal, 24)
+    }
+
+    // Only show summary for articles and generic content
+    private var shouldShowSummary: Bool {
+        type == .article || type == .generic
     }
 
     private var miniHeaderLayout: some View {

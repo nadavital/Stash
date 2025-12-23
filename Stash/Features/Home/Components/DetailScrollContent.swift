@@ -2,9 +2,7 @@ import SwiftUI
 
 /// Scrollable content for detail view with pull-to-dismiss and horizontal navigation
 struct DetailScrollContent: View {
-    let emoji: String
-    let title: String
-    let source: String
+    let item: ItemSummary
     @Binding var transitionProgress: CGFloat
     @Binding var isDragging: Bool
     let scrollToTopTrigger: UUID
@@ -38,6 +36,10 @@ struct DetailScrollContent: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
+                // Floating action buttons
+                FloatingActionButtons(item: item)
+                    .zIndex(1000)
+
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 0) {
@@ -49,27 +51,9 @@ struct DetailScrollContent: View {
                             // Spacer for header (safe area + content height + gap)
                             Color.clear.frame(height: geometry.safeAreaInsets.top + 60 + 48)
 
-                            VStack(alignment: .leading, spacing: 20) {
-                            Text("This content is now revealed underneath the morphing header.")
-                                .font(.system(size: 17))
-                                .foregroundStyle(.white.opacity(0.8))
-                                .lineSpacing(6)
-
-                            ForEach(0..<10) { index in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Section \(index + 1)")
-                                        .font(.system(size: 20, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                    Text("Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
-                                        .font(.system(size: 15))
-                                        .foregroundStyle(.white.opacity(0.7))
-                                }
-                                .padding()
-                                .background(.white.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                        }
-                        .padding(24)
+                            // Route to type-specific content view
+                            DetailContentRouter(item: item)
+                                .padding(24)
                         }
                     }
                     .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -186,23 +170,6 @@ struct DetailScrollContent: View {
                     .animation(.none, value: interactiveDragOpacity)
                     .animation(.none, value: interactiveDragScale)
                     .animation(.none, value: horizontalDragOffset)
-                }
-
-                // Dismiss button overlay
-                VStack {
-                    Spacer()
-                    Button {
-                        onDismiss()
-                    } label: {
-                        Text("Back to Deck")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                    }
-                    .padding(24)
                 }
             }
         }

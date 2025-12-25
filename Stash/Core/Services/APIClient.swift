@@ -499,7 +499,94 @@ class APIClient: ObservableObject {
             throw APIError.networkError(error)
         }
     }
-    
+
+    /// Fetch all items from the user's stash (for debug/management)
+    /// - Parameter limit: Maximum number of items to fetch (default: 200)
+    func fetchAllItems(limit: Int = 200) async throws -> [ItemSummary] {
+        print("🔵 Fetching all items from database (limit: \(limit))...")
+
+        struct DatabaseItem: Decodable {
+            let id: String
+            let source: String
+            let created_at: String
+            let entities: Entity?
+
+            struct Entity: Decodable {
+                let id: String
+                let type: String
+                let title: String?
+                let summary: String?
+                let primary_emoji: String?
+                let source_name: String?
+                let image_url: String?
+                let canonical_url: String?
+                let tags: [String]?
+                let suggested_prompts: [String]?
+                let raw_metadata: TypeMetadata?
+            }
+        }
+
+        do {
+            let response: [DatabaseItem] = try await supabase.database
+                .from("stash_items")
+                .select("""
+                    id,
+                    source,
+                    created_at,
+                    entities (
+                        id,
+                        type,
+                        title,
+                        summary,
+                        primary_emoji,
+                        source_name,
+                        image_url,
+                        canonical_url,
+                        tags,
+                        suggested_prompts,
+                        raw_metadata
+                    )
+                """)
+                .order("created_at", ascending: false)
+                .limit(limit)
+                .execute()
+                .value
+
+            let items = response.compactMap { item -> ItemSummary? in
+                guard let entity = item.entities else {
+                    print("⚠️ Item \(item.id) has no entity, skipping")
+                    return nil
+                }
+
+                return ItemSummary(
+                    itemId: item.id,
+                    entityId: entity.id,
+                    title: entity.title ?? "Untitled",
+                    type: EntityType(rawValue: entity.type) ?? .generic,
+                    primaryEmoji: entity.primary_emoji ?? "🔗",
+                    sourceLabel: item.source == "self" ? "FROM YOU" :
+                                 item.source.contains("friend") ? "FROM FRIEND" : "FOR YOU",
+                    summary: entity.summary ?? "No summary",
+                    createdAt: ISO8601DateFormatter().date(from: item.created_at) ?? Date(),
+                    canonicalUrl: entity.canonical_url,
+                    metadata: ItemSummary.Metadata(
+                        sourceName: entity.source_name,
+                        iconUrl: entity.image_url,
+                        tags: entity.tags ?? [],
+                        suggestedPrompts: entity.suggested_prompts,
+                        typeMetadata: entity.raw_metadata
+                    )
+                )
+            }
+
+            print("🟢 Fetched \(items.count) items from database")
+            return items
+        } catch {
+            print("🔴 Failed to fetch all items: \(error)")
+            throw APIError.networkError(error)
+        }
+    }
+
     // MARK: - Onboarding
     
     /// Parse user's interests during onboarding

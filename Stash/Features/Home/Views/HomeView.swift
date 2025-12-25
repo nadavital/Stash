@@ -68,8 +68,8 @@ struct HomeView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background
-                Color.black.ignoresSafeArea()
+                // Background - uses system background for adaptive light/dark
+                Color(.systemBackground).ignoresSafeArea()
 
                 // Show content only when items loaded
                 if !viewModel.items.isEmpty {
@@ -141,11 +141,10 @@ struct HomeView: View {
             ChatView()
         }
         .sheet(isPresented: $showingProfile) {
-            Text("Profile Sheet")
-                .font(.system(size: 24, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
+            DebugProfileView {
+                // Callback to refresh home feed when debug view refreshes
+                await viewModel.loadFeed()
+            }
         }
     }
 
@@ -588,7 +587,7 @@ struct HomeView: View {
 
         case .horizontal(let left):
             let threshold = screenWidth * 0.25
-            if left && value.translation.width < -threshold {
+            if left && value.translation.width < -threshold && currentIndex < viewModel.items.count - 1 {
                 navigateToNextCard(screenWidth: screenWidth)
             } else if !left && value.translation.width > threshold && currentIndex > 0 {
                 navigateToPreviousCard(screenWidth: screenWidth)
@@ -658,6 +657,7 @@ struct HomeView: View {
 
     private func navigateToNextCard(screenWidth: CGFloat) {
         guard !isHorizontalTransitioning else { return }
+        guard currentIndex < viewModel.items.count - 1 else { return }  // Bounds check
         isHorizontalTransitioning = true
 
         withAnimation(StashTheme.Gesture.completionSpring) {
@@ -754,7 +754,7 @@ struct HomeView: View {
         let screenWidth = UIScreen.main.bounds.width
         let threshold = screenWidth * StashTheme.Gesture.horizontalSwipeThreshold
 
-        if isLeft && abs(offset) > threshold {
+        if isLeft && abs(offset) > threshold && currentIndex < viewModel.items.count - 1 {
             // Commit: slide to next
             isHorizontalTransitioning = true
 

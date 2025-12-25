@@ -11,6 +11,7 @@ struct AddItemSheet: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showingSuccess = false
     @State private var successTitle: String?
+    @State private var isSaving = false  // Prevents duplicate API calls
 
     var body: some View {
         NavigationStack {
@@ -36,7 +37,7 @@ struct AddItemSheet: View {
                         handleImageSelection(newItem)
                     }
                 } else {
-                    URLInputView(viewModel: viewModel, onSave: handleSave)
+                    URLInputView(viewModel: viewModel, isSaving: $isSaving, onSave: handleSave)
                         .navigationTitle("Paste URL")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
@@ -63,8 +64,14 @@ struct AddItemSheet: View {
     }
 
     private func handleSave() {
+        // Guard against duplicate calls (from TextField .onSubmit + Save button)
+        guard !isSaving, !viewModel.isLoading else { return }
+        isSaving = true
+
         Task {
             let success = await viewModel.saveURL()
+            isSaving = false
+
             if success {
                 Haptics.success()
                 successTitle = viewModel.successTitle
@@ -170,6 +177,7 @@ struct OptionCard: View {
 
 struct URLInputView: View {
     @Bindable var viewModel: AddItemViewModel
+    @Binding var isSaving: Bool
     @FocusState private var isInputFocused: Bool
     let onSave: () -> Void
 
@@ -187,7 +195,11 @@ struct URLInputView: View {
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                         .focused($isInputFocused)
-                        .onSubmit(onSave)
+                        .onSubmit {
+                            // Guard to prevent duplicate saves when user presses Enter then taps Save
+                            guard !isSaving, !viewModel.isLoading else { return }
+                            onSave()
+                        }
 
                     Button {
                         viewModel.pasteFromClipboard()
@@ -248,7 +260,7 @@ struct LoadingOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.3)
+            Color(.systemBackground).opacity(0.3)
                 .ignoresSafeArea()
 
             VStack(spacing: 16) {
@@ -264,7 +276,7 @@ struct LoadingOverlay: View {
             .padding(24)
             .background(Color.gray.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.1), radius: 8)
+            .shadow(color: Color(.systemBackground).opacity(0.1), radius: 8)
             .padding()
         }
         .transition(.opacity)
@@ -297,7 +309,7 @@ struct SuccessOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.3)
+            Color(.systemBackground).opacity(0.3)
                 .ignoresSafeArea()
 
             VStack(spacing: 12) {
@@ -320,7 +332,7 @@ struct SuccessOverlay: View {
             .padding(24)
             .background(Color.gray.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(color: .black.opacity(0.1), radius: 8)
+            .shadow(color: Color(.systemBackground).opacity(0.1), radius: 8)
             .padding()
         }
         .transition(.scale.combined(with: .opacity))
@@ -335,7 +347,7 @@ struct SuccessOverlay: View {
 
 #Preview("URL Input") {
     NavigationStack {
-        URLInputView(viewModel: AddItemViewModel()) {
+        URLInputView(viewModel: AddItemViewModel(), isSaving: .constant(false)) {
             print("Save tapped")
         }
         .navigationTitle("Paste URL")

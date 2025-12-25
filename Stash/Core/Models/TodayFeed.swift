@@ -2,7 +2,7 @@ import Foundation
 
 /// Response from GET /feed/today endpoint
 struct TodayFeed: Codable, Equatable {
-    let aiSubtitle: String
+    let aiSubtitle: String?  // Optional - no longer generated
     var brainSnack: [ItemSummary]
     var fromFriends: [ItemSummary]
     var byYou: [ItemSummary]

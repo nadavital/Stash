@@ -14,6 +14,7 @@ class AddItemViewModel {
     var successTitle: String?
 
     private let apiClient = APIClient.shared
+    private var currentSaveTask: Task<Bool, Never>?  // Track in-flight save request
 
     // MARK: - Logging
 
@@ -43,42 +44,71 @@ class AddItemViewModel {
 
     /// Save URL to Stash
     func saveURL() async -> Bool {
-        log("🔗 Starting URL save: \(urlText)")
+        // Cancel any in-flight request
+        currentSaveTask?.cancel()
 
-        guard validateURL() else {
-            log("❌ URL validation failed: \(urlText)")
-            errorMessage = "Please enter a valid URL"
-            Haptics.error()
+        // Check if already loading (prevents concurrent requests)
+        guard !isLoading else {
+            log("⚠️ Save already in progress, ignoring duplicate call")
             return false
         }
 
-        log("✅ URL validation passed")
+        // Create new task for this save operation
+        currentSaveTask = Task {
+            log("🔗 Starting URL save: \(urlText)")
 
-        isLoading = true
-        loadingStartTime = Date()
-        errorMessage = nil
-        progressMessage = "Analyzing content..."
+            guard validateURL() else {
+                log("❌ URL validation failed: \(urlText)")
+                errorMessage = "Please enter a valid URL"
+                Haptics.error()
+                return false
+            }
 
-        do {
-            log("📤 Calling API to create item...")
-            let response = try await apiClient.createItem(url: urlText)
-            let duration = Date().timeIntervalSince(loadingStartTime)
+            log("✅ URL validation passed")
 
-            log("✅ Item created successfully - ID: \(response.itemId), Status: \(response.status), Duration: \(String(format: "%.2f", duration))s")
+            isLoading = true
+            loadingStartTime = Date()
+            errorMessage = nil
+            progressMessage = "Analyzing content..."
 
-            createdItemId = response.itemId
-            successTitle = response.title ?? urlText
-            isLoading = false
-            return true
-        } catch {
-            let duration = Date().timeIntervalSince(loadingStartTime)
-            log("❌ Failed to save after \(String(format: "%.2f", duration))s - Error: \(error.localizedDescription)")
+            defer {
+                isLoading = false
+                currentSaveTask = nil
+            }
 
-            errorMessage = "Failed to save. Please try again."
-            Haptics.error()
-            isLoading = false
-            return false
+            // Check for cancellation before network call
+            guard !Task.isCancelled else {
+                log("⚠️ Task was cancelled before API call")
+                return false
+            }
+
+            do {
+                log("📤 Calling API to create item...")
+                let response = try await apiClient.createItem(url: urlText)
+                let duration = Date().timeIntervalSince(loadingStartTime)
+
+                // Check for cancellation after network call
+                guard !Task.isCancelled else {
+                    log("⚠️ Task was cancelled after API call")
+                    return false
+                }
+
+                log("✅ Item created successfully - ID: \(response.itemId), Status: \(response.status), Duration: \(String(format: "%.2f", duration))s")
+
+                createdItemId = response.itemId
+                successTitle = response.title ?? urlText
+                return true
+            } catch {
+                let duration = Date().timeIntervalSince(loadingStartTime)
+                log("❌ Failed to save after \(String(format: "%.2f", duration))s - Error: \(error.localizedDescription)")
+
+                errorMessage = "Failed to save. Please try again."
+                Haptics.error()
+                return false
+            }
         }
+
+        return await currentSaveTask!.value
     }
 
     /// Compress image if needed

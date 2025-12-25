@@ -49,6 +49,69 @@ Deno.serve(async (req) => {
     // Create Supabase client
     const supabase = createSupabaseClient(req.headers.get('Authorization')!);
 
+    // URL MODE: Check for duplicates before creating
+    if (url) {
+      // First, check if entity already exists for this URL
+      const { data: existingEntity } = await supabase
+        .from('entities')
+        .select('id')
+        .eq('canonical_url', url)
+        .maybeSingle();
+
+      if (existingEntity) {
+        console.log(`🔍 [create-item] Entity already exists for URL: ${existingEntity.id}`);
+
+        // Check if user already has this entity in their stash
+        const { data: existingItem } = await supabase
+          .from('stash_items')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('entity_id', existingEntity.id)
+          .maybeSingle();
+
+        if (existingItem) {
+          console.log(`⚠️ [create-item] User already saved this URL, returning existing item: ${existingItem.id}`);
+          return new Response(
+            JSON.stringify({
+              item_id: existingItem.id,
+              entity_id: existingEntity.id,
+              status: 'already_saved',
+              message: 'You already saved this item'
+            }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        // Entity exists but user doesn't have it - create item without enrichment
+        console.log(`✅ [create-item] Creating item with existing entity: ${existingEntity.id}`);
+        const { data: newItem, error: newItemError } = await supabase
+          .from('stash_items')
+          .insert({
+            user_id: userId,
+            entity_id: existingEntity.id,
+            source,
+            input_mode: inputMode,
+            note,
+            status: 'unopened',
+          })
+          .select()
+          .single();
+
+        if (newItemError) {
+          throw newItemError;
+        }
+
+        return new Response(
+          JSON.stringify({
+            item_id: newItem.id,
+            entity_id: existingEntity.id,
+            status: 'saved'
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
     // Insert stash item (entity_id will be filled by enrich-entity function)
     const { data: item, error: itemError } = await supabase
       .from('stash_items')

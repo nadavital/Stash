@@ -175,7 +175,7 @@ struct DetailScrollContent: View {
         }
         .background(
             LinearGradient(
-                colors: [Color.black, Color(white: 0.1)],
+                colors: [Color(.systemBackground), Color(.systemBackground).opacity(0.9)],
                 startPoint: .top,
                 endPoint: .bottom
             )

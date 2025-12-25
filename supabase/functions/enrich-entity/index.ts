@@ -1,5 +1,6 @@
 import { createSupabaseClient } from '../_shared/supabase-client.ts';
 import { enrichUrl, enrichImage, generateEmbedding } from '../_shared/gemini-client.ts';
+import { enrichMusicUrl, enrichVideoUrl } from '../_shared/enrichment-specialists.ts';
 import { corsHeaders } from '../_shared/types.ts';
 
 Deno.serve(async (req) => {
@@ -125,42 +126,79 @@ Deno.serve(async (req) => {
     let imageUrl: string | null = null;
     let urlHint: string | null = null;
 
-    // Detect URL type from domain - force entity type for known platforms
+    // LAYER 1: DETERMINISTIC URL PARSING - Extract platform IDs
     const hostname = new URL(url).hostname;
     let forcedEntityType: string | null = null;
+    let parsedMetadata: any = {};
 
-    if (hostname.includes('music.apple.com') || hostname.includes('spotify.com') || hostname.includes('soundcloud.com')) {
-      urlHint = 'This is a music streaming link';
-      forcedEntityType = 'song';
-    } else if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
-      if (url.includes('/shorts/')) {
-        urlHint = 'This is a YouTube Short (vertical video)';
-        forcedEntityType = 'youtube_short';
-      } else {
-        urlHint = 'This is a YouTube video';
-        forcedEntityType = 'youtube_video';
+    // Music platforms
+    if (hostname.includes('spotify.com')) {
+      const spotifyMatch = url.match(/spotify\.com\/track\/([a-zA-Z0-9]+)/);
+      if (spotifyMatch) {
+        parsedMetadata.spotify_id = spotifyMatch[1];
+        urlHint = `Spotify track ID: ${spotifyMatch[1]}`;
+        forcedEntityType = 'song';
       }
-    } else if (hostname.includes('tiktok.com')) {
-      urlHint = 'This is a TikTok video';
-      forcedEntityType = 'tiktok';
-    } else if (hostname.includes('instagram.com')) {
-      if (url.includes('/reel/')) {
-        urlHint = 'This is an Instagram Reel';
-        forcedEntityType = 'instagram_reel';
-      } else if (url.includes('/p/')) {
-        urlHint = 'This is an Instagram post';
-        forcedEntityType = 'instagram_post';
+    } else if (hostname.includes('music.apple.com')) {
+      // Apple Music URLs: https://music.apple.com/us/album/{album}/{album_id}?i={track_id}
+      const appleMusicMatch = url.match(/[?&]i=(\d+)/);
+      if (appleMusicMatch) {
+        parsedMetadata.apple_music_id = appleMusicMatch[1];
+        urlHint = `Apple Music track ID: ${appleMusicMatch[1]}`;
+        forcedEntityType = 'song';
       }
-    } else if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
-      urlHint = 'This is a tweet/post on X';
-      forcedEntityType = 'tweet';
-    } else if (hostname.includes('threads.net')) {
-      urlHint = 'This is a Threads post';
-      forcedEntityType = 'threads_post';
-    } else if (hostname.includes('eventbrite.com') || hostname.includes('ticketmaster.com')) {
-      urlHint = 'This is an event/ticket link';
-      forcedEntityType = 'event';
+    } else if (hostname.includes('podcasts.apple.com')) {
+      // Apple Podcasts: https://podcasts.apple.com/us/podcast/{name}/id{podcast_id}?i={episode_id}
+      const podcastMatch = url.match(/[?&]i=(\d+)/);
+      const podcastIdMatch = url.match(/id(\d+)/);
+      if (podcastMatch) {
+        parsedMetadata.apple_podcast_episode_id = podcastMatch[1];
+        if (podcastIdMatch) {
+          parsedMetadata.apple_podcast_id = podcastIdMatch[1];
+        }
+        urlHint = `Apple Podcast episode ID: ${podcastMatch[1]}`;
+        forcedEntityType = 'podcast';
+      }
     }
+    // Video platforms
+    else if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
+      // YouTube: https://youtube.com/watch?v=abc123 or https://youtu.be/abc123
+      let youtubeId = null;
+      if (hostname.includes('youtu.be')) {
+        const match = url.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
+        youtubeId = match?.[1];
+      } else {
+        const match = url.match(/[?&]v=([a-zA-Z0-9_-]+)/);
+        youtubeId = match?.[1];
+      }
+
+      if (youtubeId) {
+        parsedMetadata.video_id = youtubeId;
+        parsedMetadata.platform = 'youtube';
+
+        if (url.includes('/shorts/')) {
+          urlHint = `YouTube Short ID: ${youtubeId}`;
+          forcedEntityType = 'youtube_short';
+        } else {
+          urlHint = `YouTube video ID: ${youtubeId}`;
+          forcedEntityType = 'youtube_video';
+        }
+      }
+    }
+    // Events & Location
+    else if (hostname.includes('eventbrite.com') || hostname.includes('ticketmaster.com') || hostname.includes('eventful.com')) {
+      urlHint = 'Event/ticket platform';
+      forcedEntityType = 'event';
+    } else if (hostname.includes('maps.apple.com') || hostname.includes('maps.google.com')) {
+      urlHint = 'Map/location link';
+      forcedEntityType = 'location';
+    }
+
+    console.log('📍 URL parsing results:', {
+      platform: hostname,
+      forcedType: forcedEntityType,
+      extractedIds: Object.keys(parsedMetadata)
+    });
 
     try {
       const urlResponse = await fetch(url);
@@ -214,20 +252,46 @@ Deno.serve(async (req) => {
       console.log('✅ Entity already exists:', existingEntity.id, 'type:', existingEntity.type);
       entityId = existingEntity.id;
     } else {
-      // New entity - call Gemini to enrich
-      console.log('Calling Gemini with:', { url, title, description, urlHint });
-      const enrichment = await enrichUrl(url, title, description, textSnippet, urlHint);
-      console.log('Gemini enrichment result:', enrichment);
+      // New entity - SMART ROUTING to specialized enrichment
+      console.log('🎯 Routing to specialist enricher:', { forcedType: forcedEntityType, parsedIds: Object.keys(parsedMetadata) });
+
+      let enrichment;
+
+      // Route to specialized enrichers for known types
+      try {
+        if (forcedEntityType === 'song') {
+          console.log('🎵 Using music specialist');
+          enrichment = await enrichMusicUrl(url, title, parsedMetadata);
+        } else if (forcedEntityType === 'youtube_video' || forcedEntityType === 'youtube_short') {
+          console.log('🎬 Using video specialist');
+          enrichment = await enrichVideoUrl(url, title, parsedMetadata);
+        } else {
+          console.log('📄 Using generic enricher (fallback)');
+          enrichment = await enrichUrl(url, title, description, textSnippet, urlHint, parsedMetadata);
+        }
+        console.log('✅ Enrichment result:', enrichment);
+      } catch (specialistError) {
+        console.error('❌ Specialist enrichment failed, falling back to generic:', specialistError);
+        // Fallback to generic enricher if specialist fails
+        enrichment = await enrichUrl(url, title, description, textSnippet, urlHint, parsedMetadata);
+        console.log('✅ Generic fallback result:', enrichment);
+      }
 
       // Use forced entity type if detected from URL
       const finalEntityType = forcedEntityType || enrichment.entity_type;
+
+      // Merge parsed metadata with AI-generated metadata
+      const finalMetadata = {
+        ...parsedMetadata,  // Deterministic IDs (spotify_id, youtube_id, etc.)
+        ...enrichment.type_metadata  // AI-generated metadata (artist, album, etc.)
+      };
 
       // Generate embedding
       const embeddingText = `${enrichment.clean_title} ${enrichment.summary} ${enrichment.tags.join(' ')}`;
       const embedding = await generateEmbedding(embeddingText);
       
-      // Create new entity with type-specific metadata
-      const { data: newEntity, error: entityError } = await supabase
+      // Create new entity with merged metadata (parsed IDs + AI enrichment)
+      const { data: newEntity, error: entityError} = await supabase
         .from('entities')
         .insert({
           type: finalEntityType,
@@ -241,7 +305,7 @@ Deno.serve(async (req) => {
           tags: enrichment.tags,
           embedding: JSON.stringify(embedding),
           suggested_prompts: enrichment.suggested_prompts,
-          raw_metadata: enrichment.type_metadata || null,
+          raw_metadata: finalMetadata,  // Merged: parsed IDs + AI metadata
         })
         .select()
         .single();

@@ -37,19 +37,27 @@ class HomeViewModel {
             var seenIds = Set<String>()
 
             // Priority order: brain_snack, from_friends, by_you, for_you
-            for item in feed.brainSnack where !seenIds.contains(item.id) {
+            // Filter out items with "Untitled" or missing data
+            let isValidItem: (ItemSummary) -> Bool = { item in
+                !item.title.isEmpty &&
+                item.title != "Untitled" &&
+                !item.summary.isEmpty &&
+                item.summary != "No summary"
+            }
+
+            for item in feed.brainSnack where !seenIds.contains(item.id) && isValidItem(item) {
                 allItems.append(item)
                 seenIds.insert(item.id)
             }
-            for item in feed.fromFriends where !seenIds.contains(item.id) {
+            for item in feed.fromFriends where !seenIds.contains(item.id) && isValidItem(item) {
                 allItems.append(item)
                 seenIds.insert(item.id)
             }
-            for item in feed.byYou where !seenIds.contains(item.id) {
+            for item in feed.byYou where !seenIds.contains(item.id) && isValidItem(item) {
                 allItems.append(item)
                 seenIds.insert(item.id)
             }
-            for item in feed.forYou where !seenIds.contains(item.id) {
+            for item in feed.forYou where !seenIds.contains(item.id) && isValidItem(item) {
                 allItems.append(item)
                 seenIds.insert(item.id)
             }

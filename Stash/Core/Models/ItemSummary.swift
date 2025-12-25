@@ -21,6 +21,7 @@ struct TypeMetadata: Codable, Hashable {
     // MARK: - Music
     let appleMusicId: String?
     let spotifyId: String?
+    let isrc: String?                // International Standard Recording Code (for cross-platform matching)
     let artistName: String?
     let albumName: String?
     let albumArtUrl: String?
@@ -58,6 +59,7 @@ struct TypeMetadata: Codable, Hashable {
         case durationSeconds = "duration_seconds"
         case appleMusicId = "apple_music_id"
         case spotifyId = "spotify_id"
+        case isrc = "isrc"
         case artistName = "artist_name"
         case albumName = "album_name"
         case albumArtUrl = "album_art_url"
@@ -90,6 +92,7 @@ struct TypeMetadata: Codable, Hashable {
         durationSeconds: Int? = nil,
         appleMusicId: String? = nil,
         spotifyId: String? = nil,
+        isrc: String? = nil,
         artistName: String? = nil,
         albumName: String? = nil,
         albumArtUrl: String? = nil,
@@ -122,6 +125,7 @@ struct TypeMetadata: Codable, Hashable {
         self.durationSeconds = durationSeconds
         self.appleMusicId = appleMusicId
         self.spotifyId = spotifyId
+        self.isrc = isrc
         self.artistName = artistName
         self.albumName = albumName
         self.albumArtUrl = albumArtUrl
@@ -259,6 +263,7 @@ struct ItemSummary: Codable, Identifiable, Hashable {
             // Music
             appleMusicId: String? = nil,
             spotifyId: String? = nil,
+            isrc: String? = nil,
             artistName: String? = nil,
             albumName: String? = nil,
             albumArtUrl: String? = nil,
@@ -304,6 +309,7 @@ struct ItemSummary: Codable, Identifiable, Hashable {
                 durationSeconds: durationSeconds,
                 appleMusicId: appleMusicId,
                 spotifyId: spotifyId,
+                isrc: isrc,
                 artistName: artistName,
                 albumName: albumName,
                 albumArtUrl: albumArtUrl,

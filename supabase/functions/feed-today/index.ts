@@ -1,5 +1,4 @@
 import { createSupabaseClient, getUserIdFromRequest } from '../_shared/supabase-client.ts';
-import { generateTodaySubtitle } from '../_shared/gemini-client.ts';
 import { corsHeaders, type ItemSummary, type EntityType } from '../_shared/types.ts';
 import { cosineSimilarity, parseEmbedding } from '../_shared/vector-utils.ts';
 
@@ -293,31 +292,7 @@ Deno.serve(async (req) => {
       mergedForYou.push(...fallback);
     }
 
-    // Collect tags and types for AI subtitle
-    const allTags = new Set<string>();
-    const allTypes = new Set<EntityType>();
-
-    itemSummaries.slice(0, 10).forEach(item => {
-      item.metadata.tags.forEach(tag => allTags.add(tag));
-      allTypes.add(item.type);
-    });
-
-    // Include user's top categories from taste profile in subtitle generation
-    const topCats = tasteProfile?.top_categories || {};
-    Object.keys(topCats).slice(0, 3).forEach(cat => allTags.add(cat));
-
-    // Generate AI subtitle only if we have items
-    let aiSubtitle = "Start saving interesting things you find online";
-    if (itemSummaries.length > 0) {
-      try {
-        aiSubtitle = await generateTodaySubtitle(
-          Array.from(allTags).slice(0, 5),
-          Array.from(allTypes)
-        );
-      } catch (error) {
-        console.error('Error generating AI subtitle:', error);
-      }
-    }
+    // AI subtitle removed - not displayed in UI
 
     // Fetch AI discoveries from daily-discovery function
     const aiDiscoveries: Array<{
@@ -348,7 +323,7 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        ai_subtitle: aiSubtitle,
+        ai_subtitle: null,  // No longer generated
         ai_discoveries: aiDiscoveries,
         brain_snack: brainSnack,
         from_friends: fromFriends,

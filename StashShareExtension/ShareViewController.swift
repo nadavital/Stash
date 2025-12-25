@@ -373,11 +373,19 @@ fileprivate struct SharedAuthManager {
         }
 
         var pending = getPendingURLs()
+
+        // Check if URL already pending (prevents duplicates from rapid shares)
+        if pending.contains(where: { $0["url"] == url }) {
+            print("⚠️ URL already in pending queue, skipping duplicate: \(url)")
+            return
+        }
+
         let item: [String: String] = ["url": url, "source": source]
         pending.append(item)
 
         defaults.set(pending, forKey: "pending_urls")
         defaults.synchronize()
+        print("✅ Added URL to pending queue: \(url)")
     }
 
     static func getPendingURLs() -> [[String: String]] {

@@ -63,7 +63,42 @@ const urlEnrichmentSchema = {
     },
     type_metadata: {
       type: "object",
-      description: "Type-specific metadata (artist/album for songs, ingredients for recipes, venue/date for events, author/handle for social posts, video_id for videos)"
+      description: "Type-specific metadata - MUST include relevant fields based on entity_type",
+      properties: {
+        // Music fields
+        artist_name: { type: "string", description: "Artist name for songs" },
+        album_name: { type: "string", description: "Album name for songs" },
+        album_art_url: { type: "string", description: "Album artwork URL for songs" },
+        spotify_id: { type: "string", description: "Spotify track ID (if available)" },
+        apple_music_id: { type: "string", description: "Apple Music track ID (if available)" },
+        isrc: { type: "string", description: "ISRC code for cross-platform matching" },
+        duration_ms: { type: "number", description: "Track duration in milliseconds" },
+
+        // Video fields
+        video_id: { type: "string", description: "Platform video ID" },
+        platform: { type: "string", description: "Video platform (youtube, tiktok, etc)" },
+        duration_seconds: { type: "number", description: "Video duration in seconds" },
+        channel_name: { type: "string", description: "Channel or creator name" },
+
+        // Event fields
+        venue_name: { type: "string", description: "Event venue name" },
+        venue_address: { type: "string", description: "Event venue address" },
+        start_date: { type: "string", description: "Event start date (ISO format)" },
+        end_date: { type: "string", description: "Event end date (ISO format)" },
+        ticket_url: { type: "string", description: "Ticket purchase URL" },
+
+        // Recipe fields
+        ingredients: { type: "array", items: { type: "string" }, description: "Recipe ingredients list" },
+        steps: { type: "array", items: { type: "string" }, description: "Recipe instruction steps" },
+        prep_time: { type: "string", description: "Preparation time" },
+        cook_time: { type: "string", description: "Cooking time" },
+        servings: { type: "number", description: "Number of servings" },
+
+        // Social post fields
+        author_name: { type: "string", description: "Post author name" },
+        author_handle: { type: "string", description: "Post author handle/username" },
+        author_avatar_url: { type: "string", description: "Author profile image URL" },
+      }
     }
   },
   required: ["entity_type", "clean_title", "summary", "tags", "primary_emoji", "suggested_prompts"]
@@ -75,7 +110,8 @@ export async function enrichUrl(
   title: string | null,
   description: string | null,
   textSnippet: string | null,
-  urlHint: string | null = null
+  urlHint: string | null = null,
+  parsedMetadata: any = {}
 ): Promise<EnrichmentResult> {
   const prompt = `Analyze this web content and extract structured metadata.
 
@@ -84,24 +120,74 @@ ${title ? `Title: ${title}` : ''}
 ${description ? `Description: ${description}` : ''}
 ${textSnippet ? `Content snippet: ${textSnippet}` : ''}
 ${urlHint ? `Hint: ${urlHint}` : ''}
+${Object.keys(parsedMetadata).length > 0 ? `Parsed IDs: ${JSON.stringify(parsedMetadata)}` : ''}
 
 Classify the content type based on URL patterns and content:
-- twitter.com, x.com → "tweet"
-- threads.net → "threads_post"
-- instagram.com/p/ → "instagram_post"
-- instagram.com/reel/ → "instagram_reel"
-- tiktok.com → "tiktok"
-- youtube.com/watch → "youtube_video"
+- youtube.com/watch, youtu.be → "youtube_video"
 - youtube.com/shorts → "youtube_short"
 - music.apple.com, spotify.com → "song"
-- eventbrite.com, ticketmaster.com → "event"
+- podcasts.apple.com → "podcast"
+- eventbrite.com, ticketmaster.com, maps.apple.com → "event"
 - Recipe/cooking sites → "recipe"
 - News/blog articles → "article"
 - Otherwise → "generic"
 
-Use Google Search if needed to enrich metadata with accurate details (event dates, recipe ingredients, song artist, etc).
+**CRITICAL: Use Google Search to enrich type_metadata with ALL required fields. Empty type_metadata is NOT acceptable.**
 
-Provide engaging summaries. For recipes, mention key qualities. For songs, include genre/mood. For social posts, capture the main point.`;
+For MUSIC (song):
+  - REQUIRED in type_metadata: artist_name, album_name
+  - HIGHLY RECOMMENDED: album_art_url, duration_ms, isrc
+  - Use Google Search to find ALL of these fields
+  - Search for ISRC code (International Standard Recording Code) - format: CC-XXX-YY-NNNNN
+  - **CRITICAL FOR CROSS-PLATFORM**: You MUST include BOTH spotify_id AND apple_music_id in type_metadata, even if only one is in parsed IDs
+    - If you receive apple_music_id in parsed IDs → Search Google using ISRC to find spotify_id and ADD IT to type_metadata
+    - If you receive spotify_id in parsed IDs → Search Google using ISRC to find apple_music_id and ADD IT to type_metadata
+    - BOTH IDs must appear in the final type_metadata JSON
+  - Extract genre and mood tags
+
+  EXAMPLE 1 - Apple Music URL (must find Spotify):
+  Input: apple_music_id="1440933525" (from parsed IDs)
+  Required output in type_metadata:
+  {
+    "artist_name": "M83",
+    "album_name": "Hurry Up, We're Dreaming",
+    "apple_music_id": "1440933525",
+    "spotify_id": "3kjuyTCjPG1WMFCiyc5IuB",  ← MUST search for this using ISRC
+    "isrc": "USVI21100783",
+    "album_art_url": "https://...",
+    "duration_ms": 244000
+  }
+
+  EXAMPLE 2 - Spotify URL (must find Apple Music):
+  Input: spotify_id="3kjuyTCjPG1WMFCiyc5IuB" (from parsed IDs)
+  Required output in type_metadata:
+  {
+    "artist_name": "M83",
+    "album_name": "Hurry Up, We're Dreaming",
+    "spotify_id": "3kjuyTCjPG1WMFCiyc5IuB",
+    "apple_music_id": "1440933525",  ← MUST search for this using ISRC
+    "isrc": "USVI21100783",
+    "album_art_url": "https://...",
+    "duration_ms": 244000
+  }
+
+For VIDEO (youtube_video, youtube_short):
+  - Use Google Search to find: channel_name, duration_seconds, thumbnail_url, view_count (if available)
+  - Summarize what the video is about in 1-2 sentences
+
+For PODCAST:
+  - Use Google Search to find: podcast_name, host_name, duration_minutes, episode_number (if available)
+  - Summarize the episode topic
+
+For EVENT:
+  - Use Google Search to find: venue_name, venue_address, start_date, end_date, ticket_url
+  - Extract latitude/longitude if possible from venue address
+
+For RECIPE:
+  - Use Google Search to find: ingredients (array), steps (array), prep_time, cook_time, servings
+  - Mention cuisine style and difficulty
+
+Provide engaging summaries with vibe/mood. For songs, include genre and energy. For videos, mention key topics. For recipes, highlight unique qualities.`;
 
   try {
     console.log('🔵 Calling Gemini API with structured output + grounding...');
@@ -115,9 +201,9 @@ Provide engaging summaries. For recipes, mention key qualities. For songs, inclu
         tools: [{ google_search: {} }],  // Enable Google Search grounding
         generationConfig: {
           temperature: 0.3,
-          maxOutputTokens: 1000,
+          maxOutputTokens: 2000,  // Increased from 1000 to prevent truncation
           responseMimeType: "application/json",
-          responseJsonSchema: urlEnrichmentSchema
+          responseSchema: urlEnrichmentSchema  // Changed from responseJsonSchema (deprecated)
         }
       })
     });

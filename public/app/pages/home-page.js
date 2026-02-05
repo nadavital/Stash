@@ -3,92 +3,98 @@ import { renderHomeFolderGrid } from "../components/home-folder-grid/home-folder
 import { renderHomeRecentList } from "../components/home-recent-list/home-recent-list.js";
 import { renderTopbar } from "../components/topbar/topbar.js";
 import {
-  buildContentPreview,
   buildLocalFallbackNote,
-  buildMockChatAnswer,
-  buildMockContext,
   buildNoteTitle,
-  buildSummaryPreview,
-  compactUrl,
   conciseTechnicalError,
   filterAndRankMockNotes,
-  formatMeta,
-  formatScore,
-  formatSourceText,
   inferCaptureType,
   normalizeCitation,
-  normalizeCitationLabel,
 } from "../services/mappers.js";
+
+const FOLDER_COLOR_TOKENS = ["sky", "mint", "sand", "rose", "violet", "slate"];
+const FOLDER_SYMBOL_OPTIONS = ["DOC", "PLAN", "CODE", "LINK", "MEDIA", "NOTE"];
+
+function renderFolderColorChoices() {
+  return FOLDER_COLOR_TOKENS.map((color, index) => {
+    const activeClass = index === 0 ? " is-selected" : "";
+    const activePressed = index === 0 ? "true" : "false";
+    return `
+      <button class="folder-color-choice${activeClass}" type="button" data-color="${color}" aria-pressed="${activePressed}">
+        <span class="folder-color-dot" data-color="${color}" aria-hidden="true"></span>
+      </button>
+    `;
+  }).join("");
+}
+
+function renderFolderSymbolChoices() {
+  return FOLDER_SYMBOL_OPTIONS.map((symbol, index) => {
+    const activeClass = index === 0 ? " is-selected" : "";
+    const activePressed = index === 0 ? "true" : "false";
+    return `
+      <button class="folder-symbol-choice${activeClass}" type="button" data-symbol="${symbol}" aria-pressed="${activePressed}">
+        <span class="folder-symbol-badge">${symbol}</span>
+      </button>
+    `;
+  }).join("");
+}
 
 function renderHomePageShell() {
   return `
     <section class="page page-home">
-      ${renderTopbar()}
+      ${renderTopbar({ showNewFolder: true })}
 
-      <section class="home-grid">
-        ${renderHomeFolderGrid()}
+      <section class="home-layout">
+        <div class="home-explorer-pane">
+          ${renderHomeFolderGrid()}
+        </div>
+
         ${renderHomeRecentList()}
-
-        <article class="card chat-card">
-          <h2>Grounded Chat</h2>
-          <form id="chat-form">
-            <label>
-              Ask your memory
-              <textarea id="question-input" rows="4" placeholder="What decisions did I make for launch onboarding?"></textarea>
-            </label>
-            <button class="btn" type="submit">Ask</button>
-          </form>
-
-          <div class="response-wrap">
-            <p class="response-title">Answer</p>
-            <div id="answer-output" class="answer-output">No question yet.</div>
-            <p id="answer-meta" class="response-meta"></p>
-          </div>
-
-          <div class="response-wrap">
-            <p class="response-title">Citations</p>
-            <div id="citation-list" class="citation-list"></div>
-          </div>
-
-          <button id="context-btn" class="btn subtle" type="button">Generate Project Context Brief</button>
-        </article>
       </section>
 
       ${renderComposer({ mode: "home" })}
     </section>
 
-    <template id="note-template">
-      <article class="note-item stream-mini-card" role="button" tabindex="0">
-        <div class="mini-card-head">
-          <p class="mini-title"></p>
-          <span class="mini-score"></span>
-        </div>
-        <p class="mini-content"></p>
-        <div class="mini-ai-block">
-          <p class="mini-ai-label">AI Notes</p>
-          <p class="mini-summary"></p>
-        </div>
-        <img class="mini-image hidden" alt="memory preview image" />
-        <div class="note-tags"></div>
-        <p class="mini-meta"></p>
+    <div id="item-modal" class="item-modal hidden" aria-hidden="true">
+      <div id="item-modal-backdrop" class="item-modal-backdrop"></div>
+      <article class="item-modal-panel" role="dialog" aria-modal="true" aria-labelledby="item-modal-title">
+        <button id="item-modal-close" class="item-modal-close" type="button" aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
+        </button>
+        <p id="item-modal-project" class="item-modal-project"></p>
+        <h3 id="item-modal-title" class="item-modal-title"></h3>
+        <p id="item-modal-content" class="item-modal-content"></p>
+        <img id="item-modal-image" class="item-modal-image hidden" alt="Item preview" />
       </article>
-    </template>
+    </div>
 
-    <div id="memory-modal" class="memory-modal hidden" aria-hidden="true">
-      <div id="memory-modal-backdrop" class="memory-modal-backdrop"></div>
-      <article class="memory-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-modal-title">
-        <button id="memory-modal-close" class="btn subtle modal-close-btn" type="button">Close</button>
-        <p class="modal-kicker">Memory detail</p>
-        <h3 id="memory-modal-title" class="modal-title"></h3>
-        <p id="memory-modal-content" class="modal-content"></p>
-        <section class="modal-section">
-          <p class="modal-label">AI Notes</p>
-          <p id="memory-modal-summary" class="modal-summary"></p>
-        </section>
-        <img id="memory-modal-image" class="modal-image hidden" alt="full memory image" />
-        <a id="memory-modal-source" class="modal-link hidden" target="_blank" rel="noreferrer"></a>
-        <div id="memory-modal-tags" class="note-tags"></div>
-        <p id="memory-modal-meta" class="note-meta"></p>
+    <div id="folder-modal" class="folder-modal hidden" aria-hidden="true">
+      <div id="folder-modal-backdrop" class="folder-modal-backdrop"></div>
+      <article class="folder-modal-panel" role="dialog" aria-modal="true">
+        <button id="folder-modal-close" class="folder-modal-close" type="button" aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
+        </button>
+
+        <h3 class="folder-modal-heading">New Folder</h3>
+
+        <form id="folder-form" class="folder-form">
+          <label class="folder-form-label" for="folder-name-input">Name</label>
+          <input id="folder-name-input" class="folder-input" type="text" maxlength="64" placeholder="e.g. Launch Plan" autocomplete="off" />
+
+          <label class="folder-form-label" for="folder-description-input">Description</label>
+          <textarea id="folder-description-input" class="folder-textarea" rows="2" maxlength="180" placeholder="Short description"></textarea>
+
+          <div class="folder-color-row" id="folder-color-row">
+            ${renderFolderColorChoices()}
+          </div>
+
+          <div class="folder-symbol-row" id="folder-symbol-row">
+            ${renderFolderSymbolChoices()}
+          </div>
+
+          <div class="folder-form-actions">
+            <button id="folder-create-btn" class="folder-create-btn" type="submit">Create Folder</button>
+          </div>
+        </form>
       </article>
     </div>
   `;
@@ -96,67 +102,168 @@ function renderHomePageShell() {
 
 function queryElements(mountNode) {
   return {
-    statusPill: mountNode.querySelector("#status-pill"),
-    adapterBadge: mountNode.querySelector("#adapter-badge"),
-    adapterHelper: mountNode.querySelector("#adapter-helper"),
+    topbarSearchWrap: mountNode.querySelector("#topbar-search-wrap"),
+    topbarSearchToggle: mountNode.querySelector("#topbar-search-toggle"),
+    topbarSearchInput: mountNode.querySelector("#topbar-search-input"),
     captureForm: mountNode.querySelector("#capture-form"),
     contentInput: mountNode.querySelector("#content-input"),
     projectInput: mountNode.querySelector("#project-input"),
+    projectSelect: mountNode.querySelector("#project-select"),
     captureHint: mountNode.querySelector("#capture-hint"),
-    imageDropZone: mountNode.querySelector("#image-drop-zone"),
-    imageInput: mountNode.querySelector("#image-input"),
-    imagePickerBtn: mountNode.querySelector("#image-picker-btn"),
-    composerFileLink: mountNode.querySelector("#composer-file-link"),
-    removeImageBtn: mountNode.querySelector("#remove-image-btn"),
-    imageName: mountNode.querySelector("#image-name"),
-    imagePreview: mountNode.querySelector("#image-preview"),
+    attachmentToggle: mountNode.querySelector("#attachment-toggle"),
+    fileInput: mountNode.querySelector("#file-input"),
+    selectedFilePill: mountNode.querySelector("#selected-file-pill"),
+    selectedFileName: mountNode.querySelector("#selected-file-name"),
+    clearFileBtn: mountNode.querySelector("#clear-file-btn"),
     saveBtn: mountNode.querySelector("#save-btn"),
     notesList: mountNode.querySelector("#notes-list"),
-    noteTemplate: mountNode.querySelector("#note-template"),
-    streamControlsBtn: mountNode.querySelector("#stream-controls-btn"),
-    streamControls: mountNode.querySelector("#stream-controls"),
     refreshBtn: mountNode.querySelector("#refresh-btn"),
-    searchInput: mountNode.querySelector("#search-input"),
-    projectFilterInput: mountNode.querySelector("#project-filter-input"),
-    sortSelect: mountNode.querySelector("#sort-select"),
-    typeFilterSelect: mountNode.querySelector("#type-filter-select"),
-    searchBtn: mountNode.querySelector("#search-btn"),
-    chatForm: mountNode.querySelector("#chat-form"),
-    questionInput: mountNode.querySelector("#question-input"),
-    answerOutput: mountNode.querySelector("#answer-output"),
-    answerMeta: mountNode.querySelector("#answer-meta"),
-    citationList: mountNode.querySelector("#citation-list"),
-    contextBtn: mountNode.querySelector("#context-btn"),
-    memoryModal: mountNode.querySelector("#memory-modal"),
-    memoryModalBackdrop: mountNode.querySelector("#memory-modal-backdrop"),
-    memoryModalClose: mountNode.querySelector("#memory-modal-close"),
-    memoryModalTitle: mountNode.querySelector("#memory-modal-title"),
-    memoryModalContent: mountNode.querySelector("#memory-modal-content"),
-    memoryModalSummary: mountNode.querySelector("#memory-modal-summary"),
-    memoryModalImage: mountNode.querySelector("#memory-modal-image"),
-    memoryModalSource: mountNode.querySelector("#memory-modal-source"),
-    memoryModalTags: mountNode.querySelector("#memory-modal-tags"),
-    memoryModalMeta: mountNode.querySelector("#memory-modal-meta"),
     foldersList: mountNode.querySelector("#home-folders-list"),
     foldersEmpty: mountNode.querySelector("#home-folders-empty"),
+    foldersError: mountNode.querySelector("#home-folders-error"),
+    newFolderBtn: mountNode.querySelector("#topbar-new-folder-btn"),
+    itemModal: mountNode.querySelector("#item-modal"),
+    itemModalBackdrop: mountNode.querySelector("#item-modal-backdrop"),
+    itemModalClose: mountNode.querySelector("#item-modal-close"),
+    itemModalProject: mountNode.querySelector("#item-modal-project"),
+    itemModalTitle: mountNode.querySelector("#item-modal-title"),
+    itemModalContent: mountNode.querySelector("#item-modal-content"),
+    itemModalImage: mountNode.querySelector("#item-modal-image"),
+    folderModal: mountNode.querySelector("#folder-modal"),
+    folderModalBackdrop: mountNode.querySelector("#folder-modal-backdrop"),
+    folderModalClose: mountNode.querySelector("#folder-modal-close"),
+    folderForm: mountNode.querySelector("#folder-form"),
+    folderNameInput: mountNode.querySelector("#folder-name-input"),
+    folderDescriptionInput: mountNode.querySelector("#folder-description-input"),
+    folderColorRow: mountNode.querySelector("#folder-color-row"),
+    folderSymbolRow: mountNode.querySelector("#folder-symbol-row"),
     toast: document.getElementById("toast"),
   };
 }
 
-function noteForItem(item) {
-  const citation = normalizeCitation(item, 0);
-  return citation.note;
+function iconTypeFor(note) {
+  if (note.sourceType === "image") return "image";
+  if (note.sourceType === "link") return "link";
+  if ((note.sourceType || "").toLowerCase() === "file") return "file";
+  return "text";
 }
 
-function renderTags(container, tags = []) {
-  if (!container) return;
-  container.innerHTML = "";
-  (tags || []).forEach((tag) => {
-    const tagEl = document.createElement("span");
-    tagEl.className = "tag";
-    tagEl.textContent = tag;
-    container.appendChild(tagEl);
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
+}
+
+function isProcessedNote(note) {
+  return Boolean(String(note.summary || "").trim()) && String(note.summary || "").trim() !== "(no summary)";
+}
+
+function normalizeFolderColor(value, fallback = "sky") {
+  const normalized = String(value || "").toLowerCase().trim();
+  return FOLDER_COLOR_TOKENS.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeFolderSymbol(value, fallback = "DOC") {
+  const normalized = String(value || "")
+    .toUpperCase()
+    .trim();
+  return FOLDER_SYMBOL_OPTIONS.includes(normalized) ? normalized : fallback;
+}
+
+function fallbackColorForFolder(name = "") {
+  const total = String(name)
+    .split("")
+    .reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return FOLDER_COLOR_TOKENS[total % FOLDER_COLOR_TOKENS.length] || "sky";
+}
+
+function normalizeFolderDrafts(rawDrafts = []) {
+  const map = new Map();
+
+  (Array.isArray(rawDrafts) ? rawDrafts : []).forEach((entry) => {
+    const draft =
+      typeof entry === "string"
+        ? { name: entry, description: "", color: fallbackColorForFolder(entry), symbol: "DOC" }
+        : {
+            name: entry?.name || "",
+            description: entry?.description || "",
+            color: normalizeFolderColor(entry?.color, fallbackColorForFolder(entry?.name || "")),
+            symbol: normalizeFolderSymbol(entry?.symbol, "DOC"),
+          };
+
+    const name = String(draft.name || "").trim();
+    if (!name) return;
+
+    map.set(name.toLowerCase(), {
+      name,
+      description: String(draft.description || "").trim(),
+      color: normalizeFolderColor(draft.color, fallbackColorForFolder(name)),
+      symbol: normalizeFolderSymbol(draft.symbol, "DOC"),
+    });
+  });
+
+  return [...map.values()];
+}
+
+function openItemModal(els, note) {
+  if (!els.itemModal || !note) return;
+
+  els.itemModalTitle.textContent = buildNoteTitle(note);
+  els.itemModalProject.textContent = note.project || "General";
+  els.itemModalContent.textContent = note.content || "";
+
+  if (note.imagePath) {
+    els.itemModalImage.src = note.imagePath;
+    els.itemModalImage.classList.remove("hidden");
+  } else {
+    els.itemModalImage.src = "";
+    els.itemModalImage.classList.add("hidden");
+  }
+
+  els.itemModal.classList.remove("hidden");
+  els.itemModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+}
+
+function closeItemModal(els) {
+  if (!els.itemModal) return;
+  els.itemModal.classList.add("hidden");
+  els.itemModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
+}
+
+function openFolderModal(els, selectedColor = "sky", selectedSymbol = "DOC") {
+  if (!els.folderModal) return;
+
+  els.folderNameInput.value = "";
+  els.folderDescriptionInput.value = "";
+
+  els.folderColorRow?.querySelectorAll(".folder-color-choice").forEach((button) => {
+    const isSelected = button.dataset.color === selectedColor;
+    button.classList.toggle("is-selected", isSelected);
+    button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+  });
+
+  els.folderSymbolRow?.querySelectorAll(".folder-symbol-choice").forEach((button) => {
+    const isSelected = button.dataset.symbol === selectedSymbol;
+    button.classList.toggle("is-selected", isSelected);
+    button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+  });
+
+  els.folderModal.classList.remove("hidden");
+  els.folderModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  els.folderNameInput?.focus();
+}
+
+function closeFolderModal(els) {
+  if (!els.folderModal) return;
+  els.folderModal.classList.add("hidden");
+  els.folderModal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
 }
 
 export function createHomePage({ store, apiClient }) {
@@ -166,6 +273,10 @@ export function createHomePage({ store, apiClient }) {
       const els = queryElements(mountNode);
       const disposers = [];
       let isMounted = true;
+      let attachment = {
+        name: "",
+        imageDataUrl: null,
+      };
 
       function on(target, eventName, handler, options) {
         if (!target) return;
@@ -181,25 +292,43 @@ export function createHomePage({ store, apiClient }) {
         return store.setState(patch);
       }
 
-      function setStatus(text, tone = "neutral") {
-        if (!els.statusPill) return;
-        els.statusPill.textContent = text;
-        if (tone === "warn") {
-          els.statusPill.style.color = "#8d3d1f";
-          els.statusPill.style.borderColor = "rgba(189, 91, 45, 0.35)";
-        } else {
-          els.statusPill.style.color = "";
-          els.statusPill.style.borderColor = "";
-        }
+      function markAccessed(noteId) {
+        if (!noteId) return;
+        const state = getState();
+        const set = new Set(state.accessedIds || []);
+        set.add(String(noteId));
+        setState({ accessedIds: [...set] });
       }
 
-      function setAdapterFallback(active, helperText = "") {
-        setState({ fallbackActive: active });
-        els.adapterBadge?.classList.toggle("hidden", !active);
-        els.adapterHelper?.classList.toggle("hidden", !active);
-        if (els.adapterHelper) {
-          els.adapterHelper.textContent = active ? helperText : "";
+      function upsertDraftFolder({ name, description = "", color = "sky", symbol = "DOC" }) {
+        const normalizedName = String(name || "").trim();
+        if (!normalizedName) return;
+
+        const normalizedDescription = String(description || "").trim();
+        const normalizedColor = normalizeFolderColor(color, fallbackColorForFolder(normalizedName));
+        const normalizedSymbol = normalizeFolderSymbol(symbol, "DOC");
+        const drafts = normalizeFolderDrafts(getState().draftFolders);
+        const key = normalizedName.toLowerCase();
+        const index = drafts.findIndex((entry) => entry.name.toLowerCase() === key);
+
+        if (index >= 0) {
+          drafts[index] = {
+            ...drafts[index],
+            name: normalizedName,
+            description: normalizedDescription || drafts[index].description || "",
+            color: normalizedColor,
+            symbol: normalizedSymbol,
+          };
+        } else {
+          drafts.push({
+            name: normalizedName,
+            description: normalizedDescription,
+            color: normalizedColor,
+            symbol: normalizedSymbol,
+          });
         }
+
+        setState({ draftFolders: drafts });
       }
 
       function setCaptureHint(text, tone = "neutral") {
@@ -235,534 +364,359 @@ export function createHomePage({ store, apiClient }) {
         setState({ toastTimer });
       }
 
-      function renderAnswer(text, citations = [], usedCitationLabels = []) {
-        if (!els.answerOutput) return;
-        const normalized = String(text || "").trim() || "No answer.";
-        const knownLabels = new Set(citations.map((entry, index) => normalizeCitation(entry, index).label));
-        const usedLabels = new Set(usedCitationLabels.map((label) => normalizeCitationLabel(label)).filter(Boolean));
-
-        els.answerOutput.innerHTML = "";
-        const tokenPattern = /\[(N?\d+)\]/gi;
-        const fragment = document.createDocumentFragment();
-        let cursor = 0;
-
-        for (const match of normalized.matchAll(tokenPattern)) {
-          const index = match.index ?? 0;
-          if (index > cursor) {
-            fragment.append(document.createTextNode(normalized.slice(cursor, index)));
-          }
-
-          const raw = String(match[1] || "").toUpperCase();
-          const label = raw.startsWith("N") ? normalizeCitationLabel(raw) : normalizeCitationLabel(`N${raw}`);
-
-          if (label && knownLabels.has(label)) {
-            const chip = document.createElement("button");
-            chip.type = "button";
-            chip.className = "citation-chip";
-            if (usedLabels.has(label)) {
-              chip.classList.add("is-active");
-            }
-            chip.textContent = `[${label}]`;
-            chip.addEventListener("click", () => {
-              focusCitationCard(label);
-            });
-            fragment.append(chip);
-          } else {
-            fragment.append(document.createTextNode(match[0]));
-          }
-
-          cursor = index + match[0].length;
-        }
-
-        if (cursor < normalized.length) {
-          fragment.append(document.createTextNode(normalized.slice(cursor)));
-        }
-
-        els.answerOutput.append(fragment);
+      function setSearchExpanded(expanded) {
+        const isExpanded = Boolean(expanded);
+        els.topbarSearchWrap?.classList.toggle("is-open", isExpanded);
+        els.topbarSearchWrap?.setAttribute("data-expanded", isExpanded ? "true" : "false");
+        els.topbarSearchToggle?.setAttribute("aria-expanded", isExpanded ? "true" : "false");
       }
 
-      function renderAnswerMeta({ mode = "", citations = [], usedCitationLabels = [] } = {}) {
-        if (!els.answerMeta) return;
-        if (!mode) {
-          els.answerMeta.textContent = "";
-          return;
-        }
-
-        const usedCount = usedCitationLabels.length || citations.length;
-        const citationCount = citations.length;
-        const usedLabel = usedCount === 1 ? "source" : "sources";
-        const citationLabel = citationCount === 1 ? "card" : "cards";
-        els.answerMeta.textContent = `${mode} mode • ${usedCount} referenced ${usedLabel} • ${citationCount} citation ${citationLabel}`;
-      }
-
-      function focusCitationCard(label) {
-        if (!els.citationList) return;
-        const target = els.citationList.querySelector(`.citation-item[data-label="${label}"]`);
-        if (!target) return;
-
-        target.scrollIntoView({ behavior: "smooth", block: "center" });
-        target.classList.remove("flash-highlight");
-        void target.offsetWidth;
-        target.classList.add("flash-highlight");
-      }
-
-      function renderCitations(citations = [], usedCitationLabels = []) {
-        if (!els.citationList) return;
-        els.citationList.innerHTML = "";
-
-        if (!citations.length) {
-          const empty = document.createElement("p");
-          empty.className = "note-content";
-          empty.textContent = "No citations.";
-          els.citationList.appendChild(empty);
-          return;
-        }
-
-        const usedLabels = new Set(usedCitationLabels.map((label) => normalizeCitationLabel(label)).filter(Boolean));
-
-        citations.forEach((entry, index) => {
-          const citation = normalizeCitation(entry, index);
-          const note = citation.note;
-
-          const card = document.createElement("article");
-          card.className = "citation-item";
-          card.dataset.label = citation.label;
-          if (usedLabels.has(citation.label)) {
-            card.classList.add("is-referenced");
-          }
-
-          const top = document.createElement("div");
-          top.className = "note-top";
-
-          const project = document.createElement("span");
-          project.className = "note-project";
-          project.textContent = `${citation.label} • ${note.project || "general"}`;
-
-          const score = document.createElement("span");
-          score.className = "note-score";
-          score.textContent = formatScore(citation.score);
-
-          top.append(project, score);
-          card.append(top);
-
-          if (note.summary) {
-            const summary = document.createElement("p");
-            summary.className = "note-summary";
-            summary.textContent = note.summary;
-            card.append(summary);
-          }
-
-          if (note.content) {
-            const content = document.createElement("p");
-            content.className = "note-content";
-            content.textContent = note.content;
-            card.append(content);
-          }
-
-          const meta = [];
-          if (note.sourceType) meta.push(note.sourceType);
-          if (note.createdAt) {
-            const created = new Date(note.createdAt);
-            if (!Number.isNaN(created.getTime())) {
-              meta.push(created.toLocaleString());
-            }
-          }
-
-          if (meta.length) {
-            const metaEl = document.createElement("p");
-            metaEl.className = "note-meta";
-            metaEl.textContent = meta.join(" • ");
-            card.append(metaEl);
-          }
-
-          if (note.sourceUrl) {
-            const sourceLink = document.createElement("a");
-            sourceLink.href = note.sourceUrl;
-            sourceLink.target = "_blank";
-            sourceLink.rel = "noreferrer noopener";
-            sourceLink.className = "note-meta";
-            sourceLink.textContent = compactUrl(note.sourceUrl, 52);
-            card.append(sourceLink);
-          }
-
-          if (note.imagePath) {
-            const img = document.createElement("img");
-            img.src = note.imagePath;
-            img.alt = "citation image";
-            img.className = "image-preview";
-            card.append(img);
-          }
-
-          els.citationList.appendChild(card);
-        });
+      function setFallbackHint(active) {
+        if (!els.foldersError) return;
+        els.foldersError.classList.toggle("hidden", !active);
       }
 
       function renderFolders() {
         if (!els.foldersList || !els.foldersEmpty) return;
         const state = getState();
-        const projectCounts = new Map();
+        const folderMap = new Map();
+
+        normalizeFolderDrafts(state.draftFolders).forEach((folder) => {
+          folderMap.set(folder.name.toLowerCase(), {
+            ...folder,
+            count: 0,
+          });
+        });
 
         state.notes.forEach((entry, index) => {
           const note = normalizeCitation(entry, index).note;
-          const project = note.project || "general";
-          projectCounts.set(project, (projectCounts.get(project) || 0) + 1);
+          const projectName = note.project || "General";
+          const key = String(projectName).toLowerCase();
+
+          if (!folderMap.has(key)) {
+            folderMap.set(key, {
+              name: projectName,
+              description: "",
+              color: fallbackColorForFolder(projectName),
+              symbol: "DOC",
+              count: 0,
+            });
+          }
+
+          const current = folderMap.get(key);
+          current.count += 1;
+          folderMap.set(key, current);
+        });
+
+        const folders = [...folderMap.values()].sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          return a.name.localeCompare(b.name);
         });
 
         els.foldersList.innerHTML = "";
-        if (!projectCounts.size) {
+        if (!folders.length) {
           els.foldersEmpty.classList.remove("hidden");
           return;
         }
 
         els.foldersEmpty.classList.add("hidden");
 
-        [...projectCounts.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 12)
-          .forEach(([projectName, count]) => {
-            const card = document.createElement("a");
-            card.className = "folder-pill";
-            card.href = `#/folder/${encodeURIComponent(projectName)}`;
-            card.innerHTML = `<span class="folder-pill-name">${projectName}</span><span class="folder-pill-count">${count}</span>`;
-            card.addEventListener("click", (event) => {
-              event.preventDefault();
-              navigate(`#/folder/${encodeURIComponent(projectName)}`);
-            });
-            els.foldersList.appendChild(card);
+        folders.slice(0, 40).forEach((folder) => {
+          const card = document.createElement("a");
+          card.className = "folder-pill";
+          card.href = `#/folder/${encodeURIComponent(folder.name)}`;
+          card.dataset.color = folder.color;
+          card.dataset.symbol = folder.symbol;
+
+          const top = document.createElement("div");
+          top.className = "folder-pill-top";
+
+          const symbolEl = document.createElement("span");
+          symbolEl.className = "folder-symbol-badge";
+          symbolEl.textContent = normalizeFolderSymbol(folder.symbol, "DOC");
+
+          const nameEl = document.createElement("span");
+          nameEl.className = "folder-pill-name";
+          nameEl.textContent = folder.name;
+
+          const countEl = document.createElement("span");
+          countEl.className = "folder-pill-count";
+          countEl.textContent = `${folder.count}`;
+
+          top.append(symbolEl, nameEl, countEl);
+
+          const descriptionEl = document.createElement("p");
+          descriptionEl.className = "folder-pill-desc";
+          descriptionEl.textContent = folder.description || "No description";
+
+          card.append(top, descriptionEl);
+
+          card.addEventListener("click", (event) => {
+            event.preventDefault();
+            navigate(`#/folder/${encodeURIComponent(folder.name)}`);
           });
-      }
 
-      function setStreamControlsOpen(isOpen) {
-        setState({ streamControlsOpen: Boolean(isOpen) });
-        if (!els.streamControls || !els.streamControlsBtn) return;
-        els.streamControls.classList.toggle("hidden", !isOpen);
-        els.streamControlsBtn.textContent = isOpen ? "Hide Controls" : "Filters & Sort";
-      }
-
-      function sortAndFilterItems(items) {
-        const filtered = [...(Array.isArray(items) ? items : [])].filter((item) => {
-          const note = noteForItem(item);
-          const requiredType = els.typeFilterSelect?.value || "";
-          return !requiredType || note.sourceType === requiredType;
+          els.foldersList.appendChild(card);
         });
-
-        const getTime = (item) => {
-          const note = noteForItem(item);
-          const time = note.createdAt ? new Date(note.createdAt).getTime() : 0;
-          return Number.isFinite(time) ? time : 0;
-        };
-
-        switch (els.sortSelect?.value) {
-          case "oldest":
-            filtered.sort((a, b) => getTime(a) - getTime(b));
-            break;
-          case "score":
-            filtered.sort((a, b) => {
-              const scoreDelta = (normalizeCitation(b, 0).score || 0) - (normalizeCitation(a, 0).score || 0);
-              if (scoreDelta !== 0) return scoreDelta;
-              return getTime(b) - getTime(a);
-            });
-            break;
-          case "newest":
-          default:
-            filtered.sort((a, b) => getTime(b) - getTime(a));
-            break;
-        }
-
-        return filtered;
       }
 
-      function renderNotes(items) {
-        if (!els.notesList || !els.noteTemplate) return;
+      function renderRecent(items) {
+        if (!els.notesList) return;
         els.notesList.innerHTML = "";
-        setState({ renderedItems: items });
 
-        if (!Array.isArray(items) || items.length === 0) {
+        const list = Array.isArray(items) ? items.slice(0, 32) : [];
+        if (!list.length) {
           const empty = document.createElement("p");
-          empty.className = "note-content";
-          empty.textContent = getState().notes.length ? "No memories match these filters." : "No memories yet.";
+          empty.className = "ui-empty";
+          empty.textContent = "No items yet.";
           els.notesList.appendChild(empty);
           return;
         }
 
-        const showScores = (els.sortSelect?.value || "") === "score" || Boolean((els.searchInput?.value || "").trim());
+        const accessedSet = new Set(getState().accessedIds || []);
 
-        items.forEach((entry, index) => {
-          const citation = normalizeCitation(entry, index);
-          const note = citation.note;
-          const fragment = els.noteTemplate.content.cloneNode(true);
-          const card = fragment.querySelector(".stream-mini-card");
-          card.dataset.noteIndex = String(index);
+        list.forEach((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "recent-item";
+          item.title = buildNoteTitle(note);
 
-          fragment.querySelector(".mini-title").textContent = buildNoteTitle(note);
-          fragment.querySelector(".mini-content").textContent = buildContentPreview(note);
-          fragment.querySelector(".mini-summary").textContent = buildSummaryPreview(note);
+          const icon = document.createElement("span");
+          icon.className = "recent-item-icon";
+          icon.dataset.type = iconTypeFor(note);
 
-          const scoreEl = fragment.querySelector(".mini-score");
-          const scoreLabel = showScores ? formatScore(citation.score) : "";
-          scoreEl.textContent = scoreLabel;
-          scoreEl.classList.toggle("hidden", !scoreLabel);
+          const label = document.createElement("span");
+          label.className = "recent-item-label";
+          label.textContent = buildNoteTitle(note);
 
-          renderTags(fragment.querySelector(".note-tags"), note.tags || []);
-          fragment.querySelector(".mini-meta").textContent = formatMeta(note);
+          const states = document.createElement("span");
+          states.className = "recent-item-states";
 
-          const image = fragment.querySelector(".mini-image");
-          if (note.imagePath) {
-            image.src = note.imagePath;
-            image.classList.remove("hidden");
-          } else {
-            image.classList.add("hidden");
-          }
+          const processedDot = document.createElement("span");
+          processedDot.className = `state-dot ${isProcessedNote(note) ? "is-processed" : "is-pending"}`;
+          processedDot.title = isProcessedNote(note) ? "Processed" : "Pending processing";
 
-          els.notesList.appendChild(fragment);
+          const accessedDot = document.createElement("span");
+          const accessed = accessedSet.has(String(note.id || ""));
+          accessedDot.className = `state-dot is-accessed${accessed ? "" : " hidden"}`;
+          accessedDot.title = "Opened";
+
+          states.append(processedDot, accessedDot);
+          item.append(icon, label, states);
+
+          item.addEventListener("click", () => {
+            openItemModal(els, note);
+            markAccessed(note.id);
+            renderRecent(getState().notes);
+          });
+
+          els.notesList.appendChild(item);
         });
       }
 
-      function renderStream() {
-        renderNotes(sortAndFilterItems(getState().notes));
-        renderFolders();
-      }
+      function renderProjectOptions() {
+        if (!els.projectSelect) return;
 
-      function openMemoryModal(item) {
-        if (!item || !els.memoryModal) return;
-        setState({ activeModalItem: item });
-        const citation = normalizeCitation(item, 0);
-        const note = citation.note;
+        const state = getState();
+        const folderNames = new Set();
 
-        els.memoryModalTitle.textContent = buildNoteTitle(note);
-        els.memoryModalContent.textContent = note.content || "No raw content saved for this memory.";
-        els.memoryModalSummary.textContent = buildSummaryPreview(note, 520);
-        renderTags(els.memoryModalTags, note.tags || []);
-        els.memoryModalMeta.textContent = formatMeta(note, true);
+        normalizeFolderDrafts(state.draftFolders).forEach((folder) => {
+          folderNames.add(folder.name);
+        });
 
-        if (note.imagePath) {
-          els.memoryModalImage.src = note.imagePath;
-          els.memoryModalImage.classList.remove("hidden");
-        } else {
-          els.memoryModalImage.classList.add("hidden");
-        }
-
-        if (note.sourceUrl) {
-          els.memoryModalSource.href = note.sourceUrl;
-          els.memoryModalSource.textContent = `Source: ${formatSourceText(note.sourceUrl)}`;
-          els.memoryModalSource.classList.remove("hidden");
-        } else {
-          els.memoryModalSource.classList.add("hidden");
-        }
-
-        els.memoryModal.classList.remove("hidden");
-        els.memoryModal.setAttribute("aria-hidden", "false");
-        document.body.classList.add("modal-open");
-        els.memoryModalClose.focus();
-      }
-
-      function closeMemoryModal() {
-        if (!els.memoryModal || els.memoryModal.classList.contains("hidden")) return;
-        setState({ activeModalItem: null });
-        els.memoryModal.classList.add("hidden");
-        els.memoryModal.setAttribute("aria-hidden", "true");
-        document.body.classList.remove("modal-open");
-      }
-
-      function openNoteFromCardTarget(target) {
-        if (!(target instanceof Element)) return;
-        const card = target.closest(".stream-mini-card");
-        if (!card) return;
-        const index = Number(card.dataset.noteIndex);
-        if (!Number.isFinite(index)) return;
-        openMemoryModal(getState().renderedItems[index]);
-      }
-
-      async function initStatus() {
-        try {
-          const health = await apiClient.health();
-          if (!isMounted) return;
-
-          if (health.openaiConfigured === true) {
-            setStatus("OpenAI connected");
-          } else if (health.openaiConfigured === false) {
-            setStatus("OpenAI key missing • heuristic mode", "warn");
-          } else {
-            setStatus("Server connected • model status unknown", "warn");
+        state.notes.forEach((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          const projectName = String(note.project || "").trim();
+          if (projectName) {
+            folderNames.add(projectName);
           }
-        } catch {
-          if (!isMounted) return;
-          setStatus("Server status unavailable", "warn");
+        });
+
+        const options = [...folderNames].sort((a, b) => a.localeCompare(b));
+        const currentValue = String(els.projectSelect.value || els.projectInput?.value || "").trim();
+
+        els.projectSelect.innerHTML = '<option value="">Folder</option>';
+        options.forEach((name) => {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          els.projectSelect.append(option);
+        });
+
+        if (currentValue && options.includes(currentValue)) {
+          els.projectSelect.value = currentValue;
+        } else if (currentValue) {
+          const option = document.createElement("option");
+          option.value = currentValue;
+          option.textContent = currentValue;
+          els.projectSelect.append(option);
+          els.projectSelect.value = currentValue;
+        } else {
+          els.projectSelect.value = "";
         }
+      }
+
+      function renderView() {
+        const items = getState().notes;
+        renderFolders();
+        renderRecent(items);
+        renderProjectOptions();
       }
 
       async function refreshNotes() {
-        const query = (els.searchInput?.value || "").trim();
-        const project = (els.projectFilterInput?.value || "").trim();
+        const query = (els.topbarSearchInput?.value || "").trim();
 
         try {
-          const data = await apiClient.fetchNotes({ query, project, limit: 80 });
+          const data = await apiClient.fetchNotes({ query, limit: 120 });
           if (!isMounted) return;
           setState({ notes: data.items });
-          renderStream();
-          setAdapterFallback(false);
+          setFallbackHint(false);
+          renderView();
         } catch (error) {
           if (!isMounted) return;
           const message = conciseTechnicalError(error, "Notes endpoint unavailable");
-          setAdapterFallback(true, `${message}. Showing local demo data.`);
-          const fallback = filterAndRankMockNotes(getState().mockNotes, { query, project, limit: 80 });
+          const fallback = filterAndRankMockNotes(getState().mockNotes, { query, limit: 120 });
           setState({ notes: fallback });
-          renderStream();
+          setFallbackHint(true);
+          renderView();
           apiClient.adapterLog("notes_fallback", message);
         }
       }
 
-      async function fileToDataUrl(file) {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-      }
+      function clearAttachment() {
+        attachment = {
+          name: "",
+          imageDataUrl: null,
+        };
 
-      function clearImageSelection() {
-        setState({ imageDataUrl: null, imageName: "" });
-        if (els.imageInput) els.imageInput.value = "";
-        if (els.imageName) {
-          els.imageName.textContent = "";
-          els.imageName.classList.add("hidden");
+        if (els.fileInput) {
+          els.fileInput.value = "";
         }
-        if (els.imagePreview) {
-          els.imagePreview.src = "";
-          els.imagePreview.classList.add("hidden");
+
+        if (els.selectedFileName) {
+          els.selectedFileName.textContent = "";
         }
-        els.removeImageBtn?.classList.add("hidden");
+
+        els.selectedFilePill?.classList.add("hidden");
       }
 
-      function clearCaptureForm() {
-        if (els.contentInput) els.contentInput.value = "";
-        clearImageSelection();
+      function setAttachment(fileName, imageDataUrl = null) {
+        attachment = {
+          name: fileName,
+          imageDataUrl,
+        };
+
+        if (els.selectedFileName) {
+          els.selectedFileName.textContent = fileName;
+        }
+
+        els.selectedFilePill?.classList.remove("hidden");
       }
 
-      async function setImageFromFile(file) {
+      function getSelectedFolderColor() {
+        const selected = els.folderColorRow?.querySelector(".folder-color-choice.is-selected");
+        return normalizeFolderColor(selected?.dataset.color, "sky");
+      }
+
+      function getSelectedFolderSymbol() {
+        const selected = els.folderSymbolRow?.querySelector(".folder-symbol-choice.is-selected");
+        return normalizeFolderSymbol(selected?.dataset.symbol, "DOC");
+      }
+
+      on(els.topbarSearchToggle, "click", () => {
+        const expanded = els.topbarSearchWrap?.classList.contains("is-open");
+        setSearchExpanded(!expanded);
+        if (!expanded) {
+          els.topbarSearchInput?.focus();
+        }
+      });
+
+      on(els.topbarSearchInput, "keydown", async (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        await refreshNotes();
+      });
+
+      on(mountNode, "click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        const insideSearch = els.topbarSearchWrap?.contains(target);
+        if (!insideSearch && !(els.topbarSearchInput?.value || "").trim()) {
+          setSearchExpanded(false);
+        }
+      });
+
+      on(els.attachmentToggle, "click", () => {
+        els.fileInput?.click();
+      });
+
+      on(els.fileInput, "change", async () => {
+        const file = els.fileInput?.files?.[0];
         if (!file) return;
-        if (!String(file.type || "").startsWith("image/")) {
-          setCaptureHint("That file is not an image yet. Try PNG, JPG, WEBP, or GIF.", "warn");
+
+        if (String(file.type || "").startsWith("image/")) {
+          try {
+            const imageDataUrl = await fileToDataUrl(file);
+            setAttachment(file.name || "image", imageDataUrl);
+          } catch (error) {
+            setCaptureHint(conciseTechnicalError(error, "Image read failed"), "warn");
+            showToast("Image read failed", "error");
+          }
           return;
         }
 
-        const imageDataUrl = await fileToDataUrl(file);
-        setState({
-          imageDataUrl,
-          imageName: file.name || "image",
-        });
-
-        if (els.imagePreview) {
-          els.imagePreview.src = imageDataUrl;
-          els.imagePreview.classList.remove("hidden");
-        }
-        if (els.imageName) {
-          els.imageName.textContent = file.name || "image";
-          els.imageName.classList.remove("hidden");
-        }
-        els.removeImageBtn?.classList.remove("hidden");
-        setCaptureHint("Image attached. Add optional text, then save.");
-      }
-
-      on(els.imagePickerBtn, "click", () => {
-        els.imageInput?.click();
+        setAttachment(file.name || "file", null);
       });
 
-      on(els.composerFileLink, "click", () => {
-        els.imageInput?.click();
+      on(els.clearFileBtn, "click", () => {
+        clearAttachment();
       });
 
-      on(els.removeImageBtn, "click", () => {
-        clearImageSelection();
-        setCaptureHint("Image removed. Paste text, a URL, or drop another image.");
-      });
-
-      on(els.imageInput, "change", async () => {
-        const file = els.imageInput?.files?.[0];
-        if (!file) return;
-        try {
-          await setImageFromFile(file);
-        } catch (error) {
-          setCaptureHint(conciseTechnicalError(error, "Image read failed"), "warn");
-          showToast("Image read failed", "error");
-        }
-      });
-
-      ["dragenter", "dragover"].forEach((eventName) => {
-        on(els.imageDropZone, eventName, (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          els.imageDropZone?.classList.add("is-dragging");
-        });
-      });
-
-      ["dragleave", "dragend", "drop"].forEach((eventName) => {
-        on(els.imageDropZone, eventName, (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          els.imageDropZone?.classList.remove("is-dragging");
-        });
-      });
-
-      on(els.imageDropZone, "drop", async (event) => {
-        const file = event.dataTransfer?.files?.[0];
-        if (!file) return;
-        try {
-          await setImageFromFile(file);
-        } catch (error) {
-          setCaptureHint(conciseTechnicalError(error, "Image read failed"), "warn");
-          showToast("Image read failed", "error");
-        }
-      });
-
-      on(els.imageDropZone, "click", (event) => {
-        if (event.target.closest("button")) return;
-        els.imageInput?.click();
-      });
-
-      on(els.imageDropZone, "keydown", (event) => {
-        if (event.target !== els.imageDropZone) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        els.imageInput?.click();
+      on(els.projectSelect, "change", () => {
+        if (!els.projectInput) return;
+        els.projectInput.value = String(els.projectSelect?.value || "").trim();
       });
 
       on(els.captureForm, "submit", async (event) => {
         event.preventDefault();
         if (getState().loading) return;
 
-        const content = (els.contentInput?.value || "").trim();
-        const project = (els.projectInput?.value || "").trim();
-        if (!content && !getState().imageDataUrl) {
-          setCaptureHint("Add a note, paste a link, or drop an image first.", "warn");
-          showToast("Add a note, link, or image first");
+        const rawContent = (els.contentInput?.value || "").trim();
+        const project = String(els.projectSelect?.value || els.projectInput?.value || "").trim();
+        const content = rawContent || (attachment.name ? `File: ${attachment.name}` : "");
+
+        if (!content && !attachment.imageDataUrl) {
+          setCaptureHint("Add text, link, image, or file.", "warn");
+          showToast("Add content first", "error");
           els.contentInput?.focus();
           return;
         }
 
-        const inferred = inferCaptureType(content, getState().imageDataUrl);
+        const inferred = inferCaptureType(content, attachment.imageDataUrl);
         const payload = {
           sourceType: inferred.sourceType,
           content,
           sourceUrl: inferred.sourceUrl,
           project,
-          imageDataUrl: getState().imageDataUrl,
+          imageDataUrl: attachment.imageDataUrl,
         };
 
         setState({ loading: true });
         if (els.saveBtn) {
           els.saveBtn.disabled = true;
-          els.saveBtn.textContent = "Saving...";
         }
 
         try {
           await apiClient.saveNote(payload);
           if (!isMounted) return;
 
-          clearCaptureForm();
-          setCaptureHint("Saved. Add another memory whenever you are ready.");
-          showToast("Memory saved");
+          if (els.contentInput) {
+            els.contentInput.value = "";
+          }
+          clearAttachment();
+          setCaptureHint("Saved.");
+          showToast("Item saved");
           await refreshNotes();
         } catch (error) {
           if (!isMounted) return;
@@ -776,18 +730,21 @@ export function createHomePage({ store, apiClient }) {
           } else {
             const nextMock = [buildLocalFallbackNote(payload), ...getState().mockNotes];
             setState({ mockNotes: nextMock });
-            clearCaptureForm();
-            setCaptureHint("Saved locally. Backend write is unavailable right now.", "warn");
+
+            if (els.contentInput) {
+              els.contentInput.value = "";
+            }
+            clearAttachment();
+            setCaptureHint("Saved locally.", "warn");
             showToast("Saved locally");
-            setAdapterFallback(true, `${message}. Saved locally for demo.`);
+            setFallbackHint(true);
 
             const fallback = filterAndRankMockNotes(nextMock, {
-              query: (els.searchInput?.value || "").trim(),
-              project: (els.projectFilterInput?.value || "").trim(),
-              limit: 80,
+              query: (els.topbarSearchInput?.value || "").trim(),
+              limit: 120,
             });
             setState({ notes: fallback });
-            renderStream();
+            renderView();
             apiClient.adapterLog("save_fallback", message);
           }
         } finally {
@@ -795,134 +752,89 @@ export function createHomePage({ store, apiClient }) {
           setState({ loading: false });
           if (els.saveBtn) {
             els.saveBtn.disabled = false;
-            els.saveBtn.textContent = "Save Memory";
           }
         }
-      });
-
-      on(els.streamControlsBtn, "click", () => {
-        setStreamControlsOpen(!getState().streamControlsOpen);
       });
 
       on(els.refreshBtn, "click", async () => {
         await refreshNotes();
       });
 
-      on(els.searchBtn, "click", async () => {
-        await refreshNotes();
+      on(els.newFolderBtn, "click", () => {
+        openFolderModal(els, "sky", "DOC");
       });
 
-      on(els.sortSelect, "change", () => {
-        renderStream();
+      on(els.folderColorRow, "click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const button = target.closest(".folder-color-choice");
+        if (!(button instanceof HTMLButtonElement)) return;
+
+        els.folderColorRow?.querySelectorAll(".folder-color-choice").forEach((entry) => {
+          const active = entry === button;
+          entry.classList.toggle("is-selected", active);
+          entry.setAttribute("aria-pressed", active ? "true" : "false");
+        });
       });
 
-      on(els.typeFilterSelect, "change", () => {
-        renderStream();
+      on(els.folderSymbolRow, "click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const button = target.closest(".folder-symbol-choice");
+        if (!(button instanceof HTMLButtonElement)) return;
+
+        els.folderSymbolRow?.querySelectorAll(".folder-symbol-choice").forEach((entry) => {
+          const active = entry === button;
+          entry.classList.toggle("is-selected", active);
+          entry.setAttribute("aria-pressed", active ? "true" : "false");
+        });
       });
 
-      on(els.searchInput, "keydown", async (event) => {
-        if (event.key !== "Enter") return;
+      on(els.folderForm, "submit", (event) => {
         event.preventDefault();
-        await refreshNotes();
+
+        const name = String(els.folderNameInput?.value || "").trim();
+        if (!name) {
+          els.folderNameInput?.focus();
+          return;
+        }
+
+        const description = String(els.folderDescriptionInput?.value || "").trim();
+        const color = getSelectedFolderColor();
+        const symbol = getSelectedFolderSymbol();
+
+        upsertDraftFolder({ name, description, color, symbol });
+        renderFolders();
+        renderProjectOptions();
+        closeFolderModal(els);
+        navigate(`#/folder/${encodeURIComponent(name)}`);
       });
 
-      on(els.projectFilterInput, "keydown", async (event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        await refreshNotes();
+      on(els.folderModalClose, "click", () => {
+        closeFolderModal(els);
       });
 
-      on(els.notesList, "click", (event) => {
-        openNoteFromCardTarget(event.target);
+      on(els.folderModalBackdrop, "click", () => {
+        closeFolderModal(els);
       });
 
-      on(els.notesList, "keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        openNoteFromCardTarget(event.target);
+      on(els.itemModalClose, "click", () => {
+        closeItemModal(els);
       });
 
-      on(els.memoryModalClose, "click", () => {
-        closeMemoryModal();
-      });
-
-      on(els.memoryModalBackdrop, "click", () => {
-        closeMemoryModal();
+      on(els.itemModalBackdrop, "click", () => {
+        closeItemModal(els);
       });
 
       on(document, "keydown", (event) => {
-        if (event.key === "Escape") {
-          closeMemoryModal();
-        }
+        if (event.key !== "Escape") return;
+        closeItemModal(els);
+        closeFolderModal(els);
       });
 
-      on(els.chatForm, "submit", async (event) => {
-        event.preventDefault();
-        const question = (els.questionInput?.value || "").trim();
-        if (!question) return;
-
-        renderAnswer("Thinking...");
-        renderAnswerMeta({ mode: "loading", citations: [], usedCitationLabels: [] });
-
-        try {
-          const data = await apiClient.ask({
-            question,
-            project: (els.projectFilterInput?.value || "").trim(),
-          });
-          if (!isMounted) return;
-
-          renderCitations(data.citations, data.usedCitationLabels);
-          renderAnswer(data.text || "No answer", data.citations, data.usedCitationLabels);
-          renderAnswerMeta({ mode: data.mode || "unknown", citations: data.citations, usedCitationLabels: data.usedCitationLabels });
-        } catch (error) {
-          if (!isMounted) return;
-
-          const message = conciseTechnicalError(error, "Chat endpoint unavailable");
-          const fallback = buildMockChatAnswer(getState().mockNotes, question, (els.projectFilterInput?.value || "").trim());
-          renderCitations(fallback.citations, fallback.usedCitationLabels);
-          renderAnswer(`${fallback.text}\n\n(${message})`, fallback.citations, fallback.usedCitationLabels);
-          renderAnswerMeta({ mode: "fallback", citations: fallback.citations, usedCitationLabels: fallback.usedCitationLabels });
-          setAdapterFallback(true, `${message}. Using local answer fallback.`);
-          apiClient.adapterLog("chat_fallback", message);
-        }
-      });
-
-      on(els.contextBtn, "click", async () => {
-        const task = window.prompt("Task for context brief", "Summarize current project decisions and next steps");
-        if (!task) return;
-
-        renderAnswer("Generating context brief...");
-        renderAnswerMeta({ mode: "loading", citations: [], usedCitationLabels: [] });
-
-        try {
-          const data = await apiClient.context({
-            task,
-            project: (els.projectFilterInput?.value || "").trim(),
-          });
-          if (!isMounted) return;
-
-          renderCitations(data.citations, data.usedCitationLabels);
-          renderAnswer(data.text || "No context generated", data.citations, data.usedCitationLabels);
-          renderAnswerMeta({ mode: data.mode || "unknown", citations: data.citations, usedCitationLabels: data.usedCitationLabels });
-        } catch (error) {
-          if (!isMounted) return;
-
-          const message = conciseTechnicalError(error, "Context endpoint unavailable");
-          const fallback = buildMockContext(getState().mockNotes, task, (els.projectFilterInput?.value || "").trim());
-          renderCitations(fallback.citations, fallback.usedCitationLabels);
-          renderAnswer(`${fallback.text}\n\n(${message})`, fallback.citations, fallback.usedCitationLabels);
-          renderAnswerMeta({ mode: "fallback", citations: fallback.citations, usedCitationLabels: fallback.usedCitationLabels });
-          setAdapterFallback(true, `${message}. Using local context fallback.`);
-          apiClient.adapterLog("context_fallback", message);
-        }
-      });
-
-      setStreamControlsOpen(false);
-      setCaptureHint("Tip: keep it minimal. Paste text, a URL, or an image and we infer the rest.");
-      clearImageSelection();
-      renderAnswer("No question yet.");
-      renderAnswerMeta({ mode: "", citations: [], usedCitationLabels: [] });
-      await initStatus();
+      setSearchExpanded(false);
+      clearAttachment();
+      setCaptureHint("");
       await refreshNotes();
 
       return () => {
@@ -932,7 +844,8 @@ export function createHomePage({ store, apiClient }) {
           clearTimeout(state.toastTimer);
           setState({ toastTimer: null });
         }
-        closeMemoryModal();
+        closeItemModal(els);
+        closeFolderModal(els);
         disposers.forEach((dispose) => {
           dispose();
         });

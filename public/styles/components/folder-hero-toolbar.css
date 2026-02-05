@@ -1,5 +1,89 @@
-/* Placeholder: folder hero + toolbar visuals are owned by codex/wt-ui-folder-hero-toolbar. */
-.folder-hero-toolbar-card {
+.folder-hero-toolbar {
   display: grid;
-  gap: 8px;
+  gap: 4px;
+  padding: 4px 0 8px;
+}
+
+.folder-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+}
+
+.folder-back-link {
+  font-size: 0.88rem;
+  font-weight: 500;
+  text-decoration: none;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.folder-back-link:hover,
+.folder-back-link:focus-visible {
+  color: var(--ink);
+  background: #f4f4f4;
+}
+
+.folder-breadcrumb-chevron {
+  color: #d0d5dd;
+  flex-shrink: 0;
+}
+
+.folder-breadcrumb-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: #f4f4f4;
+}
+
+.folder-color-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: #8fb7ff;
+}
+
+.folder-color-dot[data-color="sky"] {
+  background: #8fb7ff;
+}
+
+.folder-color-dot[data-color="mint"] {
+  background: #5ec99a;
+}
+
+.folder-color-dot[data-color="sand"] {
+  background: #e0a840;
+}
+
+.folder-color-dot[data-color="rose"] {
+  background: #e8729a;
+}
+
+.folder-color-dot[data-color="violet"] {
+  background: #9b7cef;
+}
+
+.folder-color-dot[data-color="slate"] {
+  background: #7e92ad;
+}
+
+.folder-current-name {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.folder-current-desc {
+  margin: 0;
+  padding-left: 8px;
+  color: #667085;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }

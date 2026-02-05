@@ -120,7 +120,8 @@ async function handleApi(req, res, url) {
     const project = url.searchParams.get("project") || "";
     const limit = Number(url.searchParams.get("limit") || "20");
 
-    const results = query
+    const hasScopedSearch = Boolean(query.trim()) || Boolean(project.trim());
+    const results = hasScopedSearch
       ? await searchMemories({ query, project, limit })
       : (await listRecentMemories(limit)).map((note, index) => ({
           rank: index + 1,

@@ -10,6 +10,8 @@ const DEFAULT_STATE = {
   mockNotes: createMockSeedNotes(),
   streamControlsOpen: false,
   activeModalItem: null,
+  accessedIds: [],
+  draftFolders: [],
   toastTimer: null,
 };
 

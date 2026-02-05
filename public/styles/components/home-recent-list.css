@@ -1,5 +1,132 @@
-/* Placeholder: home recent list visuals are owned by codex/wt-ui-home-recent-list. */
-.stream-card {
+.recent-sidebar {
+  min-width: 0;
+}
+
+.recent-sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.recent-sidebar-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.recent-refresh-btn {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--muted);
+  transition: background 150ms ease, color 150ms ease, transform 100ms ease;
+}
+
+.recent-refresh-btn:hover {
+  color: var(--ink);
+  background: #f4f4f4;
+}
+
+.recent-refresh-btn:active {
+  transform: scale(0.94);
+}
+
+.recent-refresh-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.recent-list {
   display: grid;
-  gap: 10px;
+  gap: 2px;
+  max-height: min(66vh, 680px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.recent-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.recent-item:hover,
+.recent-item:focus-visible {
+  background: #f4f4f4;
+}
+
+.recent-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  outline-offset: 1px;
+}
+
+.recent-item-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: #d8e6ff;
+}
+
+.recent-item-icon[data-type="image"] {
+  background: #ffd9e7;
+}
+
+.recent-item-icon[data-type="link"] {
+  background: #d8f1e5;
+}
+
+.recent-item-icon[data-type="file"] {
+  background: #f1e4ff;
+}
+
+.recent-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.88rem;
+  color: #344054;
+}
+
+.recent-item-states {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.state-dot.is-processed {
+  background: #10b981;
+}
+
+.state-dot.is-pending {
+  background: #d0d5dd;
+}
+
+.state-dot.is-accessed {
+  background: #2563eb;
 }

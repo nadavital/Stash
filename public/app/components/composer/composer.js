@@ -1,29 +1,38 @@
 export function renderComposer({ mode = "home" } = {}) {
-  const placeholder = mode === "folder" ? "Add memory to this folder..." : "Paste a thought, URL, or update...";
+  const placeholder = mode === "folder" ? "Add item to this folder" : "Add text, link, image, or file";
 
   return `
-    <article class="card composer-shell" data-component="composer">
+    <section class="composer-shell" data-component="composer">
       <form id="capture-form" class="composer-form">
-        <div class="composer-row">
-          <button id="image-picker-btn" class="btn subtle composer-plus" type="button" aria-label="Attach image">+</button>
-          <input id="project-input" name="project" placeholder="project (optional)" />
-          <input id="content-input" name="content" placeholder="${placeholder}" />
-          <button class="btn" id="save-btn" type="submit">Save Memory</button>
+        <input id="project-input" name="project" type="hidden" value="" />
+
+        <div class="composer-input-shell">
+          <button id="attachment-toggle" class="composer-plus" type="button" aria-label="Choose file">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          <select id="project-select" class="composer-project-select" aria-label="Choose folder">
+            <option value="">Folder</option>
+          </select>
+          <textarea id="content-input" name="content" rows="1" placeholder="${placeholder}"></textarea>
+
+          <span id="selected-file-pill" class="composer-file-pill hidden">
+            <span id="selected-file-name" class="composer-file-name"></span>
+            <button id="clear-file-btn" class="composer-file-clear" type="button" aria-label="Remove selected file">&times;</button>
+          </span>
+
+          <button class="composer-send" id="save-btn" type="submit" aria-label="Save item">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="19" x2="12" y2="5"/>
+              <polyline points="5 12 12 5 19 12"/>
+            </svg>
+          </button>
         </div>
 
-        <div id="image-drop-zone" class="image-drop-zone" role="button" tabindex="0" aria-label="Image upload zone">
-          <input id="image-input" type="file" accept="image/*" class="visually-hidden" />
-          <p class="image-drop-copy">
-            Drag and drop an image, or
-            <button id="composer-file-link" class="inline-btn" type="button">choose a file</button>
-          </p>
-          <p id="image-name" class="image-name hidden"></p>
-          <img id="image-preview" alt="image preview" class="image-preview hidden" />
-          <button id="remove-image-btn" class="btn subtle small hidden" type="button">Remove image</button>
-        </div>
-
-        <p id="capture-hint" class="capture-hint">Tip: keep it minimal. Paste text, a URL, or an image and we infer the rest.</p>
+        <input id="file-input" type="file" class="visually-hidden" />
+        <p id="capture-hint" class="capture-hint" aria-live="polite"></p>
       </form>
-    </article>
+    </section>
   `;
 }

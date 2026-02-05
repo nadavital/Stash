@@ -1,5 +1,141 @@
-/* Placeholder: folder item grid visuals are owned by codex/wt-ui-folder-item-grid. */
-.folder-item-grid-card {
+.folder-item-grid {
+  min-height: 0;
+}
+
+.folder-items-grid {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 14px;
+}
+
+.folder-file-tile {
+  border: 1px solid #eaecf0;
+  background: #ffffff;
+  border-radius: 14px;
+  min-height: 164px;
+  padding: 14px 14px 14px 18px;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.folder-file-tile::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: #d0d5dd;
+  transition: background 180ms ease;
+}
+
+.folder-file-tile[data-type="image"]::before {
+  background: #f472b6;
+}
+
+.folder-file-tile[data-type="link"]::before {
+  background: #34d399;
+}
+
+.folder-file-tile[data-type="file"]::before {
+  background: #a78bfa;
+}
+
+.folder-file-tile[data-type="text"]::before {
+  background: #60a5fa;
+}
+
+.folder-file-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.1);
+  border-color: #d0d5dd;
+}
+
+.folder-file-tile:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 2px;
+}
+
+.folder-file-type {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 22px;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+}
+
+.folder-file-tile[data-type="text"] .folder-file-type {
+  background: rgba(96, 165, 250, 0.1);
+  color: #3b82f6;
+}
+
+.folder-file-tile[data-type="image"] .folder-file-type {
+  background: rgba(244, 114, 182, 0.1);
+  color: #ec4899;
+}
+
+.folder-file-tile[data-type="link"] .folder-file-type {
+  background: rgba(52, 211, 153, 0.1);
+  color: #059669;
+}
+
+.folder-file-tile[data-type="file"] .folder-file-type {
+  background: rgba(167, 139, 250, 0.1);
+  color: #7c3aed;
+}
+
+.folder-file-title {
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: var(--ink);
+  font-weight: 620;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.folder-file-preview {
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  flex: 1;
+}
+
+.folder-file-meta {
+  margin: auto 0 0;
+  padding-top: 8px;
+  color: #98a2b3;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+}
+
+.folder-file-state {
+  margin: 4px 0 0;
+  color: #98a2b3;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 680px) {
+  .folder-items-grid {
+    grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));
+  }
 }

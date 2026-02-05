@@ -69,3 +69,13 @@ The build is "done enough" when:
 - MCP tools can read/write memory.
 - OpenClaw bridge can read/write memory.
 - README instructions are accurate and runnable.
+
+## Frontend Coordination Rules
+
+For frontend work in parallel worktrees:
+
+1. Use the design skill at `/Users/nadav/Desktop/Hackathon/skills/project-memory-openai-ui/SKILL.md`.
+2. Follow `/Users/nadav/Desktop/Hackathon/docs/frontend-worktrees-instructions.md`.
+3. Ask the user the workstream-specific question set before coding.
+4. Do not modify `src/` from frontend workstreams.
+5. Do not commit runtime DB artifacts (`data/*.db-*`).

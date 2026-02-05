@@ -16,20 +16,10 @@
   border: 1px solid #eaecf0;
   background: #ffffff;
   text-decoration: none;
-  padding: 14px 14px 14px 18px;
+  padding: 14px;
   color: var(--ink);
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
   overflow: hidden;
-}
-
-.home-folders-list .folder-pill::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: var(--folder-accent, #8fb7ff);
 }
 
 .home-folders-list .folder-pill[data-color="sky"] {
@@ -76,9 +66,25 @@
 
 .folder-pill-top {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
+}
+
+.home-folders-list .folder-pill-kind-icon {
+  width: 26px;
+  height: 22px;
+  border-radius: 6px;
+  background: #f3f5f9;
+  color: #667085;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.home-folders-list .folder-pill-kind-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .home-folders-list .folder-symbol-badge {

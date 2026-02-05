@@ -170,6 +170,18 @@ function parseGenericDataUrl(dataUrl) {
   };
 }
 
+function inferMimeFromFileName(fileName = "") {
+  const lower = String(fileName || "").toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".doc")) return "application/msword";
+  if (lower.endsWith(".txt")) return "text/plain";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
+  if (lower.endsWith(".csv")) return "text/csv";
+  if (lower.endsWith(".json")) return "application/json";
+  return "";
+}
+
 function maybeDecodeTextUpload(dataUrl, mime, fileName = "") {
   const normalizedMime = String(mime || "").toLowerCase();
   const isTextLikeMime =
@@ -563,6 +575,12 @@ export async function createMemory({
     uploadMime = uploadMime || parsedData.mime;
     uploadSize = parsedData.bytes.length;
   }
+  if (!uploadMime || uploadMime === "application/octet-stream") {
+    const inferred = inferMimeFromFileName(normalizedFileName);
+    if (inferred) {
+      uploadMime = inferred;
+    }
+  }
 
   const normalizedSourceType =
     normalizedFileDataUrl && uploadMime
@@ -661,7 +679,8 @@ export async function createMemory({
   });
 
   const enrichment = await buildEnrichment(note, linkPreview, uploadEnrichment);
-  const finalProject = requestedProject || enrichment.project;
+  const finalProject =
+    requestedProject || (normalizedSourceType === "file" ? "General" : enrichment.project);
   const embeddingText = noteTextForEmbedding(
     {
       ...note,

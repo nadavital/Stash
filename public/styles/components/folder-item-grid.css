@@ -13,7 +13,7 @@
   background: #ffffff;
   border-radius: 14px;
   min-height: 164px;
-  padding: 14px 14px 14px 18px;
+  padding: 14px;
   text-align: left;
   cursor: pointer;
   position: relative;
@@ -21,33 +21,6 @@
   display: flex;
   flex-direction: column;
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
-}
-
-.folder-file-tile::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: #d0d5dd;
-  transition: background 180ms ease;
-}
-
-.folder-file-tile[data-type="image"]::before {
-  background: #f472b6;
-}
-
-.folder-file-tile[data-type="link"]::before {
-  background: #34d399;
-}
-
-.folder-file-tile[data-type="file"]::before {
-  background: #a78bfa;
-}
-
-.folder-file-tile[data-type="text"]::before {
-  background: #60a5fa;
 }
 
 .folder-file-tile:hover {
@@ -64,7 +37,6 @@
 .folder-file-type {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
   min-height: 22px;
   border-radius: 6px;
   padding: 0 8px;
@@ -73,6 +45,29 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-family: var(--font-mono);
+}
+
+.folder-file-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.folder-file-kind-icon {
+  width: 24px;
+  height: 22px;
+  border-radius: 6px;
+  background: #f3f5f9;
+  color: #667085;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.folder-file-kind-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .folder-file-tile[data-type="text"] .folder-file-type {

@@ -12,9 +12,9 @@ export function renderTopbar({ query = "", showNewFolder = false } = {}) {
         ${
           showNewFolder
             ? `
-          <button class="topbar-folder-btn" id="topbar-new-folder-btn" type="button" aria-label="Create folder">
+          <button class="topbar-folder-btn" id="topbar-new-folder-btn" type="button" aria-label="Create folder or task">
             <svg class="topbar-folder-icon" viewBox="0 0 20 20" aria-hidden="true">
-              <path d="M2.8 5.2A2.2 2.2 0 0 1 5 3h2.4c.6 0 1.1.2 1.5.6l.9 1h5.2a2.2 2.2 0 0 1 2.2 2.2v6A2.2 2.2 0 0 1 15 15H5a2.2 2.2 0 0 1-2.2-2.2v-7.6Zm1.6 0v7.6c0 .3.3.6.6.6h10c.3 0 .6-.3.6-.6v-6a.6.6 0 0 0-.6-.6H9.5L8 4.9a.6.6 0 0 0-.5-.3H5a.6.6 0 0 0-.6.6Zm5 5a.8.8 0 0 1 .8-.8h1v-1a.8.8 0 1 1 1.6 0v1h1a.8.8 0 1 1 0 1.6h-1v1a.8.8 0 0 1-1.6 0v-1h-1a.8.8 0 0 1-.8-.8Z" />
+              <path d="M9 3h2v6h6v2h-6v6H9v-6H3V9h6z" />
             </svg>
           </button>
         `

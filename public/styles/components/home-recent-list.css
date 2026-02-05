@@ -1,5 +1,9 @@
 .recent-sidebar {
   min-width: 0;
+  height: min(66vh, 680px);
+  min-height: 360px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .recent-sidebar-head {
@@ -47,12 +51,35 @@
   fill: currentColor;
 }
 
-.recent-list {
+.recent-split {
   display: grid;
-  gap: 2px;
-  max-height: min(66vh, 680px);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-height: 0;
+}
+
+.recent-pane {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+}
+
+.recent-pane-list {
+  display: grid;
+  gap: 4px;
   overflow: auto;
   padding-right: 2px;
+  min-height: 0;
+}
+
+.recent-section-title {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #98a2b3;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .recent-item {
@@ -107,6 +134,32 @@
   color: #344054;
 }
 
+.recent-task-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.recent-task-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #f59e0b;
+}
+
+.recent-task-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84rem;
+  color: #344054;
+}
+
 .recent-item-states {
   display: inline-flex;
   align-items: center;
@@ -129,4 +182,11 @@
 
 .state-dot.is-accessed {
   background: #2563eb;
+}
+
+@media (max-width: 980px) {
+  .recent-sidebar {
+    height: min(62vh, 640px);
+    min-height: 320px;
+  }
 }

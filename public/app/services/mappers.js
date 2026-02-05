@@ -57,9 +57,15 @@ function normalizeTags(value) {
   return [];
 }
 
+function isGenericFilePlaceholder(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.startsWith("file:") || normalized.startsWith("uploaded file:");
+}
+
 export function normalizeSourceType(value) {
   const normalized = String(value || "text").toLowerCase().trim();
-  return ["text", "link", "image"].includes(normalized) ? normalized : "text";
+  return ["text", "link", "image", "file"].includes(normalized) ? normalized : "text";
 }
 
 export function normalizeCitationLabel(value) {
@@ -104,18 +110,43 @@ function pickPayloadArray(payload, keys = []) {
 
 export function normalizeNote(raw, index = 0) {
   const source = isRecord(raw) ? raw : {};
+  const rawContent = firstString([source.rawContent, source.raw_content], "");
+  const markdownContent = firstString([source.markdownContent, source.markdown_content], "");
+  const fileName = firstString([source.fileName, source.file_name], "");
+  const fileMime = firstString([source.fileMime, source.file_mime], "");
+  const fileSize = toFiniteNumber(source.fileSize ?? source.file_size, 0);
+  const metadata = isRecord(source.metadata)
+    ? source.metadata
+    : isRecord(source.metadata_json)
+      ? source.metadata_json
+      : {};
   const content = firstString([source.content, source.text, source.body, source.noteContent], "");
+  const title = firstString(
+    [source.title, source.noteTitle, source.note_title, source.documentTitle, source.document_title, source.name],
+    ""
+  );
   const sourceUrl = firstString([source.sourceUrl, source.source_url, source.url, source.link], "");
+  const summary = firstString(
+    [source.summary, source.aiSummary, source.excerpt, source.preview],
+    snippet(rawContent || markdownContent || content || sourceUrl, 160) || "(no summary)"
+  );
 
   return {
     id: firstString([source.id, source.noteId, source.note_id], `note-${Date.now()}-${index}`),
+    title,
     content: content || sourceUrl || "",
     sourceType: normalizeSourceType(source.sourceType || source.source_type || source.kind),
     sourceUrl,
     imagePath: firstString([source.imagePath, source.image_path, source.imageUrl, source.image_url], ""),
-    summary: firstString([source.summary, source.aiSummary, source.excerpt, source.preview], snippet(content || sourceUrl, 160) || "(no summary)"),
+    summary,
     tags: normalizeTags(source.tags ?? source.tagList ?? source.keywords ?? source.labels),
-    project: firstString([source.project, source.projectName, source.workspace], "general"),
+    project: firstString([source.project, source.projectName, source.workspace], "General"),
+    fileName,
+    fileMime,
+    fileSize,
+    rawContent,
+    markdownContent,
+    metadata,
     createdAt: normalizeDate(source.createdAt ?? source.created_at ?? source.timestamp ?? source.time),
     updatedAt: normalizeDate(source.updatedAt ?? source.updated_at ?? source.modifiedAt ?? source.modified_at),
   };
@@ -327,8 +358,12 @@ export function filterAndRankMockNotes(mockNotes, { query, project, limit = 40 }
 
 export function buildLocalFallbackNote(payload) {
   const now = new Date().toISOString();
-  const content = String(payload.content || "").trim() || String(payload.sourceUrl || "").trim() || "Image memory";
-  const project = String(payload.project || "").trim() || "general";
+  const content =
+    String(payload.content || "").trim() ||
+    (payload.fileName ? `File: ${payload.fileName}` : "") ||
+    String(payload.sourceUrl || "").trim() ||
+    "Image memory";
+  const project = String(payload.project || "").trim() || "General";
 
   return {
     id: `local-${Date.now()}`,
@@ -398,6 +433,10 @@ function normalizeText(value) {
     .trim();
 }
 
+function normalizeMultilineText(value) {
+  return String(value || "").replace(/\r\n/g, "\n").trim();
+}
+
 function truncateText(text, maxChars = 180) {
   const normalized = normalizeText(text);
   if (!normalized) return "";
@@ -407,20 +446,84 @@ function truncateText(text, maxChars = 180) {
 
 export function buildNoteTitle(note) {
   const content = normalizeText(note.content);
+  const summary = normalizeText(note.summary);
+  const explicitTitle = normalizeText(
+    note.title || note.metadata?.title || note.metadata?.documentTitle || note.metadata?.name || ""
+  );
+  const fallbackContent = summary || normalizeText(note.markdownContent || "") || normalizeText(note.rawContent || "");
+  const isFilePlaceholder = isGenericFilePlaceholder(content);
+  const maxTitleLength = 84;
+
+  if (explicitTitle) return truncateText(explicitTitle, maxTitleLength);
+
   if (!content && note.sourceType === "image") return "Image memory";
+  if ((!content || isFilePlaceholder) && fallbackContent) {
+    const sentenceMatch = fallbackContent.match(/^(.{10,130}?[.!?])(\s|$)/);
+    const candidate = sentenceMatch ? sentenceMatch[1] : fallbackContent;
+    return truncateText(candidate, maxTitleLength);
+  }
+  if (!content && note.fileName) return truncateText(note.fileName, maxTitleLength);
   if (!content) return "Untitled memory";
 
   const sentenceMatch = content.match(/^(.{10,130}?[.!?])(\s|$)/);
   const candidate = sentenceMatch ? sentenceMatch[1] : content;
-  return truncateText(candidate, 100);
+  return truncateText(candidate, maxTitleLength);
 }
 
 export function buildContentPreview(note) {
   const content = normalizeText(note.content);
+  const summary = normalizeText(note.summary);
+  const extracted = normalizeText(note.markdownContent || note.rawContent || "");
+  const isFilePlaceholder = isGenericFilePlaceholder(content);
+
+  if (content && !isFilePlaceholder) return truncateText(content, 220);
+  if (summary && summary.toLowerCase() !== "(no summary)") return truncateText(summary, 220);
+  if (extracted) return truncateText(extracted, 220);
   if (content) return truncateText(content, 220);
   if (note.sourceUrl) return truncateText(note.sourceUrl, 220);
+  if (note.fileName) return `File: ${truncateText(note.fileName, 180)}`;
   if (note.sourceType === "image") return "Image capture with no text description.";
   return "No content preview available.";
+}
+
+export function buildNoteDescription(note) {
+  const summary = normalizeMultilineText(note.summary);
+  const extracted = normalizeMultilineText(note.markdownContent || note.rawContent || "");
+  const content = normalizeMultilineText(note.content);
+  const sourceUrl = normalizeMultilineText(note.sourceUrl);
+  const blocks = [];
+
+  if (summary && summary.toLowerCase() !== "(no summary)") {
+    blocks.push(summary);
+  }
+  if (extracted) {
+    blocks.push(extracted);
+  }
+  if (content && !isGenericFilePlaceholder(content)) {
+    blocks.push(content);
+  }
+  if (!blocks.length && sourceUrl) {
+    blocks.push(sourceUrl);
+  }
+
+  const deduped = [];
+  const seen = new Set();
+  blocks.forEach((block) => {
+    const key = normalizeText(block).toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    deduped.push(block);
+  });
+
+  if (!deduped.length) {
+    return "No AI description available yet.";
+  }
+
+  if (sourceUrl) {
+    deduped.push(`Source: ${sourceUrl}`);
+  }
+
+  return deduped.join("\n\n");
 }
 
 export function buildSummaryPreview(note, maxChars = 180) {

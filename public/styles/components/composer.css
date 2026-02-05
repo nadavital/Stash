@@ -169,9 +169,36 @@
   transform: scale(0.94);
 }
 
+.composer-send:disabled,
+.composer-plus:disabled,
+.composer-project-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.composer-send.is-loading svg {
+  opacity: 0;
+}
+
+.composer-send.is-loading::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+  animation: composer-spin 0.8s linear infinite;
+}
+
 .composer-send svg {
   width: 18px;
   height: 18px;
+}
+
+@keyframes composer-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .capture-hint {

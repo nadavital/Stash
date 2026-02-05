@@ -5,6 +5,7 @@ const API_ENDPOINTS = Object.freeze({
   notes: "/api/notes",
   chat: "/api/chat",
   context: "/api/context",
+  tasks: "/api/tasks",
 });
 
 async function jsonFetch(url, options = {}) {
@@ -64,6 +65,17 @@ export function createApiClient({ adapterDebug = false } = {}) {
         body: JSON.stringify(payload),
       });
       return adaptAnswerResponse(response, "context");
+    },
+    async fetchTasks({ status = "open" } = {}) {
+      const params = new URLSearchParams();
+      if (status) params.set("status", String(status));
+      return jsonFetch(`${API_ENDPOINTS.tasks}?${params.toString()}`);
+    },
+    async createTask(payload) {
+      return jsonFetch(API_ENDPOINTS.tasks, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
     },
   };
 }

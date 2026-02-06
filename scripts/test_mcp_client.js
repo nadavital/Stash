@@ -120,18 +120,28 @@ async function main() {
     console.log("tools/list count:", toolNames.length);
     console.log("tools:", toolNames.join(", "));
 
+    const expectedTools = [
+      "search_notes",
+      "get_tasks",
+      "obtain_consolidated_memory_file",
+      "complete_task",
+      "delete_note",
+      "delete_project",
+    ];
+    const missingTools = expectedTools.filter((name) => !toolNames.includes(name));
+    if (missingTools.length) {
+      console.error(`Missing expected tools: ${missingTools.join(", ")}`);
+    }
+
     const checks = [
-      { name: "project_memory_tasks_list_open", args: {} },
-      { name: "project_memory_recent", args: { limit: 3 } },
-      { name: "project_memory_search", args: { query: "pdf", limit: 3 } },
-      { name: "project_memory_search_raw_content", args: { query: "receipt", limit: 3 } },
-      { name: "project_memory_read_extracted_markdown", args: { maxChars: 200 } },
-      { name: "project_memory_save", args: { content: `MCP client check ${new Date().toISOString()}`, sourceType: "text", project: "MCP Client Test" } },
-      { name: "project_memory_context", args: { task: "Summarize MCP test state", limit: 3 } },
-      { name: "project_memory_ask", args: { question: "What PDFs were recently ingested?", limit: 3 } },
+      { name: "get_tasks", args: {} },
+      { name: "search_notes", args: { query: "integration mcp", limit: 3 } },
+      { name: "obtain_consolidated_memory_file", args: { maxChars: 200 } },
+      { name: "complete_task", args: { id: "task-002" } },
+      { name: "delete_note", args: { id: "missing-note-id" } },
+      { name: "delete_project", args: { project: "missing-project" } },
     ];
 
-    let rawContentTargetId = null;
     for (const check of checks) {
       const call = await rpc("tools/call", { name: check.name, arguments: check.args });
       const parsed = parseToolPayload(call);
@@ -143,28 +153,27 @@ async function main() {
       const topKeys = Object.keys(parsed.data || {});
       console.log(`${check.name}: OK keys=${topKeys.join(",")}`);
 
-      if (check.name === "project_memory_recent") {
-        const notes = parsed.data?.notes || [];
-        const withRaw = notes.find((n) => typeof n.rawContent === "string" && n.rawContent.length > 0);
-        rawContentTargetId = withRaw?.id || notes[0]?.id || null;
+      if (check.name === "get_tasks") {
+        const tasks = parsed.data?.tasks || [];
+        console.log(`get_tasks count=${tasks.length}`);
       }
-    }
-
-    if (rawContentTargetId) {
-      const rawCall = await rpc("tools/call", {
-        name: "project_memory_get_raw_content",
-        arguments: { id: rawContentTargetId, maxChars: 600 },
-      });
-      const parsed = parseToolPayload(rawCall);
-      if (!parsed.ok) {
-        console.error(`project_memory_get_raw_content: ERROR -> ${parsed.error}`);
-      } else {
-        const rawLen = String(parsed.data?.note?.rawContent || "").length;
-        const mdLen = String(parsed.data?.note?.markdownContent || "").length;
-        console.log(`project_memory_get_raw_content: OK rawLen=${rawLen} mdLen=${mdLen}`);
+      if (check.name === "search_notes") {
+        const results = parsed.data?.results || [];
+        const top = results[0]?.note;
+        if (top) {
+          console.log(`search_notes top=${top.id} project=${top.project || ""}`);
+        }
       }
-    } else {
-      console.warn("project_memory_get_raw_content: skipped (no note id found)");
+      if (check.name === "complete_task") {
+        const task = parsed.data?.task || {};
+        console.log(`complete_task id=${task.id || ""} status=${task.status || ""}`);
+      }
+      if (check.name === "delete_note") {
+        console.log(`delete_note deleted=${parsed.data?.deleted === true ? "true" : "false"}`);
+      }
+      if (check.name === "delete_project") {
+        console.log(`delete_project deletedCount=${Number(parsed.data?.deletedCount || 0)}`);
+      }
     }
 
     console.log("MCP client test completed.");

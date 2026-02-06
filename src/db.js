@@ -73,6 +73,12 @@ class NoteRepository {
       LIMIT ?
     `);
 
+    this.listExactProjectStmt = this.db.prepare(`
+      SELECT * FROM notes
+      WHERE project = ?
+      ORDER BY datetime(created_at) DESC
+    `);
+
     this.searchStmt = this.db.prepare(`
       SELECT * FROM notes
       WHERE
@@ -98,6 +104,7 @@ class NoteRepository {
     `);
 
     this.deleteStmt = this.db.prepare(`DELETE FROM notes WHERE id = ?`);
+    this.deleteByProjectStmt = this.db.prepare(`DELETE FROM notes WHERE project = ?`);
   }
 
   _initSchema() {
@@ -202,6 +209,12 @@ class NoteRepository {
     return this.listByProjectStmt.all(normalized, normalized, bounded).map(mapRow);
   }
 
+  listByExactProject(project) {
+    const normalized = String(project || "").trim();
+    if (!normalized) return [];
+    return this.listExactProjectStmt.all(normalized).map(mapRow);
+  }
+
   searchNotes(query, { project = null, limit = 50 } = {}) {
     const bounded = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(200, Number(limit))) : 50;
     const normalized = project && project.trim() ? project.trim() : null;
@@ -219,7 +232,15 @@ class NoteRepository {
   }
 
   deleteNote(id) {
-    this.deleteStmt.run(id);
+    const result = this.deleteStmt.run(id);
+    return Number(result?.changes || 0);
+  }
+
+  deleteByProject(project) {
+    const normalized = String(project || "").trim();
+    if (!normalized) return 0;
+    const result = this.deleteByProjectStmt.run(normalized);
+    return Number(result?.changes || 0);
   }
 }
 

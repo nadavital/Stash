@@ -96,6 +96,11 @@ Base URL: `http://localhost:<PORT>` (default from `.env`)
 `GET /api/projects`
 - Response: `{ items: [projectName], count }`
 
+### Delete project folder
+`DELETE /api/projects/:project`
+- Deletes all notes in that project.
+- Response: `{ project, deletedCount, deletedIds }`
+
 ### Save note / upload
 `POST /api/notes`
 Request JSON:
@@ -112,6 +117,10 @@ Request JSON:
 ```
 Response:
 - `201 { note: {...} }`
+
+### Delete note
+`DELETE /api/notes/:id`
+- Response: `{ id, deleted }` (404 if not found)
 
 ### Grounded Q&A
 `POST /api/chat`
@@ -149,17 +158,12 @@ Response:
 Server file: `/mcp/server.js`
 
 Current tools:
-- `project_memory_search`
-- `project_memory_search_raw_content`
-- `project_memory_get_raw_content`
-- `project_memory_read_extracted_markdown`
-- `project_memory_save`
-- `project_memory_recent`
-- `project_memory_context`
-- `project_memory_ask`
-- `project_memory_tasks_list_open`
-
-Legacy `personio_*` aliases are accepted for compatibility.
+- `search_notes` (BM25 ranking)
+- `get_tasks`
+- `obtain_consolidated_memory_file`
+- `complete_task`
+- `delete_note`
+- `delete_project`
 
 Use MCP when building agent integrations; use HTTP `/api/*` for frontend UI.
 

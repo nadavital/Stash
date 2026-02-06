@@ -8,6 +8,12 @@
   gap: 14px;
 }
 
+.folder-file-tile-shell {
+  position: relative;
+  min-height: 164px;
+  display: block;
+}
+
 .folder-file-tile {
   border: 1px solid #eaecf0;
   background: #ffffff;
@@ -21,6 +27,8 @@
   display: flex;
   flex-direction: column;
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+  width: 100%;
+  height: 100%;
 }
 
 .folder-file-tile:hover {
@@ -127,6 +135,37 @@
   color: #98a2b3;
   font-size: 0.7rem;
   font-family: var(--font-mono);
+}
+
+.folder-file-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #98a2b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.folder-file-delete svg {
+  width: 14px;
+  height: 14px;
+}
+
+.folder-file-delete:hover {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.folder-file-delete:focus-visible {
+  outline: 2px solid rgba(180, 35, 24, 0.2);
+  outline-offset: 1px;
 }
 
 @media (max-width: 680px) {

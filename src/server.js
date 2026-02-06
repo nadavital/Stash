@@ -9,6 +9,8 @@ import {
   askMemories,
   buildProjectContext,
   createMemory,
+  deleteMemory,
+  deleteProjectMemories,
   listProjects,
   listRecentMemories,
   searchMemories,
@@ -100,9 +102,40 @@ async function handleApi(req, res, url) {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
     });
     res.end();
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/notes/")) {
+    const encodedId = url.pathname.slice("/api/notes/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+
+    const result = await deleteMemory({ id });
+    if (!result.deleted) {
+      sendJson(res, 404, { error: `Memory not found: ${id}` });
+      return;
+    }
+
+    sendJson(res, 200, result);
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/projects/")) {
+    const encodedProject = url.pathname.slice("/api/projects/".length);
+    const project = decodeURIComponent(encodedProject || "").trim();
+    if (!project) {
+      sendJson(res, 400, { error: "Missing project" });
+      return;
+    }
+
+    const result = await deleteProjectMemories({ project });
+    sendJson(res, 200, result);
     return;
   }
 

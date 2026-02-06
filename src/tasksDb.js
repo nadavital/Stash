@@ -4,6 +4,7 @@ import path from "node:path";
 import { config } from "./config.js";
 
 const TASK_STATUS_OPEN = "open";
+const TASK_STATUS_CLOSED = "closed";
 
 function nowIso() {
   return new Date().toISOString();
@@ -59,6 +60,12 @@ class TaskRepository {
       SELECT * FROM tasks WHERE id = ?
     `);
 
+    this.updateStatusStmt = this.db.prepare(`
+      UPDATE tasks
+      SET status = ?
+      WHERE id = ?
+    `);
+
     this.seedSampleIfEmpty();
   }
 
@@ -111,6 +118,21 @@ class TaskRepository {
     const createdAt = nowIso();
     this.insertStmt.run(id, normalizedTitle, normalizedStatus, createdAt);
     return mapTaskRow(this.getByIdStmt.get(id));
+  }
+
+  completeTask(id) {
+    const normalizedId = String(id || "").trim();
+    if (!normalizedId) {
+      throw new Error("Missing task id");
+    }
+
+    const existing = this.getByIdStmt.get(normalizedId);
+    if (!existing) {
+      throw new Error(`Task not found: ${normalizedId}`);
+    }
+
+    this.updateStatusStmt.run(TASK_STATUS_CLOSED, normalizedId);
+    return mapTaskRow(this.getByIdStmt.get(normalizedId));
   }
 }
 

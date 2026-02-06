@@ -2,27 +2,24 @@ import process from "node:process";
 import { config } from "../src/config.js";
 import { taskRepo } from "../src/tasksDb.js";
 import {
-  askMemories,
-  buildProjectContext,
-  createMemory,
-  getMemoryRawContent,
-  listRecentMemories,
+  deleteMemory,
+  deleteProjectMemories,
   readExtractedMarkdownMemory,
-  searchRawMemories,
-  searchMemories,
+  searchNotesBm25,
 } from "../src/memoryService.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
 
 const TOOL_DEFS = [
   {
-    name: "project_memory_search",
-    description: "Search saved memories by semantic similarity and lexical match.",
+    name: "search_notes",
+    description: "Search notes using BM25 ranking.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Search query" },
         project: { type: "string", description: "Optional project filter" },
+        includeMarkdown: { type: "boolean", description: "Include markdown content in results", default: false },
         limit: { type: "number", description: "Max results", default: 8 },
       },
       required: ["query"],
@@ -30,108 +27,58 @@ const TOOL_DEFS = [
     },
   },
   {
-    name: "project_memory_search_raw_content",
-    description: "Search extracted raw/markdown content with lexical ranking.",
+    name: "get_tasks",
+    description: "List open tasks from the local task store.",
     inputSchema: {
       type: "object",
-      properties: {
-        query: { type: "string", description: "Search query" },
-        project: { type: "string", description: "Optional project filter" },
-        includeMarkdown: { type: "boolean", description: "Include markdown content in response", default: true },
-        limit: { type: "number", description: "Max results", default: 8 },
-      },
-      required: ["query"],
+      properties: {},
       additionalProperties: false,
     },
   },
   {
-    name: "project_memory_get_raw_content",
-    description: "Get full extracted raw/markdown content by memory id.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "Memory id" },
-        includeMarkdown: { type: "boolean", default: true },
-        maxChars: { type: "number", default: 12000 },
-      },
-      required: ["id"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "project_memory_read_extracted_markdown",
+    name: "obtain_consolidated_memory_file",
     description: "Read the consolidated markdown memory file.",
     inputSchema: {
       type: "object",
       properties: {
-        filePath: { type: "string", description: "Optional absolute/relative path override" },
         maxChars: { type: "number", description: "Maximum characters to return", default: 30000 },
       },
       additionalProperties: false,
     },
   },
   {
-    name: "project_memory_save",
-    description: "Save a new memory note/link/image/file metadata.",
+    name: "complete_task",
+    description: "Mark a task as completed (closed) by id.",
     inputSchema: {
       type: "object",
       properties: {
-        content: { type: "string", description: "Note content" },
-        sourceType: { type: "string", enum: ["text", "link", "image", "file"], default: "text" },
-        sourceUrl: { type: "string", description: "Source URL for link captures" },
-        fileDataUrl: { type: "string", description: "Optional data URL for uploaded file bytes" },
-        fileName: { type: "string", description: "Uploaded file name" },
-        fileMimeType: { type: "string", description: "Uploaded file MIME type" },
-        project: { type: "string", description: "Optional project label" },
+        id: { type: "string", description: "Task id to mark closed" },
       },
+      required: ["id"],
       additionalProperties: false,
     },
   },
   {
-    name: "project_memory_recent",
-    description: "Get recent saved memories.",
+    name: "delete_note",
+    description: "Delete a memory note by id.",
     inputSchema: {
       type: "object",
       properties: {
-        limit: { type: "number", default: 10 },
+        id: { type: "string", description: "Note id to delete" },
       },
+      required: ["id"],
       additionalProperties: false,
     },
   },
   {
-    name: "project_memory_context",
-    description: "Build a grounded project context brief with citations.",
+    name: "delete_project",
+    description: "Delete all notes in a project folder by project name.",
     inputSchema: {
       type: "object",
       properties: {
-        task: { type: "string", description: "Task to build context for" },
-        project: { type: "string" },
-        limit: { type: "number", default: 8 },
+        project: { type: "string", description: "Project folder name to delete" },
       },
-      required: ["task"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "project_memory_ask",
-    description: "Ask a grounded question over memory with citations.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        question: { type: "string" },
-        project: { type: "string" },
-        limit: { type: "number", default: 6 },
-      },
-      required: ["question"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "project_memory_tasks_list_open",
-    description: "List open tasks from the local task store.",
-    inputSchema: {
-      type: "object",
-      properties: {},
+      required: ["project"],
       additionalProperties: false,
     },
   },
@@ -165,89 +112,41 @@ function sendResult(id, result) {
 
 async function callTool(name, args = {}) {
   switch (name) {
-    case "project_memory_search": {
-      const results = await searchMemories({
+    case "search_notes": {
+      const results = await searchNotesBm25({
         query: String(args.query || ""),
         project: String(args.project || ""),
+        includeMarkdown: args.includeMarkdown === true,
         limit: Number(args.limit || 8),
       });
       return { results };
     }
-    case "project_memory_search_raw_content": {
-      const results = await searchRawMemories({
-        query: String(args.query || ""),
-        project: String(args.project || ""),
-        includeMarkdown: args.includeMarkdown !== false,
-        limit: Number(args.limit || 8),
-      });
-      return { results };
-    }
-    case "project_memory_get_raw_content": {
-      const note = await getMemoryRawContent({
-        id: String(args.id || ""),
-        includeMarkdown: args.includeMarkdown !== false,
-        maxChars: Number(args.maxChars || 12000),
-      });
-      return { note };
-    }
-    case "project_memory_read_extracted_markdown": {
+    case "obtain_consolidated_memory_file": {
       const memoryFile = await readExtractedMarkdownMemory({
-        filePath: String(args.filePath || ""),
         maxChars: Number(args.maxChars || 30000),
       });
       return { memoryFile };
     }
-    case "project_memory_save": {
-      const note = await createMemory({
-        content: String(args.content || ""),
-        sourceType: String(args.sourceType || "text"),
-        sourceUrl: String(args.sourceUrl || ""),
-        fileDataUrl: String(args.fileDataUrl || ""),
-        fileName: String(args.fileName || ""),
-        fileMimeType: String(args.fileMimeType || ""),
-        project: String(args.project || ""),
-        metadata: { createdFrom: "mcp" },
-      });
-      return { note };
-    }
-    case "project_memory_recent": {
-      const notes = await listRecentMemories(Number(args.limit || 10));
-      return { notes };
-    }
-    case "project_memory_context": {
-      const context = await buildProjectContext({
-        task: String(args.task || ""),
-        project: String(args.project || ""),
-        limit: Number(args.limit || 8),
-      });
-      return context;
-    }
-    case "project_memory_ask": {
-      const answer = await askMemories({
-        question: String(args.question || ""),
-        project: String(args.project || ""),
-        limit: Number(args.limit || 6),
-      });
-      return answer;
-    }
-    case "project_memory_tasks_list_open": {
+    case "get_tasks": {
       const tasks = taskRepo.listOpenTasks();
       return { tasks };
     }
-    // Legacy aliases kept for backward compatibility with early backend prototypes.
-    case "personio_tasks_list_open":
-      return callTool("project_memory_tasks_list_open", args);
-    case "personio_notes_search": {
-      const searchMode = String(args.searchMode || "semantic").trim().toLowerCase();
-      if (searchMode === "raw") {
-        return callTool("project_memory_search_raw_content", args);
-      }
-      return callTool("project_memory_search", args);
+    case "complete_task": {
+      const task = taskRepo.completeTask(String(args.id || ""));
+      return { task };
     }
-    case "personio_get_memory_file":
-      return callTool("project_memory_read_extracted_markdown", args);
-    case "personio_memory_save_tool":
-      return callTool("project_memory_save", args);
+    case "delete_note": {
+      const result = await deleteMemory({
+        id: String(args.id || ""),
+      });
+      return result;
+    }
+    case "delete_project": {
+      const result = await deleteProjectMemories({
+        project: String(args.project || ""),
+      });
+      return result;
+    }
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

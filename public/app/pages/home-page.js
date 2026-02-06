@@ -124,6 +124,10 @@ function renderHomePageShell() {
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
           </button>
         </div>
+        <label class="search-overlay-input-wrap" for="search-overlay-input">
+          <span class="topbar-visually-hidden">Search memory</span>
+          <input id="search-overlay-input" class="search-overlay-input" type="search" placeholder="Search" />
+        </label>
         <div id="search-overlay-list" class="search-overlay-list"></div>
       </article>
     </div>
@@ -156,6 +160,7 @@ function queryElements(mountNode) {
     searchOverlayBackdrop: mountNode.querySelector("#search-overlay-backdrop"),
     searchOverlayTitle: mountNode.querySelector("#search-overlay-title"),
     searchOverlayClose: mountNode.querySelector("#search-overlay-close"),
+    searchOverlayInput: mountNode.querySelector("#search-overlay-input"),
     searchOverlayList: mountNode.querySelector("#search-overlay-list"),
     newFolderBtn: mountNode.querySelector("#topbar-new-folder-btn"),
     itemModal: mountNode.querySelector("#item-modal"),
@@ -258,6 +263,14 @@ function folderKindIconMarkup() {
   return `
     <svg viewBox="0 0 20 20" aria-hidden="true">
       <path fill="currentColor" d="M2.5 5.5A2.5 2.5 0 0 1 5 3h3.7c.7 0 1.3.3 1.8.8l.9 1H15A2.5 2.5 0 0 1 17.5 7v7.5A2.5 2.5 0 0 1 15 17H5a2.5 2.5 0 0 1-2.5-2.5v-9Z"/>
+    </svg>
+  `;
+}
+
+function deleteIconMarkup() {
+  return `
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path fill="currentColor" d="M8.5 3a1 1 0 0 0-1 1v.5H5.2a.8.8 0 1 0 0 1.6h.5v9.2A1.7 1.7 0 0 0 7.4 17h5.2a1.7 1.7 0 0 0 1.7-1.7V6.1h.5a.8.8 0 1 0 0-1.6h-2.3V4a1 1 0 0 0-1-1h-3Zm.6 3.1a.8.8 0 0 1 .8.8v6a.8.8 0 1 1-1.6 0v-6a.8.8 0 0 1 .8-.8Zm2.4 0a.8.8 0 0 1 .8.8v6a.8.8 0 1 1-1.6 0v-6a.8.8 0 0 1 .8-.8Z"/>
     </svg>
   `;
 }
@@ -477,6 +490,15 @@ export function createHomePage({ store, apiClient }) {
         setState({ draftFolders: drafts });
       }
 
+      function removeDraftFolder(name) {
+        const normalizedName = String(name || "").trim().toLowerCase();
+        if (!normalizedName) return;
+        const nextDrafts = normalizeFolderDrafts(getState().draftFolders).filter(
+          (entry) => entry.name.toLowerCase() !== normalizedName
+        );
+        setState({ draftFolders: nextDrafts });
+      }
+
       function setCaptureHint(text, tone = "neutral") {
         if (!els.captureHint) return;
         els.captureHint.textContent = text;
@@ -537,9 +559,103 @@ export function createHomePage({ store, apiClient }) {
         els.topbarSearchToggle?.setAttribute("aria-expanded", isExpanded ? "true" : "false");
       }
 
+      function setSearchQuery(value) {
+        const nextValue = String(value ?? "");
+        if (els.topbarSearchInput && els.topbarSearchInput.value !== nextValue) {
+          els.topbarSearchInput.value = nextValue;
+        }
+        if (els.searchOverlayInput && els.searchOverlayInput.value !== nextValue) {
+          els.searchOverlayInput.value = nextValue;
+        }
+      }
+
       function setFallbackHint(active) {
         if (!els.foldersError) return;
         els.foldersError.classList.toggle("hidden", !active);
+      }
+
+      function removeNoteFromFallback(noteId) {
+        const normalizedId = String(noteId || "").trim();
+        if (!normalizedId) return;
+        const nextMock = (Array.isArray(getState().mockNotes) ? getState().mockNotes : []).filter(
+          (entry, index) => normalizeCitation(entry, index).note.id !== normalizedId
+        );
+        const activeQuery = (els.topbarSearchInput?.value || "").trim();
+        recentNotes = filterAndRankMockNotes(nextMock, { limit: 120 });
+        searchResults = activeQuery ? filterAndRankMockNotes(nextMock, { query: activeQuery, limit: 120 }) : [];
+        setState({ mockNotes: nextMock, notes: recentNotes });
+        setFallbackHint(true);
+        renderView();
+      }
+
+      function removeFolderFromFallback(folderName) {
+        const normalizedName = String(folderName || "").trim().toLowerCase();
+        if (!normalizedName) return;
+        const nextMock = (Array.isArray(getState().mockNotes) ? getState().mockNotes : []).filter((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          return String(note.project || "").trim().toLowerCase() !== normalizedName;
+        });
+        const activeQuery = (els.topbarSearchInput?.value || "").trim();
+        recentNotes = filterAndRankMockNotes(nextMock, { limit: 120 });
+        searchResults = activeQuery ? filterAndRankMockNotes(nextMock, { query: activeQuery, limit: 120 }) : [];
+        setState({ mockNotes: nextMock, notes: recentNotes });
+        setFallbackHint(true);
+        renderView();
+      }
+
+      async function deleteNoteById(noteId) {
+        const normalizedId = String(noteId || "").trim();
+        if (!normalizedId) return;
+
+        const confirmed = window.confirm("Delete this item? This action cannot be undone.");
+        if (!confirmed) return;
+
+        closeItemModal(els);
+        try {
+          await apiClient.deleteNote(normalizedId);
+          if (!isMounted) return;
+          showToast("Item deleted");
+          await refreshNotes();
+        } catch (error) {
+          if (!isMounted) return;
+          const message = conciseTechnicalError(error, "Delete endpoint unavailable");
+          const alreadyDeleted = /not found|request failed \(404\)/i.test(message);
+          if (alreadyDeleted) {
+            showToast("Item already deleted");
+            await refreshNotes();
+            return;
+          }
+
+          removeNoteFromFallback(normalizedId);
+          showToast("Deleted locally");
+          apiClient.adapterLog("delete_note_fallback", message);
+        }
+      }
+
+      async function deleteFolderByName(folderName) {
+        const normalizedFolder = String(folderName || "").trim();
+        if (!normalizedFolder) return;
+
+        const confirmed = window.confirm(`Delete folder "${normalizedFolder}" and all its items?`);
+        if (!confirmed) return;
+
+        try {
+          const result = await apiClient.deleteProject(normalizedFolder);
+          if (!isMounted) return;
+          removeDraftFolder(normalizedFolder);
+          dismissSearchOverlay({ clearQuery: true });
+          const deletedCount = Number(result?.deletedCount || 0);
+          showToast(deletedCount > 0 ? `Deleted ${deletedCount} item${deletedCount === 1 ? "" : "s"}` : "Folder deleted");
+          await refreshNotes();
+        } catch (error) {
+          if (!isMounted) return;
+          const message = conciseTechnicalError(error, "Folder delete endpoint unavailable");
+          removeDraftFolder(normalizedFolder);
+          removeFolderFromFallback(normalizedFolder);
+          dismissSearchOverlay({ clearQuery: true });
+          showToast("Folder removed locally");
+          apiClient.adapterLog("delete_folder_fallback", message);
+        }
       }
 
       function renderFolders() {
@@ -588,9 +704,10 @@ export function createHomePage({ store, apiClient }) {
         els.foldersEmpty.classList.add("hidden");
 
         folders.slice(0, 40).forEach((folder) => {
-          const card = document.createElement("a");
+          const card = document.createElement("article");
           card.className = "folder-pill";
-          card.href = `#/folder/${encodeURIComponent(folder.name)}`;
+          card.tabIndex = 0;
+          card.setAttribute("role", "link");
           card.dataset.color = folder.color;
           card.dataset.symbol = folder.symbol;
 
@@ -605,25 +722,42 @@ export function createHomePage({ store, apiClient }) {
           symbolEl.className = "folder-symbol-badge";
           symbolEl.textContent = normalizeFolderSymbol(folder.symbol, "DOC");
 
-          const nameEl = document.createElement("span");
-          nameEl.className = "folder-pill-name";
-          nameEl.textContent = folder.name;
-
           const countEl = document.createElement("span");
           countEl.className = "folder-pill-count";
           countEl.textContent = `${folder.count}`;
 
-          top.append(kindIcon, symbolEl, nameEl, countEl);
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "folder-pill-delete";
+          deleteBtn.title = `Delete folder ${folder.name}`;
+          deleteBtn.setAttribute("aria-label", `Delete folder ${folder.name}`);
+          deleteBtn.innerHTML = deleteIconMarkup();
+
+          top.append(kindIcon, symbolEl, countEl, deleteBtn);
+
+          const nameEl = document.createElement("span");
+          nameEl.className = "folder-pill-name";
+          nameEl.textContent = folder.name;
 
           const descriptionEl = document.createElement("p");
           descriptionEl.className = "folder-pill-desc";
           descriptionEl.textContent = folder.description || "No description";
 
-          card.append(top, descriptionEl);
+          card.append(top, nameEl, descriptionEl);
 
-          card.addEventListener("click", (event) => {
+          card.addEventListener("click", () => {
+            navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+          });
+          card.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+          });
+
+          deleteBtn.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            await deleteFolderByName(folder.name);
           });
 
           els.foldersList.appendChild(card);
@@ -647,6 +781,9 @@ export function createHomePage({ store, apiClient }) {
         } else {
           noteItems.forEach((entry, index) => {
             const note = normalizeCitation(entry, index).note;
+            const row = document.createElement("div");
+            row.className = "recent-item-row";
+
             const item = document.createElement("button");
             item.type = "button";
             item.className = "recent-item";
@@ -681,7 +818,18 @@ export function createHomePage({ store, apiClient }) {
               renderRecent();
             });
 
-            els.recentNotesList.appendChild(item);
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.className = "recent-delete-btn";
+            deleteBtn.title = `Delete item ${buildNoteTitle(note)}`;
+            deleteBtn.setAttribute("aria-label", `Delete item ${buildNoteTitle(note)}`);
+            deleteBtn.innerHTML = deleteIconMarkup();
+            deleteBtn.addEventListener("click", async () => {
+              await deleteNoteById(note.id);
+            });
+
+            row.append(item, deleteBtn);
+            els.recentNotesList.appendChild(row);
           });
         }
 
@@ -723,6 +871,12 @@ export function createHomePage({ store, apiClient }) {
 
         els.searchOverlay.classList.remove("hidden");
         els.searchOverlay.setAttribute("aria-hidden", "false");
+        setSearchQuery(query);
+        if (document.activeElement === els.topbarSearchInput) {
+          els.searchOverlayInput?.focus();
+          const end = els.searchOverlayInput?.value?.length || 0;
+          els.searchOverlayInput?.setSelectionRange(end, end);
+        }
         if (els.searchOverlayTitle) {
           const count = Array.isArray(searchResults) ? searchResults.length : 0;
           els.searchOverlayTitle.textContent = `Search Results (${count})`;
@@ -739,6 +893,9 @@ export function createHomePage({ store, apiClient }) {
 
         searchResults.slice(0, 40).forEach((entry, index) => {
           const note = normalizeCitation(entry, index).note;
+          const row = document.createElement("div");
+          row.className = "search-overlay-result-row";
+
           const card = document.createElement("button");
           card.type = "button";
           card.className = "search-overlay-result";
@@ -766,21 +923,30 @@ export function createHomePage({ store, apiClient }) {
           card.addEventListener("click", () => {
             openItemModal(els, note);
             markAccessed(note.id);
-            if (els.topbarSearchInput) {
-              els.topbarSearchInput.value = "";
-            }
+            setSearchQuery("");
             renderSearchResults("");
             renderRecent();
           });
 
-          els.searchOverlayList.appendChild(card);
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "search-overlay-delete";
+          deleteBtn.title = `Delete item ${buildNoteTitle(note)}`;
+          deleteBtn.setAttribute("aria-label", `Delete item ${buildNoteTitle(note)}`);
+          deleteBtn.innerHTML = deleteIconMarkup();
+          deleteBtn.addEventListener("click", async () => {
+            await deleteNoteById(note.id);
+          });
+
+          row.append(card, deleteBtn);
+          els.searchOverlayList.appendChild(row);
         });
       }
 
       function dismissSearchOverlay({ clearQuery = false } = {}) {
         const hadQuery = Boolean((els.topbarSearchInput?.value || "").trim());
-        if (clearQuery && els.topbarSearchInput) {
-          els.topbarSearchInput.value = "";
+        if (clearQuery) {
+          setSearchQuery("");
         }
         renderSearchResults("");
         if (clearQuery && hadQuery) {
@@ -998,8 +1164,21 @@ export function createHomePage({ store, apiClient }) {
       });
 
       on(els.topbarSearchInput, "input", () => {
-        const query = String(els.topbarSearchInput?.value || "").trim();
-        scheduleSearchRefresh({ immediate: query.length === 0 });
+        const query = String(els.topbarSearchInput?.value || "");
+        setSearchQuery(query);
+        scheduleSearchRefresh({ immediate: query.trim().length === 0 });
+      });
+
+      on(els.searchOverlayInput, "keydown", async (event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        scheduleSearchRefresh({ immediate: true });
+      });
+
+      on(els.searchOverlayInput, "input", () => {
+        const query = String(els.searchOverlayInput?.value || "");
+        setSearchQuery(query);
+        scheduleSearchRefresh({ immediate: query.trim().length === 0 });
       });
 
       on(mountNode, "click", (event) => {

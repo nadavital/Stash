@@ -73,6 +73,13 @@
   min-height: 0;
 }
 
+.recent-item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+}
+
 .recent-section-title {
   margin: 0;
   font-size: 0.7rem;
@@ -132,6 +139,35 @@
   white-space: nowrap;
   font-size: 0.88rem;
   color: #344054;
+}
+
+.recent-delete-btn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #98a2b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.recent-delete-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.recent-delete-btn:hover {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.recent-delete-btn:focus-visible {
+  outline: 2px solid rgba(180, 35, 24, 0.2);
+  outline-offset: 1px;
 }
 
 .recent-task-item {

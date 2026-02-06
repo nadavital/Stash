@@ -6,21 +6,8 @@
   "args": ["openclaw/bridge.js"],
   "tools": [
     {
-      "name": "project_memory_search",
-      "description": "Search memories",
-      "arguments_schema": {
-        "type": "object",
-        "properties": {
-          "query": { "type": "string" },
-          "project": { "type": "string" },
-          "limit": { "type": "number" }
-        },
-        "required": ["query"]
-      }
-    },
-    {
-      "name": "project_memory_search_raw_content",
-      "description": "Search extracted raw/markdown content",
+      "name": "search_notes",
+      "description": "Search notes using BM25 ranking",
       "arguments_schema": {
         "type": "object",
         "properties": {
@@ -33,87 +20,54 @@
       }
     },
     {
-      "name": "project_memory_get_raw_content",
-      "description": "Get full raw content for a memory id",
+      "name": "get_tasks",
+      "description": "List open tasks",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "obtain_consolidated_memory_file",
+      "description": "Read the extracted markdown memory file",
       "arguments_schema": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "includeMarkdown": { "type": "boolean" },
           "maxChars": { "type": "number" }
+        }
+      }
+    },
+    {
+      "name": "complete_task",
+      "description": "Mark a task as completed (closed) by id",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" }
         },
         "required": ["id"]
       }
     },
     {
-      "name": "project_memory_read_extracted_markdown",
-      "description": "Read the extracted markdown memory file",
+      "name": "delete_note",
+      "description": "Delete a memory note by id",
       "arguments_schema": {
         "type": "object",
         "properties": {
-          "filePath": { "type": "string" },
-          "maxChars": { "type": "number" }
-        }
+          "id": { "type": "string" }
+        },
+        "required": ["id"]
       }
     },
     {
-      "name": "project_memory_save",
-      "description": "Save a memory",
+      "name": "delete_project",
+      "description": "Delete all notes in a project folder by project name",
       "arguments_schema": {
         "type": "object",
         "properties": {
-          "content": { "type": "string" },
-          "sourceType": { "type": "string" },
-          "sourceUrl": { "type": "string" },
-          "fileDataUrl": { "type": "string" },
-          "fileName": { "type": "string" },
-          "fileMimeType": { "type": "string" },
           "project": { "type": "string" }
-        }
-      }
-    },
-    {
-      "name": "project_memory_recent",
-      "description": "List recent memories",
-      "arguments_schema": {
-        "type": "object",
-        "properties": {
-          "limit": { "type": "number" }
-        }
-      }
-    },
-    {
-      "name": "project_memory_context",
-      "description": "Generate context brief",
-      "arguments_schema": {
-        "type": "object",
-        "properties": {
-          "task": { "type": "string" },
-          "project": { "type": "string" },
-          "limit": { "type": "number" }
         },
-        "required": ["task"]
-      }
-    },
-    {
-      "name": "project_memory_ask",
-      "description": "Ask grounded question",
-      "arguments_schema": {
-        "type": "object",
-        "properties": {
-          "question": { "type": "string" },
-          "project": { "type": "string" },
-          "limit": { "type": "number" }
-        },
-        "required": ["question"]
-      }
-    },
-    {
-      "name": "project_memory_tasks_list_open",
-      "description": "List open tasks",
-      "arguments_schema": {
-        "type": "object",
-        "properties": {}
+        "required": ["project"]
       }
     }
   ]

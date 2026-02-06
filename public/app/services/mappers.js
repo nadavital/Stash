@@ -122,7 +122,17 @@ export function normalizeNote(raw, index = 0) {
       : {};
   const content = firstString([source.content, source.text, source.body, source.noteContent], "");
   const title = firstString(
-    [source.title, source.noteTitle, source.note_title, source.documentTitle, source.document_title, source.name],
+    [
+      source.title,
+      source.noteTitle,
+      source.note_title,
+      source.documentTitle,
+      source.document_title,
+      source.name,
+      metadata.title,
+      metadata.linkTitle,
+      metadata.link_title,
+    ],
     ""
   );
   const sourceUrl = firstString([source.sourceUrl, source.source_url, source.url, source.link], "");
@@ -448,7 +458,7 @@ export function buildNoteTitle(note) {
   const content = normalizeText(note.content);
   const summary = normalizeText(note.summary);
   const explicitTitle = normalizeText(
-    note.title || note.metadata?.title || note.metadata?.documentTitle || note.metadata?.name || ""
+    note.title || note.metadata?.title || note.metadata?.linkTitle || note.metadata?.documentTitle || note.metadata?.name || ""
   );
   const fallbackContent = summary || normalizeText(note.markdownContent || "") || normalizeText(note.rawContent || "");
   const isFilePlaceholder = isGenericFilePlaceholder(content);
@@ -464,6 +474,15 @@ export function buildNoteTitle(note) {
   }
   if (!content && note.fileName) return truncateText(note.fileName, maxTitleLength);
   if (!content) return "Untitled memory";
+  if (note.sourceType === "link") {
+    const fallbackUrl = note.sourceUrl || content;
+    try {
+      const parsed = new URL(fallbackUrl);
+      return truncateText(parsed.hostname.replace(/^www\./, ""), maxTitleLength);
+    } catch {
+      return "Saved link";
+    }
+  }
 
   const sentenceMatch = content.match(/^(.{10,130}?[.!?])(\s|$)/);
   const candidate = sentenceMatch ? sentenceMatch[1] : content;

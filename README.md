@@ -47,17 +47,12 @@ npm run start:mcp
 
 Canonical tools:
 
-- `project_memory_search`
-- `project_memory_search_raw_content`
-- `project_memory_get_raw_content`
-- `project_memory_read_extracted_markdown`
-- `project_memory_save`
-- `project_memory_recent`
-- `project_memory_context`
-- `project_memory_ask`
-- `project_memory_tasks_list_open`
-
-Legacy aliases (`personio_*`) are still accepted for compatibility.
+- `search_notes` (BM25 ranking)
+- `get_tasks`
+- `obtain_consolidated_memory_file`
+- `complete_task`
+- `delete_note`
+- `delete_project`
 
 Example Codex MCP config snippet:
 
@@ -77,7 +72,7 @@ Example Codex MCP config snippet:
 Run a tool directly:
 
 ```bash
-node openclaw/bridge.js project_memory_search '{"query":"onboarding plan"}'
+node openclaw/bridge.js search_notes '{"query":"onboarding plan"}'
 ```
 
 Manifest is at `openclaw/tools.manifest.json`.
@@ -87,9 +82,11 @@ Manifest is at `openclaw/tools.manifest.json`.
 - `GET /api/health`
 - `GET /api/notes?query=&project=&limit=`
 - `POST /api/notes` (body: `content`, `sourceType`, `sourceUrl`, `imageDataUrl`, `fileDataUrl`, `fileName`, `fileMimeType`, `project`)
+- `DELETE /api/notes/:id`
 - `POST /api/chat` (body: `question`, `project`, `limit`)
 - `POST /api/context` (body: `task`, `project`, `limit`)
 - `GET /api/projects`
+- `DELETE /api/projects/:project`
 - `GET /api/recent?limit=`
 - `GET /api/tasks?status=open`
 - `POST /api/tasks` (body: `title`, `status`)

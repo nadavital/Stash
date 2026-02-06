@@ -82,6 +82,186 @@ function textOnlyFromHtml(html) {
     .trim();
 }
 
+function normalizeLinkTitle(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractHtmlMetaContent(html, key, attribute = "property") {
+  if (!html || !key) return "";
+  const escapedKey = String(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(
+      `<meta\\s+[^>]*${attribute}\\s*=\\s*["']${escapedKey}["'][^>]*content\\s*=\\s*["']([^"']+)["'][^>]*>`,
+      "i"
+    ),
+    new RegExp(
+      `<meta\\s+[^>]*content\\s*=\\s*["']([^"']+)["'][^>]*${attribute}\\s*=\\s*["']${escapedKey}["'][^>]*>`,
+      "i"
+    ),
+  ];
+
+  for (const pattern of patterns) {
+    const match = String(html).match(pattern);
+    if (match?.[1]) {
+      return normalizeLinkTitle(match[1]);
+    }
+  }
+  return "";
+}
+
+function titleCaseWords(input) {
+  return String(input || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function inferEntityTitleFromUrl(urlString) {
+  try {
+    const parsed = new URL(urlString);
+    const segments = parsed.pathname
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .map((segment) => normalizeLinkTitle(segment))
+      .filter(Boolean);
+    const generic = new Set([
+      "us",
+      "en",
+      "restaurant",
+      "restaurants",
+      "guide",
+      "city",
+      "hotel",
+      "hotels",
+      "review",
+      "reviews",
+    ]);
+
+    // Prefer a slug after /restaurant/ (common entity page pattern).
+    const restaurantIdx = segments.findIndex((segment) => segment.toLowerCase() === "restaurant");
+    if (restaurantIdx >= 0 && segments[restaurantIdx + 1]) {
+      const slug = segments[restaurantIdx + 1].replace(/[-_]+/g, " ");
+      const candidate = titleCaseWords(normalizeLinkTitle(slug));
+      if (candidate && !generic.has(candidate.toLowerCase())) {
+        return candidate;
+      }
+    }
+
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      const value = segments[i];
+      if (!value) continue;
+      const lower = value.toLowerCase();
+      if (generic.has(lower)) continue;
+      const candidate = titleCaseWords(normalizeLinkTitle(value.replace(/[-_]+/g, " ")));
+      if (candidate) {
+        return candidate;
+      }
+    }
+
+    return normalizeLinkTitle(parsed.hostname.replace(/^www\./, ""));
+  } catch {
+    return "";
+  }
+}
+
+function isUrlLikeTitle(value) {
+  const normalized = normalizeLinkTitle(value);
+  if (!normalized) return false;
+  if (/^https?:\/\//i.test(normalized)) return true;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(normalized)) return true;
+  return false;
+}
+
+function isMichelinRestaurantUrl(urlString) {
+  try {
+    const parsed = new URL(urlString);
+    return /(^|\.)guide\.michelin\.com$/i.test(parsed.hostname) && /\/restaurant(\/|$)/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isGenericListingTitle(title) {
+  const normalized = normalizeLinkTitle(title).toLowerCase();
+  if (!normalized) return true;
+  return (
+    normalized.includes("restaurants in ") ||
+    normalized.includes("michelin guide") ||
+    normalized.includes("page not found") ||
+    normalized.includes("not found") ||
+    normalized === "restaurants" ||
+    normalized === "restaurant"
+  );
+}
+
+async function inferLinkTitleWithOpenAI({ sourceUrl, linkPreview }) {
+  const previewTitle = normalizeLinkTitle(linkPreview?.title || "");
+  const fallbackTitle = previewTitle || inferEntityTitleFromUrl(sourceUrl) || "Saved link";
+  if (!hasOpenAI()) {
+    return fallbackTitle;
+  }
+
+  try {
+    const inputText = [
+      `url: ${sourceUrl || ""}`,
+      previewTitle ? `preview_title: ${previewTitle}` : "",
+      linkPreview?.excerpt ? `preview_excerpt:\n${String(linkPreview.excerpt).slice(0, 2000)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const { text } = await createResponse({
+      instructions:
+        "Extract the best concise title for this webpage. Output JSON only: {\"title\":\"...\"}. Prefer the primary entity name for entity pages (for restaurants, return the restaurant name only). Max 90 chars.",
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: inputText }],
+        },
+      ],
+      temperature: 0,
+    });
+
+    const parsed = parseJsonObject(text);
+    let candidate = normalizeLinkTitle(parsed?.title || "");
+    const michelinRestaurantUrl = isMichelinRestaurantUrl(sourceUrl);
+
+    if (michelinRestaurantUrl && isGenericListingTitle(candidate) && linkPreview?.excerpt) {
+      const targeted = await createResponse({
+        instructions:
+          "This is a Michelin restaurant page or listing. Extract ONE specific restaurant name from the text. Output JSON only: {\"title\":\"restaurant name\"}. Never return generic titles like 'MICHELIN Guide' or 'Restaurants in ...'.",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: `url: ${sourceUrl}\n\npage_text:\n${String(linkPreview.excerpt).slice(0, 4000)}`,
+              },
+            ],
+          },
+        ],
+        temperature: 0,
+      });
+      const targetedParsed = parseJsonObject(targeted.text);
+      const targetedCandidate = normalizeLinkTitle(targetedParsed?.title || "");
+      if (targetedCandidate && !isGenericListingTitle(targetedCandidate) && !isUrlLikeTitle(targetedCandidate)) {
+        candidate = targetedCandidate;
+      }
+    }
+
+    if (!candidate || isUrlLikeTitle(candidate)) {
+      return fallbackTitle;
+    }
+    return candidate.slice(0, 90);
+  } catch {
+    return fallbackTitle;
+  }
+}
+
 async function fetchLinkPreview(urlString) {
   if (!urlString) return null;
 
@@ -102,10 +282,16 @@ async function fetchLinkPreview(urlString) {
     }
 
     const html = await response.text();
-    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const ogTitle =
+      extractHtmlMetaContent(html, "og:title", "property") ||
+      extractHtmlMetaContent(html, "og:title", "name");
+    const twitterTitle =
+      extractHtmlMetaContent(html, "twitter:title", "name") ||
+      extractHtmlMetaContent(html, "twitter:title", "property");
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const body = textOnlyFromHtml(html);
     return {
-      title: titleMatch ? titleMatch[1].trim() : "",
+      title: normalizeLinkTitle(ogTitle || twitterTitle || (titleMatch ? titleMatch[1] : "")),
       excerpt: body.slice(0, 1600),
     };
   } catch {
@@ -548,6 +734,121 @@ async function updateConsolidatedMemoryFile(note) {
   await fs.writeFile(filePath, content, "utf8");
 }
 
+function extractNoteIdFromConsolidatedBlock(blockLines) {
+  for (const line of blockLines) {
+    const match = String(line).trim().match(/^- note_id:\s*(.+)$/);
+    if (match && match[1]) {
+      return String(match[1]).trim();
+    }
+  }
+  return "";
+}
+
+async function removeConsolidatedMemoryEntries(noteIds = []) {
+  const idSet = new Set(
+    (Array.isArray(noteIds) ? noteIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
+  if (idSet.size === 0) return;
+
+  const filePath = config.consolidatedMemoryMarkdownFile;
+  let content = "";
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    if (isMissing) return;
+    return;
+  }
+
+  const lines = content.split("\n");
+  const kept = [];
+  let cursor = 0;
+
+  while (cursor < lines.length) {
+    const line = lines[cursor];
+    if (!line.startsWith("### ")) {
+      kept.push(line);
+      cursor += 1;
+      continue;
+    }
+
+    let end = cursor + 1;
+    while (end < lines.length && !lines[end].startsWith("### ") && !lines[end].startsWith("## ")) {
+      end += 1;
+    }
+
+    const block = lines.slice(cursor, end);
+    const noteId = extractNoteIdFromConsolidatedBlock(block);
+    if (!idSet.has(noteId)) {
+      kept.push(...block);
+    }
+    cursor = end;
+  }
+
+  let next = kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  if (!next) {
+    next = makeConsolidatedTemplate();
+  } else if (/\*\*Last Updated:\*\*/.test(next)) {
+    next = next.replace(/\*\*Last Updated:\*\* .*/, `**Last Updated:** ${nowIso()}`);
+  }
+  if (!next.endsWith("\n")) {
+    next += "\n";
+  }
+
+  try {
+    await fs.writeFile(filePath, next, "utf8");
+  } catch {
+    // no-op: note deletion should not fail because markdown sync failed
+  }
+}
+
+function imagePathToAbsoluteUploadPath(imagePath) {
+  const normalized = String(imagePath || "").trim();
+  if (!normalized) return "";
+  const fileName = path.basename(normalized);
+  if (!fileName) return "";
+  return path.join(config.uploadDir, fileName);
+}
+
+async function cleanupDeletedNotesArtifacts(notes = []) {
+  const noteList = Array.isArray(notes) ? notes : [];
+  if (!noteList.length) return;
+
+  const noteIds = [];
+  const uploadPaths = [];
+
+  for (const note of noteList) {
+    const noteId = String(note?.id || "").trim();
+    if (noteId) {
+      noteIds.push(noteId);
+    }
+
+    const uploadPath = imagePathToAbsoluteUploadPath(note?.imagePath);
+    if (uploadPath) {
+      uploadPaths.push(uploadPath);
+    }
+  }
+
+  if (uploadPaths.length) {
+    await Promise.allSettled(
+      uploadPaths.map(async (uploadPath) => {
+        try {
+          await fs.unlink(uploadPath);
+        } catch (error) {
+          const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+          if (!isMissing) {
+            // no-op: keep deletion flow resilient
+          }
+        }
+      })
+    );
+  }
+
+  await removeConsolidatedMemoryEntries(noteIds);
+}
+
 export async function createMemory({
   content = "",
   sourceType = "text",
@@ -646,6 +947,14 @@ export async function createMemory({
   }
 
   const linkPreview = normalizedSourceType === "link" && normalizedSourceUrl ? await fetchLinkPreview(normalizedSourceUrl) : null;
+  const linkTitle =
+    normalizedSourceType === "link" && normalizedSourceUrl
+      ? await inferLinkTitleWithOpenAI({ sourceUrl: normalizedSourceUrl, linkPreview })
+      : "";
+
+  if (normalizedSourceType === "link" && normalizedSourceUrl) {
+    normalizedContent = normalizedSourceUrl;
+  }
 
   const id = crypto.randomUUID();
   const createdAt = nowIso();
@@ -669,12 +978,13 @@ export async function createMemory({
     embedding: null,
     metadata: {
       ...metadata,
+      title: linkTitle || null,
       imageMime: imageData?.imageMime || null,
       imageSize: imageData?.imageSize || null,
       fileMime: uploadMime || null,
       fileSize: uploadSize,
       uploadParsingError: uploadParsingError || null,
-      linkTitle: linkPreview?.title || null,
+      linkTitle: linkTitle || null,
     },
   });
 
@@ -726,6 +1036,52 @@ export async function createMemory({
   }
 
   return enrichedNote;
+}
+
+export async function deleteMemory({ id } = {}) {
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) {
+    throw new Error("Missing id");
+  }
+
+  const note = noteRepo.getNoteById(normalizedId);
+  if (!note) {
+    return {
+      id: normalizedId,
+      deleted: false,
+    };
+  }
+
+  noteRepo.deleteNote(normalizedId);
+  await cleanupDeletedNotesArtifacts([note]);
+  return {
+    id: normalizedId,
+    deleted: true,
+  };
+}
+
+export async function deleteProjectMemories({ project } = {}) {
+  const normalizedProject = String(project || "").trim();
+  if (!normalizedProject) {
+    throw new Error("Missing project");
+  }
+
+  const notes = noteRepo.listByExactProject(normalizedProject);
+  if (!notes.length) {
+    return {
+      project: normalizedProject,
+      deletedCount: 0,
+      deletedIds: [],
+    };
+  }
+
+  const deletedCount = noteRepo.deleteByProject(normalizedProject);
+  await cleanupDeletedNotesArtifacts(notes);
+  return {
+    project: normalizedProject,
+    deletedCount,
+    deletedIds: notes.map((note) => note.id),
+  };
 }
 
 export async function listRecentMemories(limit = 20) {
@@ -842,6 +1198,55 @@ export async function readExtractedMarkdownMemory({ filePath = "", maxChars = 30
 
 export function listProjects() {
   return noteRepo.listProjects();
+}
+
+export async function searchNotesBm25({ query = "", project = "", limit = 8, includeMarkdown = false } = {}) {
+  const normalizedQuery = String(query || "").trim();
+  if (!normalizedQuery) {
+    throw new Error("Missing query");
+  }
+
+  const boundedLimit = clampInt(limit, 1, 100, 8);
+  const normalizedProject = String(project || "").trim();
+  const notes = noteRepo.listByProject(normalizedProject || null, 500);
+  if (notes.length === 0) return [];
+
+  const queryTokens = tokenize(normalizedQuery);
+  const bm25Index = buildBm25Index(
+    notes,
+    (note) =>
+      `${note.content || ""}\n${note.rawContent || ""}\n${note.markdownContent || ""}\n${note.summary || ""}\n${(note.tags || []).join(" ")}\n${note.project || ""}\n${note.fileName || ""}`
+  );
+
+  const scored = notes
+    .map((note, docIndex) => ({
+      note,
+      bm25: bm25ScoreFromIndex(bm25Index, docIndex, queryTokens),
+    }))
+    .filter((entry) => entry.bm25 > 0)
+    .sort((a, b) => b.bm25 - a.bm25)
+    .slice(0, boundedLimit);
+
+  const normalizedScores = normalizeScores(scored, (entry) => entry.bm25);
+  return scored.map((entry, index) => ({
+    rank: index + 1,
+    score: normalizedScores.get(entry) || 0,
+    note: {
+      id: entry.note.id,
+      content: entry.note.content,
+      sourceType: entry.note.sourceType,
+      sourceUrl: entry.note.sourceUrl,
+      fileName: entry.note.fileName,
+      fileMime: entry.note.fileMime,
+      summary: entry.note.summary,
+      tags: entry.note.tags || [],
+      project: entry.note.project,
+      createdAt: entry.note.createdAt,
+      excerpt: makeExcerpt(entry.note.rawContent || entry.note.markdownContent || entry.note.content || "", normalizedQuery),
+      rawContent: String(entry.note.rawContent || ""),
+      markdownContent: includeMarkdown ? String(entry.note.markdownContent || "") : undefined,
+    },
+  }));
 }
 
 export async function searchMemories({ query = "", project = "", limit = 15 } = {}) {

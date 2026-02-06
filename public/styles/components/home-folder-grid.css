@@ -20,6 +20,10 @@
   color: var(--ink);
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
   overflow: hidden;
+  cursor: pointer;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 8px;
 }
 
 .home-folders-list .folder-pill[data-color="sky"] {
@@ -104,14 +108,15 @@
 }
 
 .home-folders-list .folder-pill-name {
-  display: block;
+  display: -webkit-box;
   font-size: 0.94rem;
   font-weight: 650;
   line-height: 1.3;
-  max-width: 100%;
+  min-height: calc(1.3em * 2);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  text-wrap: pretty;
   color: var(--ink);
 }
 
@@ -130,8 +135,37 @@
   padding: 0 6px;
 }
 
+.home-folders-list .folder-pill-delete {
+  width: 24px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #98a2b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.home-folders-list .folder-pill-delete svg {
+  width: 13px;
+  height: 13px;
+}
+
+.home-folders-list .folder-pill-delete:hover {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.home-folders-list .folder-pill-delete:focus-visible {
+  outline: 2px solid rgba(180, 35, 24, 0.2);
+  outline-offset: 1px;
+}
+
 .folder-pill-desc {
-  margin: 8px 0 0;
+  margin: 0;
   color: #667085;
   font-size: 0.8rem;
   line-height: 1.4;

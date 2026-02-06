@@ -108,6 +108,14 @@ function noteTypeIconMarkup(type) {
   `;
 }
 
+function deleteIconMarkup() {
+  return `
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path fill="currentColor" d="M8.5 3a1 1 0 0 0-1 1v.5H5.2a.8.8 0 1 0 0 1.6h.5v9.2A1.7 1.7 0 0 0 7.4 17h5.2a1.7 1.7 0 0 0 1.7-1.7V6.1h.5a.8.8 0 1 0 0-1.6h-2.3V4a1 1 0 0 0-1-1h-3Zm.6 3.1a.8.8 0 0 1 .8.8v6a.8.8 0 1 1-1.6 0v-6a.8.8 0 0 1 .8-.8Zm2.4 0a.8.8 0 0 1 .8.8v6a.8.8 0 1 1-1.6 0v-6a.8.8 0 0 1 .8-.8Z"/>
+    </svg>
+  `;
+}
+
 function compactInlineText(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -205,6 +213,7 @@ function queryElements(mountNode) {
     recentNotesList: mountNode.querySelector("#recent-notes-list"),
     recentTasksList: mountNode.querySelector("#recent-tasks-list"),
     refreshBtn: mountNode.querySelector("#refresh-btn"),
+    deleteFolderBtn: mountNode.querySelector("#delete-folder-btn"),
     folderItemsGrid: mountNode.querySelector("#folder-items-grid"),
     itemModal: mountNode.querySelector("#item-modal"),
     itemModalBackdrop: mountNode.querySelector("#item-modal-backdrop"),
@@ -284,7 +293,7 @@ function closeModal(els) {
 
 export function createFolderPage({ store, apiClient }) {
   return {
-    async mount({ mountNode, route }) {
+    async mount({ mountNode, route, navigate }) {
       const folderName = route.folderId || "general";
       const folderMeta = resolveFolderMeta(folderName, store.getState().draftFolders);
 
@@ -352,6 +361,15 @@ export function createFolderPage({ store, apiClient }) {
         setState({ draftFolders: drafts });
       }
 
+      function removeDraftFolder(folder) {
+        const normalizedName = String(folder || "").trim().toLowerCase();
+        if (!normalizedName) return;
+        const nextDrafts = normalizeFolderDrafts(getState().draftFolders).filter(
+          (entry) => entry.name.toLowerCase() !== normalizedName
+        );
+        setState({ draftFolders: nextDrafts });
+      }
+
       function setCaptureHint(text, tone = "neutral") {
         if (!els.captureHint) return;
         els.captureHint.textContent = text;
@@ -412,6 +430,91 @@ export function createFolderPage({ store, apiClient }) {
         els.topbarSearchToggle?.setAttribute("aria-expanded", isExpanded ? "true" : "false");
       }
 
+      function removeNoteFromFallback(noteId) {
+        const normalizedId = String(noteId || "").trim();
+        if (!normalizedId) return;
+        const nextMock = (Array.isArray(getState().mockNotes) ? getState().mockNotes : []).filter(
+          (entry, index) => normalizeCitation(entry, index).note.id !== normalizedId
+        );
+        const activeQuery = (els.topbarSearchInput?.value || "").trim();
+        recentNotes = filterAndRankMockNotes(nextMock, {
+          project: folderMeta.name,
+          limit: 120,
+        });
+        searchResults = activeQuery
+          ? filterAndRankMockNotes(nextMock, {
+              query: activeQuery,
+              project: folderMeta.name,
+              limit: 120,
+            })
+          : [];
+        setState({ mockNotes: nextMock, notes: recentNotes });
+        renderView();
+      }
+
+      function removeFolderFromFallback() {
+        const normalizedFolder = String(folderMeta.name || "").trim().toLowerCase();
+        const nextMock = (Array.isArray(getState().mockNotes) ? getState().mockNotes : []).filter((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          return String(note.project || "").trim().toLowerCase() !== normalizedFolder;
+        });
+        setState({ mockNotes: nextMock, notes: [] });
+      }
+
+      async function deleteNoteById(noteId) {
+        const normalizedId = String(noteId || "").trim();
+        if (!normalizedId) return;
+
+        const confirmed = window.confirm("Delete this item? This action cannot be undone.");
+        if (!confirmed) return;
+
+        closeModal(els);
+        try {
+          await apiClient.deleteNote(normalizedId);
+          if (!isMounted) return;
+          showToast("Item deleted");
+          await refreshNotes();
+        } catch (error) {
+          if (!isMounted) return;
+          const message = conciseTechnicalError(error, "Delete endpoint unavailable");
+          const alreadyDeleted = /not found|request failed \(404\)/i.test(message);
+          if (alreadyDeleted) {
+            showToast("Item already deleted");
+            await refreshNotes();
+            return;
+          }
+
+          removeNoteFromFallback(normalizedId);
+          showToast("Deleted locally");
+          apiClient.adapterLog("folder_delete_note_fallback", message);
+        }
+      }
+
+      async function deleteCurrentFolder() {
+        const folderName = String(folderMeta.name || "").trim();
+        if (!folderName) return;
+        const confirmed = window.confirm(`Delete folder "${folderName}" and all its items?`);
+        if (!confirmed) return;
+
+        closeModal(els);
+        try {
+          const result = await apiClient.deleteProject(folderName);
+          if (!isMounted) return;
+          removeDraftFolder(folderName);
+          const deletedCount = Number(result?.deletedCount || 0);
+          showToast(deletedCount > 0 ? `Deleted ${deletedCount} item${deletedCount === 1 ? "" : "s"}` : "Folder deleted");
+          navigate("#/");
+        } catch (error) {
+          if (!isMounted) return;
+          const message = conciseTechnicalError(error, "Folder delete endpoint unavailable");
+          removeDraftFolder(folderName);
+          removeFolderFromFallback();
+          showToast("Folder removed locally");
+          apiClient.adapterLog("folder_delete_fallback", message);
+          navigate("#/");
+        }
+      }
+
       function renderFolderItems(items) {
         if (!els.folderItemsGrid) return;
         els.folderItemsGrid.innerHTML = "";
@@ -429,6 +532,9 @@ export function createFolderPage({ store, apiClient }) {
 
         list.slice(0, 60).forEach((entry, index) => {
           const note = normalizeCitation(entry, index).note;
+          const shell = document.createElement("div");
+          shell.className = "folder-file-tile-shell";
+
           const tile = document.createElement("button");
           tile.type = "button";
           tile.className = "folder-file-tile";
@@ -476,7 +582,18 @@ export function createFolderPage({ store, apiClient }) {
             renderView();
           });
 
-          els.folderItemsGrid.appendChild(tile);
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "folder-file-delete";
+          deleteBtn.title = `Delete item ${buildNoteTitle(note)}`;
+          deleteBtn.setAttribute("aria-label", `Delete item ${buildNoteTitle(note)}`);
+          deleteBtn.innerHTML = deleteIconMarkup();
+          deleteBtn.addEventListener("click", async () => {
+            await deleteNoteById(note.id);
+          });
+
+          shell.append(tile, deleteBtn);
+          els.folderItemsGrid.appendChild(shell);
         });
       }
 
@@ -498,6 +615,9 @@ export function createFolderPage({ store, apiClient }) {
         } else {
           noteItems.forEach((entry, index) => {
             const note = normalizeCitation(entry, index).note;
+            const row = document.createElement("div");
+            row.className = "recent-item-row";
+
             const item = document.createElement("button");
             item.type = "button";
             item.className = "recent-item";
@@ -532,7 +652,18 @@ export function createFolderPage({ store, apiClient }) {
               renderView();
             });
 
-            els.recentNotesList.appendChild(item);
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.className = "recent-delete-btn";
+            deleteBtn.title = `Delete item ${buildNoteTitle(note)}`;
+            deleteBtn.setAttribute("aria-label", `Delete item ${buildNoteTitle(note)}`);
+            deleteBtn.innerHTML = deleteIconMarkup();
+            deleteBtn.addEventListener("click", async () => {
+              await deleteNoteById(note.id);
+            });
+
+            row.append(item, deleteBtn);
+            els.recentNotesList.appendChild(row);
           });
         }
 
@@ -869,6 +1000,10 @@ export function createFolderPage({ store, apiClient }) {
 
       on(els.refreshBtn, "click", async () => {
         await refreshNotes();
+      });
+
+      on(els.deleteFolderBtn, "click", async () => {
+        await deleteCurrentFolder();
       });
 
       on(els.itemModalClose, "click", () => {

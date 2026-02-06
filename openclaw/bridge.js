@@ -1,12 +1,8 @@
 import {
-  askMemories,
-  buildProjectContext,
-  createMemory,
-  getMemoryRawContent,
-  listRecentMemories,
+  deleteMemory,
+  deleteProjectMemories,
   readExtractedMarkdownMemory,
-  searchRawMemories,
-  searchMemories,
+  searchNotesBm25,
 } from "../src/memoryService.js";
 import { taskRepo } from "../src/tasksDb.js";
 
@@ -30,65 +26,34 @@ async function run() {
   try {
     let result;
     switch (toolName) {
-      case "project_memory_search":
-        result = await searchMemories({
+      case "search_notes":
+        result = await searchNotesBm25({
           query: String(args.query || ""),
           project: String(args.project || ""),
+          includeMarkdown: args.includeMarkdown === true,
           limit: Number(args.limit || 8),
         });
         break;
-      case "project_memory_search_raw_content":
-        result = await searchRawMemories({
-          query: String(args.query || ""),
-          project: String(args.project || ""),
-          includeMarkdown: args.includeMarkdown !== false,
-          limit: Number(args.limit || 8),
-        });
-        break;
-      case "project_memory_get_raw_content":
-        result = await getMemoryRawContent({
-          id: String(args.id || ""),
-          includeMarkdown: args.includeMarkdown !== false,
-          maxChars: Number(args.maxChars || 12000),
-        });
-        break;
-      case "project_memory_read_extracted_markdown":
+      case "obtain_consolidated_memory_file":
         result = await readExtractedMarkdownMemory({
-          filePath: String(args.filePath || ""),
           maxChars: Number(args.maxChars || 30000),
         });
         break;
-      case "project_memory_save":
-        result = await createMemory({
-          content: String(args.content || ""),
-          sourceType: String(args.sourceType || "text"),
-          sourceUrl: String(args.sourceUrl || ""),
-          fileDataUrl: String(args.fileDataUrl || ""),
-          fileName: String(args.fileName || ""),
-          fileMimeType: String(args.fileMimeType || ""),
-          project: String(args.project || ""),
-          metadata: { createdFrom: "openclaw" },
-        });
-        break;
-      case "project_memory_recent":
-        result = await listRecentMemories(Number(args.limit || 10));
-        break;
-      case "project_memory_context":
-        result = await buildProjectContext({
-          task: String(args.task || ""),
-          project: String(args.project || ""),
-          limit: Number(args.limit || 8),
-        });
-        break;
-      case "project_memory_ask":
-        result = await askMemories({
-          question: String(args.question || ""),
-          project: String(args.project || ""),
-          limit: Number(args.limit || 6),
-        });
-        break;
-      case "project_memory_tasks_list_open":
+      case "get_tasks":
         result = taskRepo.listOpenTasks();
+        break;
+      case "complete_task":
+        result = taskRepo.completeTask(String(args.id || ""));
+        break;
+      case "delete_note":
+        result = await deleteMemory({
+          id: String(args.id || ""),
+        });
+        break;
+      case "delete_project":
+        result = await deleteProjectMemories({
+          project: String(args.project || ""),
+        });
         break;
       default:
         throw new Error(`Unknown tool: ${toolName}`);

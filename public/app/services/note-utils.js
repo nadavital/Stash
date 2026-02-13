@@ -35,9 +35,55 @@ export function fileToDataUrl(file) {
 }
 
 export function isProcessedNote(note) {
+  if (note.status === "failed") return false;
   if (note.status === "pending" || note.status === "enriching") return false;
   if (note.status === "ready") return true;
   return Boolean(String(note.summary || "").trim()) && String(note.summary || "").trim() !== "(no summary)";
+}
+
+export function getNoteProcessingState(note) {
+  const normalizedStatus = String(note?.status || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedStatus === "failed") {
+    return {
+      status: "failed",
+      dotClass: "is-failed",
+      label: "Failed",
+      showLabel: true,
+      title: "Processing failed",
+    };
+  }
+
+  if (normalizedStatus === "enriching") {
+    return {
+      status: "enriching",
+      dotClass: "is-enriching",
+      label: "Enriching",
+      showLabel: true,
+      title: "Enriching now",
+    };
+  }
+
+  if (normalizedStatus === "pending") {
+    return {
+      status: "pending",
+      dotClass: "is-pending",
+      label: "Queued",
+      showLabel: true,
+      title: "Queued for enrichment",
+    };
+  }
+
+  const processed = isProcessedNote(note);
+  return {
+    status: processed ? "ready" : "pending",
+    dotClass: processed ? "is-processed" : "is-pending",
+    label: processed ? "Ready" : "Queued",
+    showLabel: !processed,
+    title: processed ? "Processed" : "Queued for enrichment",
+  };
 }
 
 export function deleteIconMarkup() {

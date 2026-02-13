@@ -9,6 +9,7 @@ import {
   askMemories,
   batchMoveMemories,
   batchDeleteMemories,
+  addMemoryComment,
   buildCitationBlock,
   buildProjectContext,
   createMemory,
@@ -1283,6 +1284,35 @@ async function handleApi(req, res, url) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Delete failed";
       sendJson(res, msg.includes("not found") ? 404 : 400, { error: msg });
+    }
+    return;
+  }
+
+  // POST /api/notes/:id/comments — add contextual comment to note metadata
+  if (req.method === "POST" && url.pathname.match(/^\/api\/notes\/[^/]+\/comments$/)) {
+    const suffix = "/comments";
+    const encodedId = url.pathname.slice("/api/notes/".length, -suffix.length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const text = String(body?.text || "").trim();
+    if (!text) {
+      sendJson(res, 400, { error: "Missing comment text" });
+      return;
+    }
+    try {
+      const result = await addMemoryComment({
+        id,
+        text,
+        actor,
+      });
+      sendJson(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to add comment";
+      sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
     }
     return;
   }

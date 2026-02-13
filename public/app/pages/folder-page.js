@@ -40,6 +40,7 @@ import {
   normalizeFolderColor,
   fallbackColorForFolder,
   normalizeFolderDrafts,
+  normalizeFolderSymbol,
   resolveFolderMeta,
 } from "../services/folder-utils.js";
 import { initKeyboardShortcuts } from "../services/keyboard.js";
@@ -54,7 +55,7 @@ import {
 } from "../services/mappers.js";
 import {
   iconTypeFor,
-  isProcessedNote,
+  getNoteProcessingState,
   fileToDataUrl,
   deleteIconMarkup,
   noteTypeIconMarkup,
@@ -165,7 +166,7 @@ export function createFolderPage({ store, apiClient, auth = null }) {
   return {
     async mount({ mountNode, route, navigate }) {
       const folderName = route.folderId || "general";
-      const folderMeta = resolveFolderMeta(folderName, store.getState().draftFolders);
+      let folderMeta = resolveFolderMeta(folderName, store.getState().draftFolders);
       const authSession = auth?.getSession?.() || null;
 
       mountNode.innerHTML = renderFolderPageShell(folderMeta, authSession);
@@ -192,13 +193,51 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         isImage: false,
       };
 
-      if (els.projectInput) {
-        els.projectInput.value = folderMeta.name;
+      function normalizeRuntimeFolderMeta(candidate, fallbackName = folderMeta.name) {
+        const normalizedName = String(candidate?.name || fallbackName || "").trim() || "General";
+        return {
+          name: normalizedName,
+          description: String(candidate?.description || "").trim(),
+          color: normalizeFolderColor(candidate?.color, fallbackColorForFolder(normalizedName)),
+          symbol: normalizeFolderSymbol(candidate?.symbol, "DOC"),
+        };
       }
-      if (els.projectSelect) {
-        els.projectSelect.innerHTML = `<option value="${folderMeta.name}">${folderMeta.name}</option>`;
-        els.projectSelect.value = folderMeta.name;
+
+      function syncFolderHeader(meta, root = mountNode) {
+        const normalized = normalizeRuntimeFolderMeta(meta);
+        const currentNameEl = root.querySelector(".folder-current-name");
+        if (currentNameEl) {
+          currentNameEl.textContent = normalized.name;
+        }
+        const colorDot = root.querySelector(".folder-breadcrumb-current .folder-color-dot");
+        if (colorDot) {
+          colorDot.dataset.color = normalized.color;
+        }
+        if (els.projectInput) {
+          els.projectInput.value = normalized.name;
+        }
+        if (els.projectSelect) {
+          els.projectSelect.innerHTML = `<option value="${normalized.name}">${normalized.name}</option>`;
+          els.projectSelect.value = normalized.name;
+        }
+
+        const heroToolbar = root.querySelector(".folder-hero-toolbar");
+        if (heroToolbar) {
+          let descriptionEl = root.querySelector(".folder-current-desc");
+          if (normalized.description) {
+            if (!descriptionEl) {
+              descriptionEl = document.createElement("p");
+              descriptionEl.className = "folder-current-desc";
+              heroToolbar.appendChild(descriptionEl);
+            }
+            descriptionEl.textContent = normalized.description;
+          } else if (descriptionEl) {
+            descriptionEl.remove();
+          }
+        }
       }
+
+      syncFolderHeader(folderMeta);
 
       function on(target, eventName, handler, options) {
         if (!target) return;
@@ -407,6 +446,7 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         if (!folder?.parentId) return;
         const breadcrumb = root.querySelector(".folder-breadcrumb");
         if (!breadcrumb) return;
+        const folderDotColor = normalizeFolderColor(folder?.color, fallbackColorForFolder(folder?.name || folderMeta.name));
         try {
           const parentResult = await apiClient.getFolder(folder.parentId);
           const parent = parentResult?.folder;
@@ -417,10 +457,11 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             <a class="folder-back-link" href="#/folder/${encodeURIComponent(parent.name)}">${parent.name}</a>
             <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>
             <span class="folder-breadcrumb-current">
-              <span class="folder-color-dot" data-color="${folder.color || 'green'}" aria-hidden="true"></span>
+              <span class="folder-color-dot" data-color="${folderDotColor}" aria-hidden="true"></span>
               <span class="folder-current-name">${folder.name}</span>
             </span>
           `;
+          syncFolderHeader(folder, root);
         } catch { /* breadcrumb stays default */ }
       }
 
@@ -748,8 +789,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         const noteItems = Array.isArray(recentNotes) ? recentNotes.slice(0, 15) : [];
         const taskItems = Array.isArray(openTasks) ? openTasks.slice(0, 15) : [];
 
-        const accessedSet = new Set(getState().accessedIds || []);
-
         if (!noteItems.length) {
           const emptyNotes = document.createElement("p");
           emptyNotes.className = "ui-empty";
@@ -768,7 +807,9 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
             const icon = document.createElement("span");
             icon.className = "recent-item-icon";
-            icon.dataset.type = iconTypeFor(note);
+            const noteType = iconTypeFor(note);
+            icon.dataset.type = noteType;
+            icon.title = `${noteType} note`;
 
             const label = document.createElement("span");
             label.className = "recent-item-label";
@@ -780,17 +821,16 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
             const states = document.createElement("span");
             states.className = "recent-item-states";
+            const processingState = getNoteProcessingState(note);
 
-            const processedDot = document.createElement("span");
-            processedDot.className = `state-dot ${isProcessedNote(note) ? "is-processed" : "is-pending"}`;
-            processedDot.title = isProcessedNote(note) ? "Processed" : "Pending processing";
-
-            const accessed = accessedSet.has(String(note.id || ""));
-            const accessedDot = document.createElement("span");
-            accessedDot.className = `state-dot is-accessed${accessed ? "" : " hidden"}`;
-            accessedDot.title = "Opened";
-
-            states.append(processedDot, accessedDot);
+            if (processingState.showLabel) {
+              const statusText = document.createElement("span");
+              statusText.className = `recent-item-status ${processingState.dotClass}`;
+              statusText.textContent = processingState.label;
+              states.append(statusText);
+            } else {
+              states.classList.add("hidden");
+            }
             item.append(icon, label, timeEl, states);
 
             item.addEventListener("click", () => {
@@ -1030,12 +1070,14 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
           if (folderMetaResult?.status === "fulfilled" && folderMetaResult.value?.folder) {
             dbFolderMeta = folderMetaResult.value.folder;
+            folderMeta = normalizeRuntimeFolderMeta(dbFolderMeta, folderMeta.name);
+            syncFolderHeader(folderMeta, mountNode);
             try {
               const childrenResult = await apiClient.fetchSubfolders(dbFolderMeta.id);
               subFolders = Array.isArray(childrenResult?.items) ? childrenResult.items : [];
             } catch { subFolders = []; }
             if (dbFolderMeta.parentId) {
-              updateBreadcrumb(dbFolderMeta, mountNode);
+              updateBreadcrumb({ ...dbFolderMeta, color: folderMeta.color }, mountNode);
             }
           }
 
@@ -1367,12 +1409,24 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         clearAttachment();
 
         try {
-          await apiClient.saveNote(payload);
+          const saveResult = await apiClient.saveNote(payload);
           if (!isMounted) return;
 
-          setCaptureHint("Saved.");
+          if (saveResult?.note) {
+            const savedEntry = normalizeCitation(saveResult.note, 0);
+            const savedId = String(savedEntry?.note?.id || "");
+            const savedProject = String(savedEntry?.note?.project || "");
+            if (savedId && savedProject === folderMeta.name) {
+              const deduped = recentNotes.filter((entry) => String((entry?.note || entry)?.id || "") !== savedId);
+              recentNotes = [savedEntry, ...deduped].slice(0, 120);
+              setState({ notes: recentNotes });
+              renderView();
+            }
+          }
+
+          setCaptureHint("Saved. Enriching in background...");
           toast("Item saved");
-          await refreshNotes();
+          refreshNotes().catch(() => {});
         } catch (error) {
           if (!isMounted) return;
 
@@ -1454,6 +1508,8 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         }
       });
 
+      let chatPanel = null;
+
       // Item modal handlers via extracted component
       const cleanupItemModal = initItemModalHandlers(els, {
         onClose() {
@@ -1471,11 +1527,44 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             toast(conciseTechnicalError(error, "Update failed"), "error");
           }
         },
+        async onAddComment(noteId, text) {
+          try {
+            const result = await apiClient.addNoteComment(noteId, { text });
+            if (!isMounted) return null;
+            const normalizedId = String(noteId || "");
+            let updated = null;
+            if (result?.note) {
+              recentNotes = recentNotes.map((entry, index) => {
+                const normalized = normalizeCitation(entry, index).note;
+                if (String(normalized.id || "") !== normalizedId) return entry;
+                updated = normalizeCitation(result.note, 0).note;
+                if (entry?.note) {
+                  return { ...entry, note: updated };
+                }
+                return updated;
+              });
+              if (updated) {
+                setState({ notes: recentNotes });
+                renderView();
+              }
+            }
+            toast("Comment added");
+            return updated;
+          } catch (error) {
+            if (!isMounted) return null;
+            toast(conciseTechnicalError(error, "Comment failed"), "error");
+            throw error;
+          }
+        },
+        onChatAbout(note) {
+          closeItemModal(els);
+          chatPanel?.startFromNote?.(note);
+        },
       });
       disposers.push(cleanupItemModal);
 
       // Chat panel
-      const chatPanel = initChatPanel(els, { apiClient, toast });
+      chatPanel = initChatPanel(els, { apiClient, toast });
       disposers.push(chatPanel.dispose);
 
       on(els.chatBtn, "click", () => {
@@ -1505,7 +1594,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         },
       });
 
-      ensureDraftFolder(folderMeta.name);
       clearAttachment();
       setCaptureHint("");
 
@@ -1527,25 +1615,66 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       showSkeletons();
 
       await refreshNotes();
+      ensureDraftFolder(folderMeta.name);
 
       // Subscribe to SSE for real-time enrichment updates
+      function updateRecentNoteById(noteId, patchNote) {
+        const normalizedId = String(noteId || "").trim();
+        if (!normalizedId) return false;
+        let changed = false;
+
+        for (let i = 0; i < recentNotes.length; i++) {
+          const entry = recentNotes[i];
+          const noteObj = entry?.note || entry;
+          if (String(noteObj?.id || "") !== normalizedId) continue;
+          const nextNote = patchNote(noteObj);
+          if (entry?.note) {
+            recentNotes[i] = { ...entry, note: nextNote };
+          } else {
+            recentNotes[i] = nextNote;
+          }
+          changed = true;
+          break;
+        }
+
+        return changed;
+      }
+
       const unsubscribeSSE = apiClient.subscribeToEvents?.((event) => {
         if (!isMounted) return;
+        if (event.type === "job:start" && event.id) {
+          const changed = updateRecentNoteById(event.id, (noteObj) => ({ ...noteObj, status: "enriching" }));
+          if (!changed) return;
+          setState({ notes: recentNotes });
+          renderView();
+          return;
+        }
+
+        if (event.type === "job:error" && event.id) {
+          const changed = updateRecentNoteById(event.id, (noteObj) => ({
+            ...noteObj,
+            status: "failed",
+            metadata: {
+              ...(noteObj.metadata || {}),
+              enrichmentError: String(event.error || ""),
+            },
+          }));
+          if (!changed) return;
+          setCaptureHint("An item failed to enrich. You can still open it.", "warn");
+          setState({ notes: recentNotes });
+          renderView();
+          return;
+        }
+
         if (event.type === "job:complete" && event.result) {
           const enrichedNote = event.result;
           if (enrichedNote.project !== folderMeta.name) return;
-          for (let i = 0; i < recentNotes.length; i++) {
-            const entry = recentNotes[i];
-            const noteObj = entry?.note || entry;
-            if (noteObj.id === enrichedNote.id) {
-              if (entry?.note) {
-                recentNotes[i] = { ...entry, note: enrichedNote };
-              } else {
-                recentNotes[i] = enrichedNote;
-              }
-              break;
-            }
-          }
+          const changed = updateRecentNoteById(enrichedNote.id, (noteObj) => ({
+            ...noteObj,
+            ...enrichedNote,
+            status: "ready",
+          }));
+          if (!changed) return;
           setState({ notes: recentNotes });
           renderView();
         }

@@ -52,7 +52,7 @@ import {
 } from "../services/mappers.js";
 import {
   iconTypeFor,
-  isProcessedNote,
+  getNoteProcessingState,
   fileToDataUrl,
   deleteIconMarkup,
   relativeTime,
@@ -553,7 +553,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
         const noteItems = applySortFilter(Array.isArray(recentNotes) ? recentNotes : []).slice(0, 16);
         const taskItems = Array.isArray(openTasks) ? openTasks.slice(0, 16) : [];
-        const accessedSet = new Set(getState().accessedIds || []);
 
         if (!noteItems.length) {
           const emptyNotes = document.createElement("p");
@@ -573,7 +572,9 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
             const icon = document.createElement("span");
             icon.className = "recent-item-icon";
-            icon.dataset.type = iconTypeFor(note);
+            const noteType = iconTypeFor(note);
+            icon.dataset.type = noteType;
+            icon.title = `${noteType} note`;
 
             const label = document.createElement("span");
             label.className = "recent-item-label";
@@ -585,17 +586,16 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
             const states = document.createElement("span");
             states.className = "recent-item-states";
+            const processingState = getNoteProcessingState(note);
 
-            const processedDot = document.createElement("span");
-            processedDot.className = `state-dot ${isProcessedNote(note) ? "is-processed" : "is-pending"}`;
-            processedDot.title = isProcessedNote(note) ? "Processed" : "Pending processing";
-
-            const accessedDot = document.createElement("span");
-            const accessed = accessedSet.has(String(note.id || ""));
-            accessedDot.className = `state-dot is-accessed${accessed ? "" : " hidden"}`;
-            accessedDot.title = "Opened";
-
-            states.append(processedDot, accessedDot);
+            if (processingState.showLabel) {
+              const statusText = document.createElement("span");
+              statusText.className = `recent-item-status ${processingState.dotClass}`;
+              statusText.textContent = processingState.label;
+              states.append(statusText);
+            } else {
+              states.classList.add("hidden");
+            }
             item.append(icon, label, timeEl, states);
 
             item.addEventListener("click", () => {
@@ -1238,12 +1238,21 @@ export function createHomePage({ store, apiClient, auth = null }) {
         clearAttachment();
 
         try {
-          await apiClient.saveNote(payload);
+          const saveResult = await apiClient.saveNote(payload);
           if (!isMounted) return;
 
-          setCaptureHint("Saved.");
+          if (saveResult?.note) {
+            const savedEntry = normalizeCitation(saveResult.note, 0);
+            const savedId = String(savedEntry?.note?.id || "");
+            const deduped = recentNotes.filter((entry) => String((entry?.note || entry)?.id || "") !== savedId);
+            recentNotes = [savedEntry, ...deduped].slice(0, 120);
+            setState({ notes: recentNotes });
+            renderView();
+          }
+
+          setCaptureHint("Saved. Enriching in background...");
           toast("Item saved");
-          await refreshNotes();
+          refreshNotes().catch(() => {});
         } catch (error) {
           if (!isMounted) return;
 
@@ -1305,6 +1314,8 @@ export function createHomePage({ store, apiClient, auth = null }) {
       });
       disposers.push(cleanupFolderModal);
 
+      let chatPanel = null;
+
       // Item modal handlers via extracted component
       const cleanupItemModal = initItemModalHandlers(els, {
         onClose() {
@@ -1322,11 +1333,44 @@ export function createHomePage({ store, apiClient, auth = null }) {
             toast(conciseTechnicalError(error, "Update failed"), "error");
           }
         },
+        async onAddComment(noteId, text) {
+          try {
+            const result = await apiClient.addNoteComment(noteId, { text });
+            if (!isMounted) return null;
+            const normalizedId = String(noteId || "");
+            let updated = null;
+            if (result?.note) {
+              recentNotes = recentNotes.map((entry, index) => {
+                const normalized = normalizeCitation(entry, index).note;
+                if (String(normalized.id || "") !== normalizedId) return entry;
+                updated = normalizeCitation(result.note, 0).note;
+                if (entry?.note) {
+                  return { ...entry, note: updated };
+                }
+                return updated;
+              });
+              if (updated) {
+                setState({ notes: recentNotes });
+                renderView();
+              }
+            }
+            toast("Comment added");
+            return updated;
+          } catch (error) {
+            if (!isMounted) return null;
+            toast(conciseTechnicalError(error, "Comment failed"), "error");
+            throw error;
+          }
+        },
+        onChatAbout(note) {
+          closeItemModal(els);
+          chatPanel?.startFromNote?.(note);
+        },
       });
       disposers.push(cleanupItemModal);
 
       // Chat panel
-      const chatPanel = initChatPanel(els, { apiClient, toast });
+      chatPanel = initChatPanel(els, { apiClient, toast });
       disposers.push(chatPanel.dispose);
 
       on(els.chatBtn, "click", () => {
@@ -1415,23 +1459,62 @@ export function createHomePage({ store, apiClient, auth = null }) {
       });
 
       // Subscribe to SSE for real-time enrichment updates
+      function updateRecentNoteById(noteId, patchNote) {
+        const normalizedId = String(noteId || "").trim();
+        if (!normalizedId) return false;
+        let changed = false;
+
+        for (let i = 0; i < recentNotes.length; i++) {
+          const entry = recentNotes[i];
+          const noteObj = entry?.note || entry;
+          if (String(noteObj?.id || "") !== normalizedId) continue;
+          const nextNote = patchNote(noteObj);
+          if (entry?.note) {
+            recentNotes[i] = { ...entry, note: nextNote };
+          } else {
+            recentNotes[i] = nextNote;
+          }
+          changed = true;
+          break;
+        }
+
+        return changed;
+      }
+
       const unsubscribeSSE = apiClient.subscribeToEvents?.((event) => {
         if (!isMounted) return;
+        if (event.type === "job:start" && event.id) {
+          const changed = updateRecentNoteById(event.id, (noteObj) => ({ ...noteObj, status: "enriching" }));
+          if (!changed) return;
+          setState({ notes: recentNotes });
+          renderView();
+          return;
+        }
+
+        if (event.type === "job:error" && event.id) {
+          const changed = updateRecentNoteById(event.id, (noteObj) => ({
+            ...noteObj,
+            status: "failed",
+            metadata: {
+              ...(noteObj.metadata || {}),
+              enrichmentError: String(event.error || ""),
+            },
+          }));
+          if (!changed) return;
+          setCaptureHint("An item failed to enrich. You can still open it.", "warn");
+          setState({ notes: recentNotes });
+          renderView();
+          return;
+        }
+
         if (event.type === "job:complete" && event.result) {
           const enrichedNote = event.result;
-          // Update note in-place in our local arrays
-          for (let i = 0; i < recentNotes.length; i++) {
-            const entry = recentNotes[i];
-            const noteObj = entry?.note || entry;
-            if (noteObj.id === enrichedNote.id) {
-              if (entry?.note) {
-                recentNotes[i] = { ...entry, note: enrichedNote };
-              } else {
-                recentNotes[i] = enrichedNote;
-              }
-              break;
-            }
-          }
+          const changed = updateRecentNoteById(enrichedNote.id, (noteObj) => ({
+            ...noteObj,
+            ...enrichedNote,
+            status: "ready",
+          }));
+          if (!changed) return;
           setState({ notes: recentNotes });
           renderView();
         }

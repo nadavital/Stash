@@ -135,6 +135,32 @@
   font-size: var(--font-size-base);
 }
 
+.item-modal-quick-actions {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.item-modal-quick-action {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-secondary);
+  padding: 6px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+  line-height: var(--leading-none);
+}
+
+.item-modal-quick-action:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+  background: var(--hover-bg);
+}
+
 .item-modal-image {
   margin-top: 16px;
   width: 100%;
@@ -179,6 +205,104 @@
   font-size: var(--font-size-caption);
   line-height: var(--leading-relaxed);
   border: 1px solid var(--border-subtle);
+}
+
+.item-modal-comments {
+  margin-top: 18px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 14px;
+}
+
+.item-modal-comments-title {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.item-modal-comments-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  max-height: 200px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.item-modal-comments-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+.item-modal-comment-item {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-subtle);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.item-modal-comment-text {
+  margin: 0;
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  line-height: var(--leading-relaxed);
+  font-size: var(--font-size-sm);
+}
+
+.item-modal-comment-meta {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  font-family: var(--font-mono);
+}
+
+.item-modal-comment-form {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.item-modal-comment-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  padding: 9px 10px;
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-relaxed);
+  resize: vertical;
+  min-height: 64px;
+}
+
+.item-modal-comment-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.item-modal-comment-submit {
+  justify-self: end;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-secondary);
+  padding: 6px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.item-modal-comment-submit:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.item-modal-comment-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* ---------- Edit Form ---------- */

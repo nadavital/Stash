@@ -52,12 +52,14 @@
   min-height: 42px;
 }
 
-.auth-gate #auth-signup-fields {
+.auth-gate #auth-signup-name-field,
+.auth-gate #auth-signup-confirm-field {
   display: grid;
   gap: 10px;
 }
 
-.auth-gate #auth-signup-fields.hidden {
+.auth-gate #auth-signup-name-field.hidden,
+.auth-gate #auth-signup-confirm-field.hidden {
   display: none;
 }
 

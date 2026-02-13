@@ -112,9 +112,6 @@ function mountAuthGate({ mode = "signin", email = "", name = "", error = "" } = 
     async onForgotPassword({ email }) {
       await apiClient.requestPasswordReset({ email });
     },
-    async onResendVerification() {
-      await apiClient.resendEmailVerification();
-    },
   });
 }
 

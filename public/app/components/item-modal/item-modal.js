@@ -24,9 +24,28 @@ export function renderItemModalHTML() {
         <div class="item-modal-body">
           <h3 id="item-modal-title" class="item-modal-title"></h3>
           <div id="item-modal-content" class="item-modal-content"></div>
+          <div id="item-modal-quick-actions" class="item-modal-quick-actions">
+            <button id="item-modal-chat-about-btn" class="item-modal-quick-action" type="button">Chat about this item</button>
+            <a id="item-modal-open-source" class="item-modal-quick-action hidden" href="#" target="_blank" rel="noopener noreferrer">Open original</a>
+            <button id="item-modal-copy-source" class="item-modal-quick-action hidden" type="button">Copy link</button>
+          </div>
           <img id="item-modal-image" class="item-modal-image hidden" alt="Item preview" />
           <button id="item-modal-toggle" class="item-modal-toggle hidden" type="button" aria-expanded="false">Show full text</button>
           <pre id="item-modal-full-content" class="item-modal-full-content hidden"></pre>
+          <section class="item-modal-comments" aria-label="Comments">
+            <p class="item-modal-comments-title">Context comments</p>
+            <div id="item-modal-comments-list" class="item-modal-comments-list"></div>
+            <form id="item-modal-comment-form" class="item-modal-comment-form">
+              <textarea
+                id="item-modal-comment-input"
+                class="item-modal-comment-input"
+                rows="2"
+                maxlength="2000"
+                placeholder="Add context, decisions, or follow-ups..."
+              ></textarea>
+              <button id="item-modal-comment-submit" class="item-modal-comment-submit" type="submit">Add comment</button>
+            </form>
+          </section>
         </div>
         <form id="item-modal-edit-form" class="item-modal-edit-form hidden">
           <label class="item-modal-edit-label">Content
@@ -59,6 +78,14 @@ export function queryItemModalEls(root) {
     itemModalToggle: root.querySelector("#item-modal-toggle"),
     itemModalFullContent: root.querySelector("#item-modal-full-content"),
     itemModalImage: root.querySelector("#item-modal-image"),
+    itemModalQuickActions: root.querySelector("#item-modal-quick-actions"),
+    itemModalChatAboutBtn: root.querySelector("#item-modal-chat-about-btn"),
+    itemModalOpenSource: root.querySelector("#item-modal-open-source"),
+    itemModalCopySource: root.querySelector("#item-modal-copy-source"),
+    itemModalCommentsList: root.querySelector("#item-modal-comments-list"),
+    itemModalCommentForm: root.querySelector("#item-modal-comment-form"),
+    itemModalCommentInput: root.querySelector("#item-modal-comment-input"),
+    itemModalCommentSubmit: root.querySelector("#item-modal-comment-submit"),
     itemModalEditBtn: root.querySelector("#item-modal-edit-btn"),
     itemModalEditForm: root.querySelector("#item-modal-edit-form"),
     itemModalEditContent: root.querySelector("#item-modal-edit-content"),
@@ -85,6 +112,59 @@ function enterEditMode(els) {
   els.itemModalEditContent?.focus();
 }
 
+function normalizeModalComments(note) {
+  return (Array.isArray(note?.metadata?.comments) ? note.metadata.comments : [])
+    .map((entry) => ({
+      text: String(entry?.text || "").trim(),
+      createdAt: String(entry?.createdAt || "").trim(),
+    }))
+    .filter((entry) => entry.text);
+}
+
+function commentTimeLabel(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function renderComments(els, note) {
+  if (!els.itemModalCommentsList) return;
+  const comments = normalizeModalComments(note);
+  els.itemModalCommentsList.innerHTML = "";
+
+  if (!comments.length) {
+    const empty = document.createElement("p");
+    empty.className = "item-modal-comments-empty";
+    empty.textContent = "No comments yet.";
+    els.itemModalCommentsList.appendChild(empty);
+    return;
+  }
+
+  comments
+    .slice()
+    .reverse()
+    .forEach((comment) => {
+      const item = document.createElement("article");
+      item.className = "item-modal-comment-item";
+
+      const text = document.createElement("p");
+      text.className = "item-modal-comment-text";
+      text.textContent = comment.text;
+
+      const meta = document.createElement("p");
+      meta.className = "item-modal-comment-meta";
+      meta.textContent = commentTimeLabel(comment.createdAt) || "Just now";
+
+      item.append(text, meta);
+      els.itemModalCommentsList.appendChild(item);
+    });
+}
+
 export function openItemModal(els, note) {
   if (!els.itemModal || !note) return;
   currentNote = note;
@@ -99,6 +179,20 @@ export function openItemModal(els, note) {
   els.itemModalProject.textContent = projectParts.join(" \u2022 ");
   const summaryText = buildModalSummary(note);
   els.itemModalContent.textContent = summaryText || "No AI description available yet.";
+  renderComments(els, note);
+
+  const sourceUrl = String(note.sourceUrl || "").trim();
+  if (els.itemModalOpenSource) {
+    els.itemModalOpenSource.classList.toggle("hidden", !sourceUrl);
+    if (sourceUrl) {
+      els.itemModalOpenSource.href = sourceUrl;
+    } else {
+      els.itemModalOpenSource.removeAttribute("href");
+    }
+  }
+  if (els.itemModalCopySource) {
+    els.itemModalCopySource.classList.toggle("hidden", !sourceUrl);
+  }
 
   const fullExtract = buildModalFullExtract(note);
   const hasDistinctFull =
@@ -148,6 +242,9 @@ export function closeItemModal(els) {
     els.itemModalFullContent.classList.add("hidden");
     els.itemModalFullContent.textContent = "";
   }
+  if (els.itemModalCommentInput) {
+    els.itemModalCommentInput.value = "";
+  }
   els.itemModal.classList.add("hidden");
   els.itemModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
@@ -157,7 +254,7 @@ export function getCurrentNote() {
   return currentNote;
 }
 
-export function initItemModalHandlers(els, { onClose, onSave }) {
+export function initItemModalHandlers(els, { onClose, onSave, onAddComment, onChatAbout }) {
   const handlers = [];
 
   function addHandler(target, event, handler) {
@@ -175,6 +272,62 @@ export function initItemModalHandlers(els, { onClose, onSave }) {
 
   addHandler(els.itemModalEditCancel, "click", () => {
     exitEditMode(els);
+  });
+
+  addHandler(els.itemModalChatAboutBtn, "click", () => {
+    if (!currentNote || !onChatAbout) return;
+    onChatAbout(currentNote);
+  });
+
+  addHandler(els.itemModalCopySource, "click", async () => {
+    const sourceUrl = String(currentNote?.sourceUrl || "").trim();
+    if (!sourceUrl || !navigator?.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(sourceUrl);
+    } catch {
+      // no-op
+    }
+  });
+
+  addHandler(els.itemModalCommentForm, "submit", async (event) => {
+    event.preventDefault();
+    if (!currentNote || !onAddComment || !els.itemModalCommentInput || !els.itemModalCommentSubmit) return;
+    const text = String(els.itemModalCommentInput.value || "").trim();
+    if (!text) {
+      els.itemModalCommentInput.focus();
+      return;
+    }
+    els.itemModalCommentInput.disabled = true;
+    els.itemModalCommentSubmit.disabled = true;
+    try {
+      const updated = await onAddComment(currentNote.id, text, currentNote);
+      if (updated) {
+        currentNote = updated;
+      } else {
+        const existingComments = Array.isArray(currentNote.metadata?.comments) ? currentNote.metadata.comments : [];
+        currentNote = {
+          ...currentNote,
+          metadata: {
+            ...(currentNote.metadata || {}),
+            comments: [
+              ...existingComments,
+              {
+                text,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          },
+        };
+      }
+      els.itemModalCommentInput.value = "";
+      renderComments(els, currentNote);
+    } catch {
+      // error feedback is handled by page-level callback
+    } finally {
+      els.itemModalCommentInput.disabled = false;
+      els.itemModalCommentSubmit.disabled = false;
+      els.itemModalCommentInput.focus();
+    }
   });
 
   addHandler(els.itemModalEditForm, "submit", (e) => {

@@ -39,6 +39,7 @@ export function queryChatPanelEls(root) {
 export function initChatPanel(els, { apiClient, toast }) {
   const handlers = [];
   let isAsking = false;
+  let nextProjectHint = "";
 
   function addHandler(target, event, handler) {
     if (!target) return;
@@ -86,10 +87,25 @@ export function initChatPanel(els, { apiClient, toast }) {
     });
   }
 
+  function buildItemContextQuestion(note) {
+    const title = buildNoteTitle(note);
+    const lines = [
+      "Use this saved item as the primary context.",
+      `Item: ${title}`,
+      note?.project ? `Folder: ${note.project}` : "",
+      note?.sourceUrl ? `Source URL: ${note.sourceUrl}` : "",
+      note?.summary ? `Current summary: ${note.summary}` : "",
+      "Explain what it is, why it matters, and suggested next actions.",
+    ];
+    return lines.filter(Boolean).join("\n");
+  }
+
   async function handleSubmit() {
     if (isAsking) return;
     const question = (els.chatPanelInput?.value || "").trim();
     if (!question) return;
+    const project = nextProjectHint;
+    nextProjectHint = "";
 
     addMessage("user", question);
     if (els.chatPanelInput) els.chatPanelInput.value = "";
@@ -103,7 +119,7 @@ export function initChatPanel(els, { apiClient, toast }) {
 
     try {
       await apiClient.askStreaming(
-        { question },
+        { question, project: project || undefined },
         {
           onCitations(citations) {
             renderCitations(citations);
@@ -150,6 +166,15 @@ export function initChatPanel(els, { apiClient, toast }) {
 
   return {
     toggle: togglePanel,
+    startFromNote(note, { autoSubmit = true } = {}) {
+      if (!note || !els.chatPanelInput) return;
+      nextProjectHint = String(note.project || "").trim();
+      togglePanel(true);
+      els.chatPanelInput.value = buildItemContextQuestion(note);
+      if (autoSubmit) {
+        handleSubmit();
+      }
+    },
     dispose: () => handlers.forEach((fn) => fn()),
   };
 }

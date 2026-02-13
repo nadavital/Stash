@@ -681,6 +681,15 @@ export function createApiClient({ adapterDebug = false } = {}) {
       });
     },
 
+    async addNoteComment(id, payload) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing id");
+      return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/comments`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+
     async fetchTags() {
       return jsonFetch(API_ENDPOINTS.tags);
     },

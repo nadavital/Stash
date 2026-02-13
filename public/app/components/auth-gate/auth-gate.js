@@ -20,7 +20,6 @@ function getModeCopy(mode) {
     switchAction: isSignUp ? "Sign in" : "Create account",
     showSignUpFields: isSignUp,
     showForgotPassword: !isSignUp,
-    showResendVerification: !isSignUp,
   };
 }
 
@@ -59,6 +58,19 @@ export function renderAuthGateHTML({
             value="${safeEmail}"
           />
 
+          <div id="auth-signup-name-field" class="${copy.showSignUpFields ? "" : "hidden"}">
+            <label class="auth-gate-label" for="auth-name-input">Name (optional)</label>
+            <input
+              id="auth-name-input"
+              class="auth-gate-input"
+              type="text"
+              name="name"
+              autocomplete="name"
+              placeholder="Your name"
+              value="${safeName}"
+            />
+          </div>
+
           <label class="auth-gate-label" for="auth-password-input">Password</label>
           <input
             id="auth-password-input"
@@ -71,18 +83,7 @@ export function renderAuthGateHTML({
             placeholder="At least 8 characters"
           />
 
-          <div id="auth-signup-fields" class="${copy.showSignUpFields ? "" : "hidden"}">
-            <label class="auth-gate-label" for="auth-name-input">Name (optional)</label>
-            <input
-              id="auth-name-input"
-              class="auth-gate-input"
-              type="text"
-              name="name"
-              autocomplete="name"
-              placeholder="Your name"
-              value="${safeName}"
-            />
-
+          <div id="auth-signup-confirm-field" class="${copy.showSignUpFields ? "" : "hidden"}">
             <label class="auth-gate-label" for="auth-password-confirm-input">Confirm password</label>
             <input
               id="auth-password-confirm-input"
@@ -102,14 +103,6 @@ export function renderAuthGateHTML({
             type="button"
           >
             Forgot password?
-          </button>
-
-          <button
-            id="auth-resend-verification-btn"
-            class="auth-gate-resend${copy.showResendVerification ? "" : " hidden"}"
-            type="button"
-          >
-            Resend verification email
           </button>
 
           <p id="auth-gate-error" class="auth-gate-error${safeError ? "" : " hidden"}" role="alert">${safeError || ""}</p>
@@ -137,11 +130,11 @@ export function queryAuthGateEls(root) {
     subtitle: root.querySelector("#auth-gate-subtitle"),
     emailInput: root.querySelector("#auth-email-input"),
     passwordInput: root.querySelector("#auth-password-input"),
-    signupFields: root.querySelector("#auth-signup-fields"),
     nameInput: root.querySelector("#auth-name-input"),
     passwordConfirmInput: root.querySelector("#auth-password-confirm-input"),
     forgotPasswordButton: root.querySelector("#auth-forgot-password-btn"),
-    resendVerificationButton: root.querySelector("#auth-resend-verification-btn"),
+    signupFields: root.querySelector("#auth-signup-name-field"),
+    signupConfirmField: root.querySelector("#auth-signup-confirm-field"),
     error: root.querySelector("#auth-gate-error"),
     info: root.querySelector("#auth-gate-info"),
     submit: root.querySelector("#auth-gate-submit"),
@@ -150,7 +143,7 @@ export function queryAuthGateEls(root) {
   };
 }
 
-export function initAuthGate(els, { onSubmit, onForgotPassword, onResendVerification } = {}) {
+export function initAuthGate(els, { onSubmit, onForgotPassword } = {}) {
   let disposed = false;
   let mode = els.modeInput?.value === "signup" ? "signup" : "signin";
 
@@ -200,8 +193,8 @@ export function initAuthGate(els, { onSubmit, onForgotPassword, onResendVerifica
     if (els.forgotPasswordButton) {
       els.forgotPasswordButton.classList.toggle("hidden", !copy.showForgotPassword);
     }
-    if (els.resendVerificationButton) {
-      els.resendVerificationButton.classList.toggle("hidden", !copy.showResendVerification);
+    if (els.signupConfirmField) {
+      els.signupConfirmField.classList.toggle("hidden", !copy.showSignUpFields);
     }
     setLoading(false);
     setError("");
@@ -282,32 +275,9 @@ export function initAuthGate(els, { onSubmit, onForgotPassword, onResendVerifica
     }
   }
 
-  async function handleResendVerification() {
-    if (disposed || typeof onResendVerification !== "function") return;
-    const email = String(els.emailInput?.value || "").trim();
-    if (!email) {
-      setError("Enter your email first, then click Resend verification email");
-      els.emailInput?.focus();
-      return;
-    }
-
-    setError("");
-    setInfo("");
-    setLoading(true);
-    try {
-      await onResendVerification({ email });
-      setInfo("Verification email sent. Check your inbox.");
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  }
-
   els.form?.addEventListener("submit", handleSubmit);
   els.modeToggle?.addEventListener("click", handleToggleMode);
   els.forgotPasswordButton?.addEventListener("click", handleForgotPassword);
-  els.resendVerificationButton?.addEventListener("click", handleResendVerification);
   applyMode(mode);
 
   return function dispose() {
@@ -315,6 +285,5 @@ export function initAuthGate(els, { onSubmit, onForgotPassword, onResendVerifica
     els.form?.removeEventListener("submit", handleSubmit);
     els.modeToggle?.removeEventListener("click", handleToggleMode);
     els.forgotPasswordButton?.removeEventListener("click", handleForgotPassword);
-    els.resendVerificationButton?.removeEventListener("click", handleResendVerification);
   };
 }

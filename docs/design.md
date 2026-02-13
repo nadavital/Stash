@@ -184,6 +184,7 @@ All component JS files live under `public/app/components/`. All component CSS fi
 | Item Modal | `components/item-modal/item-modal.js` | `components/item-modal.css` | `.item-modal-*` |
 | Folder Modal | `components/folder-modal/folder-modal.js` | `components/folder-modal.css` | `.folder-modal-*` |
 | Inline Search | `components/inline-search/inline-search.js` | `components/inline-search.css` | `.inline-search-*` |
+| Chat Panel | `components/chat-panel/chat-panel.js` | `components/chat-panel.css` | `.chat-panel-*` |
 | Sort/Filter | `components/sort-filter/sort-filter.js` | (in `topbar.css`) | `.sort-filter-*` |
 | Toast | `components/toast/toast.js` | `components/toast.css` | `.toast` |
 | Skeleton | (CSS only) | `components/skeleton.css` | `.skeleton-*` |
@@ -290,14 +291,14 @@ Returns HTML string. Items are populated dynamically after API fetch.
 
 #### Item Modal
 
-Full-screen modal for viewing a single note's details (summary, full extract, metadata, tags).
+Full-screen modal for viewing a single note's details, source actions, and contextual comments.
 
 ```js
 export function renderItemModalHTML()
 export function queryItemModalEls(root)
 export function openItemModal(els, note)
 export function closeItemModal(els)
-export function initItemModalHandlers(els, { onClose })
+export function initItemModalHandlers(els, { onClose, onSave, onAddComment, onChatAbout })
 ```
 
 **Usage example:**
@@ -320,11 +321,27 @@ import {
 // Wire handlers:
 const cleanup = initItemModalHandlers(els, {
   onClose: () => closeItemModal(els),
+  onAddComment: async (noteId, text) => apiClient.addNoteComment(noteId, { text }),
+  onChatAbout: (note) => chatPanel.startFromNote(note),
 });
 
 // Open for a specific note:
 openItemModal(els, note);
 ```
+
+---
+
+#### Chat Panel
+
+Right-side chat surface for grounded Q&A over saved notes, with source citations.
+
+```js
+export function renderChatPanelHTML()
+export function queryChatPanelEls(root)
+export function initChatPanel(els, { apiClient, toast })
+```
+
+`initChatPanel()` returns controls for `toggle(show?)`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
 
 ---
 

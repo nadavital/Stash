@@ -1187,6 +1187,21 @@ async function processEnrichment({
   return enrichedNote;
 }
 
+function enqueueEnrichmentJob(params) {
+  enrichmentQueue.enqueue({
+    id: params.noteId,
+    workspaceId: params.workspaceId,
+    fn: async () => {
+      try {
+        return await processEnrichment(params);
+      } catch (error) {
+        await noteRepo.updateStatus(params.noteId, "failed", params.workspaceId).catch(() => {});
+        throw error;
+      }
+    },
+  });
+}
+
 /**
  * Phase A: Synchronous note creation.
  * Saves the note instantly with heuristic enrichment, then enqueues
@@ -1318,22 +1333,17 @@ export async function createMemory({
   });
 
   // Enqueue background enrichment
-  enrichmentQueue.enqueue({
-    id: note.id,
+  enqueueEnrichmentJob({
+    noteId: note.id,
     workspaceId: actorContext.workspaceId,
-    fn: () =>
-      processEnrichment({
-        noteId: note.id,
-        workspaceId: actorContext.workspaceId,
-        requestedProject,
-        normalizedSourceType,
-        normalizedSourceUrl,
-        hasFileUpload: Boolean(normalizedFileDataUrl),
-        uploadEnrichment,
-        fileDataUrl: normalizedFileDataUrl,
-        fileName: normalizedFileName,
-        fileMime: uploadMime,
-      }),
+    requestedProject,
+    normalizedSourceType,
+    normalizedSourceUrl,
+    hasFileUpload: Boolean(normalizedFileDataUrl),
+    uploadEnrichment,
+    fileDataUrl: normalizedFileDataUrl,
+    fileName: normalizedFileName,
+    fileMime: uploadMime,
   });
 
   return note;
@@ -1363,22 +1373,17 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
   // Re-enrich if content changed
   if (contentChanged) {
     await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
-    enrichmentQueue.enqueue({
-      id: normalizedId,
+    enqueueEnrichmentJob({
+      noteId: normalizedId,
       workspaceId: actorContext.workspaceId,
-      fn: () =>
-        processEnrichment({
-          noteId: normalizedId,
-          workspaceId: actorContext.workspaceId,
-          requestedProject: updatedNote.project || "",
-          normalizedSourceType: updatedNote.sourceType || "text",
-          normalizedSourceUrl: updatedNote.sourceUrl || "",
-          hasFileUpload: false,
-          uploadEnrichment: null,
-          fileDataUrl: null,
-          fileName: updatedNote.fileName || "",
-          fileMime: updatedNote.fileMime || "",
-        }),
+      requestedProject: updatedNote.project || "",
+      normalizedSourceType: updatedNote.sourceType || "text",
+      normalizedSourceUrl: updatedNote.sourceUrl || "",
+      hasFileUpload: false,
+      uploadEnrichment: null,
+      fileDataUrl: null,
+      fileName: updatedNote.fileName || "",
+      fileMime: updatedNote.fileMime || "",
     });
   } else {
     // Sync consolidated file even without re-enrichment
@@ -1386,6 +1391,62 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
   }
 
   return updatedNote;
+}
+
+function normalizeNoteComments(rawComments = []) {
+  return (Array.isArray(rawComments) ? rawComments : [])
+    .map((entry) => ({
+      id: String(entry?.id || "").trim(),
+      text: String(entry?.text || "").trim(),
+      createdAt: String(entry?.createdAt || "").trim(),
+      authorUserId: String(entry?.authorUserId || "").trim() || null,
+    }))
+    .filter((entry) => entry.text);
+}
+
+export async function addMemoryComment({ id, text, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const normalizedText = String(text || "").trim();
+  if (!normalizedText) throw new Error("Missing comment text");
+  if (normalizedText.length > 2000) throw new Error("Comment is too long (max 2000 chars)");
+
+  const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
+  assertCanMutateNote(existing, actorContext);
+
+  const comment = {
+    id: crypto.randomUUID(),
+    text: normalizedText,
+    createdAt: nowIso(),
+    authorUserId: actorContext.userId,
+  };
+
+  const existingComments = normalizeNoteComments(existing.metadata?.comments);
+  const nextComments = [...existingComments, comment].slice(-200);
+  const nextMetadata = {
+    ...(existing.metadata || {}),
+    comments: nextComments,
+  };
+
+  const updatedNote = await noteRepo.updateEnrichment({
+    id: normalizedId,
+    summary: existing.summary || "",
+    tags: Array.isArray(existing.tags) ? existing.tags : [],
+    project: existing.project || "General",
+    embedding: existing.embedding || null,
+    metadata: nextMetadata,
+    updatedAt: nowIso(),
+    workspaceId: actorContext.workspaceId,
+  });
+
+  await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
+  return {
+    note: updatedNote,
+    comment,
+  };
 }
 
 export async function deleteMemory({ id, actor = null } = {}) {

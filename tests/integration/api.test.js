@@ -2,7 +2,9 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 
-const BASE = "http://localhost:8787";
+const BASE = process.env.TEST_BASE_URL || "http://localhost:8787";
+const TEST_RUN_ID = process.env.TEST_RUN_ID || Date.now().toString(36);
+const SECONDARY_EMAIL = `integration+second-${TEST_RUN_ID}@example.com`;
 let AUTH_TOKEN = "";
 let REQUEST_SEQ = 0;
 let SECONDARY_TOKEN = "";
@@ -56,14 +58,13 @@ function jsonFetch(urlPath, options = {}) {
 async function getSecondaryToken() {
   if (SECONDARY_TOKEN) return SECONDARY_TOKEN;
 
-  const secondEmail = "integration+second@example.com";
   const secondPassword = "integration-pass-456";
 
   const secondSignup = await jsonFetch("/api/auth/signup", {
     method: "POST",
     authToken: null,
     body: {
-      email: secondEmail,
+      email: SECONDARY_EMAIL,
       name: "Integration Second User",
       password: secondPassword,
     },
@@ -78,7 +79,7 @@ async function getSecondaryToken() {
     method: "POST",
     authToken: null,
     body: {
-      email: secondEmail,
+      email: SECONDARY_EMAIL,
       password: secondPassword,
     },
   });
@@ -88,8 +89,7 @@ async function getSecondaryToken() {
 }
 
 describe("API Integration", () => {
-  // These tests assume the server is running on port 8787
-  // Run with: node src/server.js & node --test tests/integration/api.test.js
+  // These tests assume a running server at TEST_BASE_URL (or localhost:8787 by default).
 
   before(async () => {
     const email = "integration@example.com";
@@ -289,11 +289,10 @@ describe("API Integration", () => {
     assert.ok(secondToken);
     assert.ok(PRIMARY_WORKSPACE_ID);
 
-    const inviteEmail = "integration+second@example.com";
     const created = await jsonFetch("/api/workspaces/invites", {
       method: "POST",
       body: {
-        email: inviteEmail,
+        email: SECONDARY_EMAIL,
         role: "member",
       },
     });

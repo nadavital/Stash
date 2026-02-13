@@ -38,7 +38,8 @@ loadDotEnv(ENV_FILE);
 const DATA_DIR = path.join(ROOT_DIR, "data");
 const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-const DEFAULT_DB_PATH = path.join(DATA_DIR, "stash.db");
+const LEGACY_DB_PATH = path.join(DATA_DIR, "stash.db");
+const LEGACY_TASKS_DB_PATH = path.join(DATA_DIR, "tasks.db");
 
 function parsePort(value, fallback) {
   const parsed = Number(value);
@@ -63,6 +64,7 @@ function parseDbProvider(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return "postgres";
   if (normalized === "postgres") return "postgres";
+  // Kept to emit a clear runtime error in storage selector.
   if (normalized === "sqlite") return "sqlite";
   return normalized;
 }
@@ -70,19 +72,6 @@ function parseDbProvider(value) {
 function resolveDataPath(value, fallbackAbsolutePath) {
   if (!value) return fallbackAbsolutePath;
   return path.isAbsolute(value) ? value : path.resolve(ROOT_DIR, value);
-}
-
-function resolveDefaultDbPath() {
-  if (fs.existsSync(DEFAULT_DB_PATH)) return DEFAULT_DB_PATH;
-  const dbFiles = fs
-    .readdirSync(DATA_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".db"))
-    .map((entry) => entry.name)
-    .filter((name) => name !== path.basename(DEFAULT_DB_PATH));
-  if (dbFiles.length === 1) {
-    return path.join(DATA_DIR, dbFiles[0]);
-  }
-  return DEFAULT_DB_PATH;
 }
 
 export const config = {
@@ -96,8 +85,9 @@ export const config = {
   openaiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
   dbProvider: parseDbProvider(process.env.DB_PROVIDER),
   databaseUrl: String(process.env.DATABASE_URL || "").trim(),
-  dbPath: resolveDataPath(process.env.DB_PATH, resolveDefaultDbPath()),
-  tasksDbPath: resolveDataPath(process.env.TASKS_DB_PATH, path.join(DATA_DIR, "tasks.db")),
+  // Legacy SQLite paths kept only for older modules/tests that are no longer primary runtime paths.
+  dbPath: resolveDataPath(process.env.DB_PATH, LEGACY_DB_PATH),
+  tasksDbPath: resolveDataPath(process.env.TASKS_DB_PATH, LEGACY_TASKS_DB_PATH),
   dataDir: DATA_DIR,
   uploadDir: UPLOAD_DIR,
   mcpServerName: process.env.MCP_SERVER_NAME || "stash",

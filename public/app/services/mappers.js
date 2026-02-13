@@ -298,10 +298,10 @@ export function createMockSeedNotes() {
   return [
     {
       id: "mock-launch-checklist",
-      content: "Launch checklist drafted: pricing page copy, onboarding tour, and signup QA for desktop demo.",
+      content: "Launch checklist drafted: pricing page copy, onboarding tour, and signup QA for the production web app.",
       summary: "Launch checklist includes pricing copy, onboarding, and signup QA.",
       tags: ["launch", "onboarding", "qa"],
-      project: "demo",
+      project: "launch",
       sourceType: "text",
       sourceUrl: "",
       imagePath: "",

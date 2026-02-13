@@ -25,7 +25,7 @@ In `createMemory(...)` (`/src/memoryService.js`):
 
 ### Memory enrichment
 Still inside `createMemory(...)`:
-1. Creates initial note row in SQLite.
+1. Creates initial workspace-scoped note row through the active storage provider (Postgres).
 2. Enriches metadata (`summary`, `tags`, `project`) via OpenAI when available; otherwise heuristics.
 3. Builds embedding for retrieval (`createEmbedding` or pseudo fallback).
 4. Updates the same note row with enrichment + embedding metadata.
@@ -41,12 +41,15 @@ Default file:
 
 ## 2) Storage model
 
-### Notes DB
-Primary DB: `/data/stash.db`
-Table: `notes`
+### Primary database
+Primary DB: Postgres (`DATABASE_URL`) with schema managed by:
+- `src/postgres/migrations/001_initial_schema.sql`
 
 Important columns:
 - `id` (TEXT, PK)
+- `workspace_id` (TEXT, tenant boundary)
+- `owner_user_id` (TEXT)
+- `created_by_user_id` (TEXT)
 - `content` (TEXT)
 - `source_type` (TEXT)
 - `source_url` (TEXT)
@@ -57,16 +60,14 @@ Important columns:
 - `raw_content` (TEXT)
 - `markdown_content` (TEXT)
 - `summary` (TEXT)
-- `tags_json` (TEXT JSON array)
+- `tags_json` (JSONB array)
 - `project` (TEXT)
-- `embedding_json` (TEXT JSON array)
-- `metadata_json` (TEXT JSON object)
-- `created_at`, `updated_at` (ISO strings)
+- `embedding_json` (JSONB array)
+- `metadata_json` (JSONB object)
+- `status` (TEXT)
+- `created_at`, `updated_at` (TIMESTAMPTZ)
 
-### Tasks DB
-Task DB: `/data/tasks.db`
-Table: `tasks`
-- `id`, `title`, `status`, `created_at`
+Related tables include `tasks`, `folders`, `users`, `workspaces`, `workspace_memberships`, and `sessions`.
 
 ### File storage
 Uploaded binaries are written to:
@@ -185,7 +186,7 @@ Format must be:
 Backend behavior:
 1. Decodes base64 to bytes.
 2. Extracts raw + markdown text.
-3. Stores extraction in SQLite (`raw_content`, `markdown_content`).
+3. Stores extraction in Postgres note fields (`raw_content`, `markdown_content`).
 4. Updates consolidated memory markdown for uploaded items.
 
 ### Recommended frontend tabs

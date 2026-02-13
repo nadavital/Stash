@@ -4,17 +4,17 @@ Use this playbook to move fast with parallel worktrees and near-zero merge confl
 
 ## Locked visual source of truth
 
-All UI work must match these files:
+All UI work must follow:
 
-- `uiconcepts/homescreen.png`
-- `uiconcepts/individualfolder.png`
+- `docs/design.md`
+- `public/styles/tokens.css`
 
-Do not add visual concepts not present in these screens unless the user explicitly asks.
+Do not invent a conflicting visual direction unless the user explicitly asks.
 
 ## Required skill
 
 Every frontend worktree must use:
-`[$stash-openai-ui](/Users/nadav/Desktop/Hackathon/skills/stash-openai-ui/SKILL.md)`
+`[$stash-openai-ui](../skills/stash-openai-ui/SKILL.md)`
 
 ## Core strategy
 

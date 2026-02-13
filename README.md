@@ -151,7 +151,7 @@ Example Codex MCP config snippet:
   "mcpServers": {
     "stash": {
       "command": "node",
-      "args": ["/absolute/path/to/Hackathon/mcp/server.js"],
+      "args": ["/absolute/path/to/stash/mcp/server.js"],
       "env": {
         "STASH_SESSION_TOKEN": "sess_...",
         "STASH_WORKSPACE_ID": "ws_..."
@@ -217,6 +217,7 @@ Use `X-Workspace-Id: <workspace_id>` to scope API calls to a specific workspace 
 
 ## Helpful scripts
 
+- `npm test`: unit + API/auth/storage integration tests (requires `DATABASE_URL`)
 - `npm run test:mcp-client`: MCP smoke test client
   - requires `STASH_SESSION_TOKEN` (and optional `STASH_WORKSPACE_ID`)
 - `npm run import:keep -- /path/to/Takeout`: import Google Keep JSON exports

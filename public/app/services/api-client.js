@@ -533,6 +533,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
     async askStreaming(payload, { onCitations, onToken, onDone, onError }) {
       try {
         const token = getStoredSessionToken();
+        const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
         if (!token) {
           const authError = new Error("Not authenticated");
           authError.status = 401;
@@ -545,6 +546,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
             Authorization: `Bearer ${token}`,
+            ...(selectedWorkspaceId ? { "X-Workspace-Id": selectedWorkspaceId } : {}),
           },
           body: JSON.stringify(payload),
         });
@@ -732,7 +734,9 @@ export function createApiClient({ adapterDebug = false } = {}) {
       if (project) params.set("project", project);
       if (format) params.set("format", format);
       const token = getStoredSessionToken();
+      const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
       if (token) params.set("sessionToken", token);
+      if (selectedWorkspaceId) params.set("workspaceId", selectedWorkspaceId);
       return `${API_ENDPOINTS.export}?${params.toString()}`;
     },
 
@@ -745,6 +749,8 @@ export function createApiClient({ adapterDebug = false } = {}) {
 
       const params = new URLSearchParams();
       params.set("sessionToken", token);
+      const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
+      if (selectedWorkspaceId) params.set("workspaceId", selectedWorkspaceId);
       const eventSource = new EventSource(`${API_ENDPOINTS.events}?${params.toString()}`);
       eventSource.addEventListener("job:start", (e) => {
         try { onEvent({ type: "job:start", ...JSON.parse(e.data) }); } catch { /* no-op */ }

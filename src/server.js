@@ -303,6 +303,42 @@ async function serveFile(res, absolutePath) {
   }
 }
 
+function queueEventNoteOwnerId(event = null) {
+  const note = event?.result;
+  if (!note || typeof note !== "object") return "";
+  const explicitOwner = String(note.ownerUserId || "").trim();
+  if (explicitOwner) return explicitOwner;
+  const creator = String(note.createdByUserId || "").trim();
+  if (creator) return creator;
+  return String(note?.metadata?.actorUserId || "").trim();
+}
+
+function canActorReceiveQueueEvent(actor = null, event = null) {
+  if (!actor || !event) return false;
+  if (isWorkspaceManager(actor)) return true;
+  const actorUserId = String(actor.userId || "").trim();
+  if (!actorUserId) return false;
+
+  const visibilityUserId = String(event.visibilityUserId || "").trim();
+  if (visibilityUserId) {
+    return visibilityUserId === actorUserId;
+  }
+
+  const ownerUserId = queueEventNoteOwnerId(event);
+  if (ownerUserId) {
+    return ownerUserId === actorUserId;
+  }
+
+  return false;
+}
+
+function sanitizeQueueEventForStream(event = null) {
+  if (!event || typeof event !== "object") return null;
+  const payload = { ...event };
+  delete payload.visibilityUserId;
+  return payload;
+}
+
 function handleSSE(req, res, actor) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -323,11 +359,18 @@ function handleSSE(req, res, actor) {
   const unsubscribe = enrichmentQueue.subscribe((event) => {
     const eventWorkspaceId =
       event?.workspaceId || event?.result?.workspaceId || event?.result?.note?.workspaceId || null;
-    if (eventWorkspaceId && eventWorkspaceId !== actor.workspaceId) {
+    if (!eventWorkspaceId || eventWorkspaceId !== actor.workspaceId) {
       return;
     }
-    const eventType = event.type || "message";
-    res.write(`event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`);
+    if (!canActorReceiveQueueEvent(actor, event)) {
+      return;
+    }
+    const payload = sanitizeQueueEventForStream(event);
+    if (!payload) {
+      return;
+    }
+    const eventType = payload.type || "message";
+    res.write(`event: ${eventType}\ndata: ${JSON.stringify(payload)}\n\n`);
   });
 
   // Cleanup on client disconnect
@@ -590,7 +633,8 @@ async function handleApi(req, res, url) {
 
   const actor = await buildActorFromRequest(req, {
     url,
-    allowQueryToken: req.method === "GET" && url.pathname === "/api/events",
+    allowQueryToken:
+      req.method === "GET" && (url.pathname === "/api/events" || url.pathname === "/api/export"),
   });
   if (!actor) {
     sendUnauthorized(res);

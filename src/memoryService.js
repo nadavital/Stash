@@ -1191,6 +1191,7 @@ function enqueueEnrichmentJob(params) {
   enrichmentQueue.enqueue({
     id: params.noteId,
     workspaceId: params.workspaceId,
+    visibilityUserId: String(params.visibilityUserId || "").trim() || null,
     fn: async () => {
       try {
         return await processEnrichment(params);
@@ -1336,6 +1337,7 @@ export async function createMemory({
   enqueueEnrichmentJob({
     noteId: note.id,
     workspaceId: actorContext.workspaceId,
+    visibilityUserId: actorContext.userId,
     requestedProject,
     normalizedSourceType,
     normalizedSourceUrl,
@@ -1376,6 +1378,7 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
     enqueueEnrichmentJob({
       noteId: normalizedId,
       workspaceId: actorContext.workspaceId,
+      visibilityUserId: noteOwnerId(existing) || actorContext.userId,
       requestedProject: updatedNote.project || "",
       normalizedSourceType: updatedNote.sourceType || "text",
       normalizedSourceUrl: updatedNote.sourceUrl || "",

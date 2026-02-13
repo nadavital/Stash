@@ -44,8 +44,14 @@ export class JobQueue {
   }
 
   async _run(job) {
-    const { id, fn, workspaceId = null } = job;
-    this.emit({ type: "job:start", id, workspaceId, timestamp: new Date().toISOString() });
+    const { id, fn, workspaceId = null, visibilityUserId = null } = job;
+    this.emit({
+      type: "job:start",
+      id,
+      workspaceId,
+      visibilityUserId,
+      timestamp: new Date().toISOString(),
+    });
 
     try {
       const result = await fn();
@@ -53,6 +59,7 @@ export class JobQueue {
         type: "job:complete",
         id,
         workspaceId,
+        visibilityUserId,
         result,
         timestamp: new Date().toISOString(),
       });
@@ -61,6 +68,7 @@ export class JobQueue {
         type: "job:error",
         id,
         workspaceId,
+        visibilityUserId,
         error: error instanceof Error ? error.message : String(error),
         timestamp: new Date().toISOString(),
       });

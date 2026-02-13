@@ -138,6 +138,33 @@ export async function createResponse({ input, instructions, model = config.opena
   };
 }
 
+export async function createStreamingResponse({ input, instructions, model = config.openaiChatModel, temperature = 0.2 }) {
+  if (!hasOpenAI()) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const payload = {
+    model,
+    input: normalizeInput(input),
+    instructions,
+    temperature,
+    stream: true,
+  };
+
+  const response = await fetch(`${config.openaiBaseUrl}/responses`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Responses API error (${response.status}): ${text}`);
+  }
+
+  return response;
+}
+
 export async function createEmbedding(input, model = config.openaiEmbeddingModel) {
   if (!hasOpenAI()) {
     return pseudoEmbedding(input);

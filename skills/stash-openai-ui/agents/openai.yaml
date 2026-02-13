@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash OpenAI UI"
+  short_description: "Design a calm OpenAI-style frontend for Stash."
+  default_prompt: "Use $stash-openai-ui to design and implement a polished frontend UX for Stash."

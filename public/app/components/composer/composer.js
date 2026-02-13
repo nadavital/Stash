@@ -1,5 +1,5 @@
 export function renderComposer({ mode = "home" } = {}) {
-  const placeholder = mode === "folder" ? "Add item to this folder" : "Add text, link, image, or file";
+  const placeholder = mode === "folder" ? "Add item to this folder" : "Add a note, link, or drop a file...";
 
   return `
     <section class="composer-shell" data-component="composer">
@@ -35,4 +35,17 @@ export function renderComposer({ mode = "home" } = {}) {
       </form>
     </section>
   `;
+}
+
+export function initComposerAutoResize(mountNode) {
+  const textarea = mountNode.querySelector('#content-input');
+  if (!textarea) return () => {};
+
+  function resize() {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+  }
+
+  textarea.addEventListener('input', resize);
+  return () => textarea.removeEventListener('input', resize);
 }

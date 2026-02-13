@@ -42,7 +42,7 @@ Default file:
 ## 2) Storage model
 
 ### Notes DB
-Primary DB: `/data/project-memory.db`
+Primary DB: `/data/stash.db`
 Table: `notes`
 
 Important columns:
@@ -156,6 +156,14 @@ Response:
 ## 4) MCP tool surface (for OpenClaw/agents)
 
 Server file: `/mcp/server.js`
+
+Auth is required for all MCP/OpenClaw tool calls:
+- pass `sessionToken` in tool args, or
+- set `STASH_SESSION_TOKEN` on the MCP/OpenClaw process environment.
+
+Optional workspace targeting:
+- pass `workspaceId` in tool args, or
+- set `STASH_WORKSPACE_ID` on the process environment.
 
 Current tools:
 - `search_notes` (BM25 ranking)

@@ -1,0 +1,124 @@
+/* ---------- Inline Search ---------- */
+
+.inline-search {
+  margin-bottom: 4px;
+}
+
+.inline-search-input {
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: var(--input-bg);
+  padding: 9px 14px;
+  font-size: var(--font-size-body-sm);
+  color: var(--ink);
+  transition: background 150ms, box-shadow 150ms;
+}
+
+.inline-search-input:focus {
+  outline: none;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.inline-search-input::placeholder {
+  color: var(--placeholder);
+}
+
+/* Inline search results */
+.inline-search-results {
+  display: grid;
+  gap: 4px;
+  padding-top: 8px;
+}
+
+.inline-search-result-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.inline-search-result {
+  width: 100%;
+  border: 0;
+  background: var(--surface-strong);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: left;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.inline-search-result:hover {
+  background: var(--hover-bg);
+}
+
+.inline-search-result-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--subtle-bg);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.inline-search-result-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.inline-search-result-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.inline-search-result-title {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  line-height: var(--leading-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-search-result-preview {
+  font-size: var(--font-size-caption);
+  line-height: var(--leading-tight);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-search-delete {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.inline-search-delete svg {
+  width: 14px;
+  height: 14px;
+}
+
+.inline-search-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}

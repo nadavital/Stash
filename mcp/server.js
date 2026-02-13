@@ -1,6 +1,7 @@
 import process from "node:process";
 import { config } from "../src/config.js";
-import { taskRepo } from "../src/tasksDb.js";
+import { taskRepo } from "../src/storage/provider.js";
+import { buildActorFromToolArgs } from "../src/toolAuth.js";
 import {
   deleteMemory,
   deleteProjectMemories,
@@ -21,6 +22,14 @@ const TOOL_DEFS = [
         project: { type: "string", description: "Optional project filter" },
         includeMarkdown: { type: "boolean", description: "Include markdown content in results", default: false },
         limit: { type: "number", description: "Max results", default: 8 },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
       },
       required: ["query"],
       additionalProperties: false,
@@ -31,7 +40,16 @@ const TOOL_DEFS = [
     description: "List open tasks from the local task store.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
       additionalProperties: false,
     },
   },
@@ -42,6 +60,14 @@ const TOOL_DEFS = [
       type: "object",
       properties: {
         maxChars: { type: "number", description: "Maximum characters to return", default: 30000 },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
       },
       additionalProperties: false,
     },
@@ -53,6 +79,14 @@ const TOOL_DEFS = [
       type: "object",
       properties: {
         id: { type: "string", description: "Task id to mark closed" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
       },
       required: ["id"],
       additionalProperties: false,
@@ -65,6 +99,14 @@ const TOOL_DEFS = [
       type: "object",
       properties: {
         id: { type: "string", description: "Note id to delete" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
       },
       required: ["id"],
       additionalProperties: false,
@@ -77,6 +119,14 @@ const TOOL_DEFS = [
       type: "object",
       properties: {
         project: { type: "string", description: "Project folder name to delete" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
       },
       required: ["project"],
       additionalProperties: false,
@@ -111,6 +161,7 @@ function sendResult(id, result) {
 }
 
 async function callTool(name, args = {}) {
+  const actor = await buildActorFromToolArgs(args);
   switch (name) {
     case "search_notes": {
       const results = await searchNotesBm25({
@@ -118,32 +169,36 @@ async function callTool(name, args = {}) {
         project: String(args.project || ""),
         includeMarkdown: args.includeMarkdown === true,
         limit: Number(args.limit || 8),
+        actor,
       });
       return { results };
     }
     case "obtain_consolidated_memory_file": {
       const memoryFile = await readExtractedMarkdownMemory({
         maxChars: Number(args.maxChars || 30000),
+        actor,
       });
       return { memoryFile };
     }
     case "get_tasks": {
-      const tasks = taskRepo.listOpenTasks();
+      const tasks = await taskRepo.listOpenTasks(actor.workspaceId);
       return { tasks };
     }
     case "complete_task": {
-      const task = taskRepo.completeTask(String(args.id || ""));
+      const task = await taskRepo.completeTask(String(args.id || ""), actor.workspaceId);
       return { task };
     }
     case "delete_note": {
       const result = await deleteMemory({
         id: String(args.id || ""),
+        actor,
       });
       return result;
     }
     case "delete_project": {
       const result = await deleteProjectMemories({
         project: String(args.project || ""),
+        actor,
       });
       return result;
     }

@@ -1,11 +1,15 @@
 {
   "mcpServers": {
-    "project-memory": {
+    "stash": {
       "command": "node",
       "args": [
         "/Users/nadav/Desktop/Hackathon/mcp/server.js"
       ],
-      "cwd": "/Users/nadav/Desktop/Hackathon"
+      "cwd": "/Users/nadav/Desktop/Hackathon",
+      "env": {
+        "STASH_SESSION_TOKEN": "sess_...",
+        "STASH_WORKSPACE_ID": "ws_..."
+      }
     }
   }
 }

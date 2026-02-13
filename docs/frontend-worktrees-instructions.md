@@ -14,7 +14,7 @@ Do not add visual concepts not present in these screens unless the user explicit
 ## Required skill
 
 Every frontend worktree must use:
-`[$project-memory-openai-ui](/Users/nadav/Desktop/Hackathon/skills/project-memory-openai-ui/SKILL.md)`
+`[$stash-openai-ui](/Users/nadav/Desktop/Hackathon/skills/stash-openai-ui/SKILL.md)`
 
 ## Core strategy
 
@@ -129,7 +129,7 @@ Owned files:
 - `public/styles/components/topbar.css`
 
 Question pack:
-1. Should the home screen header text stay "Smart File Manager" or switch to "Project Memory"?
+1. Should the home screen header text stay "Smart File Manager" or switch to "Stash"?
 2. In folder view, should breadcrumb be clickable for each segment?
 3. Keep settings as icon-only, or icon + label?
 
@@ -280,7 +280,7 @@ Must not edit component-owned files.
 ## Handoff template
 
 ```text
-Skill used: $project-memory-openai-ui
+Skill used: $stash-openai-ui
 Worktree branch: <branch>
 Image slice implemented: <exact slice>
 User answers applied:

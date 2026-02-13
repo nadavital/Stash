@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import { config } from "../src/config.js";
 import { createMemory } from "../src/memoryService.js";
+import { noteRepo } from "../src/storage/provider.js";
 
 function usage() {
-  console.log(`\nUsage:\n  node scripts/import_google_keep_takeout.js /path/to/Takeout [--project "Google Keep"] [--dry-run]\n\nNotes:\n- Expects Google Keep JSON exports (usually under: Takeout/Keep/*.json).\n- Creates one Project Memory note per Keep note.\n- Uses metadata.keepId to avoid duplicate imports in subsequent runs (best-effort).\n`);
+  console.log(`\nUsage:\n  node scripts/import_google_keep_takeout.js /path/to/Takeout [--project "Google Keep"] [--dry-run]\n\nNotes:\n- Expects Google Keep JSON exports (usually under: Takeout/Keep/*.json).\n- Creates one Stash note per Keep note.\n- Uses metadata.keepId to avoid duplicate imports in subsequent runs (best-effort).\n`);
 }
 
 function safeJsonParse(raw) {
@@ -36,22 +36,26 @@ function normalizeKeepText(keep) {
 }
 
 async function loadExistingKeepIds() {
-  // Dedupe strategy: scan notes table metadata_json for keepId.
-  // Works fine for hackathon-scale DB sizes.
-  const db = new DatabaseSync(config.dbPath);
-  let rows = [];
-  try {
-    rows = db.prepare("SELECT metadata_json FROM notes WHERE metadata_json IS NOT NULL AND metadata_json <> '{}' ").all();
-  } catch {
-    rows = [];
-  }
+  // Dedupe strategy: scan existing notes metadata for keepId.
+  // Uses paginated repository reads to stay provider-agnostic.
+  const workspaceId = String(process.env.IMPORT_WORKSPACE_ID || config.defaultWorkspaceId || "").trim();
   const ids = new Set();
-  for (const row of rows) {
-    const meta = safeJsonParse(row.metadata_json);
-    const keepId = meta?.keepId;
-    if (keepId) ids.add(String(keepId));
+  const pageSize = 500;
+  let offset = 0;
+
+  while (true) {
+    const notes = await noteRepo.listByProject(null, pageSize, offset, workspaceId);
+    if (!Array.isArray(notes) || notes.length === 0) break;
+
+    for (const note of notes) {
+      const keepId = note?.metadata?.keepId;
+      if (keepId) ids.add(String(keepId));
+    }
+
+    if (notes.length < pageSize) break;
+    offset += pageSize;
   }
-  db.close();
+
   return ids;
 }
 
@@ -66,6 +70,11 @@ async function main() {
   const projectIdx = args.findIndex((a) => a === "--project");
   const project = projectIdx !== -1 ? String(args[projectIdx + 1] || "Google Keep").trim() : "Google Keep";
   const dryRun = args.includes("--dry-run");
+  const importActor = {
+    workspaceId: String(process.env.IMPORT_WORKSPACE_ID || config.defaultWorkspaceId || "").trim(),
+    userId: String(process.env.IMPORT_USER_ID || "stash-import-tool").trim(),
+    role: "owner",
+  };
 
   const keepDirCandidates = [
     path.join(takeoutPath, "Keep"),
@@ -136,6 +145,7 @@ async function main() {
           keepCreatedTimestampUsec: keep.createdTimestampUsec || null,
           keepUserEditedTimestampUsec: keep.userEditedTimestampUsec || null,
         },
+        actor: importActor,
       });
       imported += 1;
     } catch {

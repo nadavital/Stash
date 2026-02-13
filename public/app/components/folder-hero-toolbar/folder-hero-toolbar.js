@@ -38,11 +38,15 @@ export function renderFolderHeroToolbar({
             <span class="folder-current-name">${safeFolderName}</span>
           </span>
         </nav>
-        ${
-          showDeleteAction
-            ? `<button id="delete-folder-btn" class="folder-delete-btn" type="button" aria-label="Delete folder ${safeFolderName}">Delete folder</button>`
-            : ""
-        }
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button id="new-folder-btn" class="folder-subfolder-btn" type="button">+ Folder</button>
+          <button id="rename-folder-btn" class="folder-subfolder-btn" type="button">Rename</button>
+          ${
+            showDeleteAction
+              ? `<button id="delete-folder-btn" class="folder-delete-btn" type="button" aria-label="Delete folder ${safeFolderName}">Delete folder</button>`
+              : ""
+          }
+        </div>
       </div>
       ${safeFolderDescription ? `<p class="folder-current-desc">${safeFolderDescription}</p>` : ""}
     </section>

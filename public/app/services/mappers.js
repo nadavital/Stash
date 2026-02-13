@@ -57,6 +57,16 @@ function normalizeTags(value) {
   return [];
 }
 
+function normalizeNoteStatus(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "pending" || normalized === "enriching" || normalized === "ready" || normalized === "failed") {
+    return normalized;
+  }
+  return "";
+}
+
 function isGenericFilePlaceholder(text) {
   const normalized = String(text || "").trim().toLowerCase();
   if (!normalized) return false;
@@ -157,6 +167,7 @@ export function normalizeNote(raw, index = 0) {
     rawContent,
     markdownContent,
     metadata,
+    status: normalizeNoteStatus(source.status || source.processingStatus || source.processing_status),
     createdAt: normalizeDate(source.createdAt ?? source.created_at ?? source.timestamp ?? source.time),
     updatedAt: normalizeDate(source.updatedAt ?? source.updated_at ?? source.modifiedAt ?? source.modified_at),
   };
@@ -221,6 +232,9 @@ export function adaptNotesResponse(payload) {
   return {
     items,
     count: Math.max(0, Math.floor(toFiniteNumber(source.count ?? source.total ?? source.totalCount ?? source.meta?.count, items.length))),
+    offset: Math.max(0, Math.floor(toFiniteNumber(source.offset, 0))),
+    limit: Math.max(0, Math.floor(toFiniteNumber(source.limit, 20))),
+    hasMore: typeof source.hasMore === "boolean" ? source.hasMore : false,
   };
 }
 
@@ -384,6 +398,7 @@ export function buildLocalFallbackNote(payload) {
     summary: snippet(content, 160) || "Saved in local fallback mode",
     tags: guessTags(`${content} ${project}`),
     project,
+    status: "ready",
     createdAt: now,
     updatedAt: now,
   };

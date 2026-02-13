@@ -19,8 +19,8 @@
 }
 
 .folder-back-link {
-  font-size: 0.88rem;
-  font-weight: 500;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-medium);
   text-decoration: none;
   color: var(--muted);
   padding: 4px 8px;
@@ -30,12 +30,13 @@
 
 .folder-back-link:hover,
 .folder-back-link:focus-visible {
-  color: var(--ink);
-  background: #f4f4f4;
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .folder-breadcrumb-chevron {
-  color: #d0d5dd;
+  color: var(--muted);
+  font-weight: var(--weight-medium);
   flex-shrink: 0;
 }
 
@@ -45,76 +46,94 @@
   gap: 6px;
   padding: 4px 8px;
   border-radius: 8px;
-  background: #f4f4f4;
+  background: var(--input-bg);
 }
 
 .folder-color-dot {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
   flex-shrink: 0;
-  background: #8fb7ff;
+  background: var(--folder-blue);
 }
 
-.folder-color-dot[data-color="sky"] {
-  background: #8fb7ff;
-}
+/* New ChatGPT palette */
+.folder-color-dot[data-color="green"] { background: var(--folder-green); }
+.folder-color-dot[data-color="blue"] { background: var(--folder-blue); }
+.folder-color-dot[data-color="purple"] { background: var(--folder-purple); }
+.folder-color-dot[data-color="orange"] { background: var(--folder-orange); }
+.folder-color-dot[data-color="pink"] { background: var(--folder-pink); }
+.folder-color-dot[data-color="red"] { background: var(--folder-red); }
+.folder-color-dot[data-color="yellow"] { background: var(--folder-yellow); }
 
-.folder-color-dot[data-color="mint"] {
-  background: #5ec99a;
-}
-
-.folder-color-dot[data-color="sand"] {
-  background: #e0a840;
-}
-
-.folder-color-dot[data-color="rose"] {
-  background: #e8729a;
-}
-
-.folder-color-dot[data-color="violet"] {
-  background: #9b7cef;
-}
-
-.folder-color-dot[data-color="slate"] {
-  background: #7e92ad;
-}
+/* Backward-compat old color names */
+.folder-color-dot[data-color="sky"] { background: var(--folder-blue); }
+.folder-color-dot[data-color="mint"] { background: var(--folder-green); }
+.folder-color-dot[data-color="sand"] { background: var(--folder-orange); }
+.folder-color-dot[data-color="rose"] { background: var(--folder-pink); }
+.folder-color-dot[data-color="violet"] { background: var(--folder-purple); }
+.folder-color-dot[data-color="slate"] { background: var(--folder-blue); }
 
 .folder-current-name {
   margin: 0;
-  font-size: 0.88rem;
+  font-size: var(--font-size-lg);
   color: var(--ink);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
 }
 
 .folder-current-desc {
   margin: 0;
   padding-left: 8px;
-  color: #667085;
-  font-size: 0.82rem;
-  line-height: 1.35;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-tight);
 }
 
 .folder-delete-btn {
-  border: 1px solid #fecaca;
+  border: 1px solid var(--danger-border);
   border-radius: 8px;
-  background: #fff1f2;
-  color: #b42318;
+  background: var(--danger-surface);
+  color: var(--danger);
   min-height: 30px;
   padding: 0 10px;
-  font-size: 0.74rem;
-  font-weight: 600;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-medium);
   cursor: pointer;
   white-space: nowrap;
 }
 
 .folder-delete-btn:hover {
-  background: #ffe4e6;
-  border-color: #fda4af;
+  background: var(--danger-soft);
+  border-color: var(--danger);
 }
 
 .folder-delete-btn:focus-visible {
   outline: 2px solid rgba(180, 35, 24, 0.2);
+  outline-offset: 1px;
+}
+
+.folder-subfolder-btn {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-secondary);
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.folder-subfolder-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.folder-subfolder-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
   outline-offset: 1px;
 }
 

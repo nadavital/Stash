@@ -1,4 +1,0 @@
-interface:
-  display_name: "Project Memory OpenAI UI"
-  short_description: "Design a calm OpenAI-style frontend for Project Memory."
-  default_prompt: "Use $project-memory-openai-ui to design and implement a polished frontend UX for Project Memory."

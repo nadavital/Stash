@@ -1,6 +1,12 @@
 .page-folder {
   gap: 18px;
-  padding-bottom: 108px;
+  padding-bottom: var(--page-bottom-space);
+}
+
+.page-folder.page-drag-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  border-radius: 12px;
 }
 
 .folder-layout {
@@ -14,15 +20,20 @@
   min-width: 0;
   display: grid;
   gap: 12px;
+  animation: fadeInUp 180ms ease both;
 }
 
 .page-folder .composer-shell {
   position: fixed;
   left: 50%;
-  bottom: 12px;
+  bottom: calc(var(--composer-offset) + var(--safe-bottom));
   transform: translateX(-50%);
   width: min(980px, calc(100vw - 56px));
-  z-index: 24;
+  z-index: var(--z-sticky);
+}
+
+body.batch-mode-active .page-folder .composer-shell {
+  bottom: calc(var(--composer-offset) + var(--batch-bar-height) + var(--safe-bottom));
 }
 
 @media (max-width: 980px) {

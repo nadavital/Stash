@@ -20,6 +20,14 @@ import {
   initFolderModalHandlers,
 } from "../components/folder-modal/folder-modal.js";
 import {
+  renderMoveModalHTML,
+  queryMoveModalEls,
+  openMoveModal,
+  closeMoveModal,
+  renderMoveModalSuggestions,
+  initMoveModalHandlers,
+} from "../components/move-modal/move-modal.js";
+import {
   renderInlineSearchHTML,
   queryInlineSearchEls,
   renderSearchResults,
@@ -36,6 +44,7 @@ import {
   queryChatPanelEls,
   initChatPanel,
 } from "../components/chat-panel/chat-panel.js";
+import { createActionMenu, closeAllActionMenus } from "../components/action-menu/action-menu.js";
 import {
   normalizeFolderColor,
   fallbackColorForFolder,
@@ -57,7 +66,6 @@ import {
   iconTypeFor,
   getNoteProcessingState,
   fileToDataUrl,
-  deleteIconMarkup,
   noteTypeIconMarkup,
   relativeTime,
 } from "../services/note-utils.js";
@@ -111,6 +119,8 @@ function renderFolderPageShell(folderMeta, authSession = null) {
 
     ${renderFolderModalHTML()}
 
+    ${renderMoveModalHTML()}
+
     ${renderChatPanelHTML()}
   `;
 }
@@ -118,6 +128,7 @@ function renderFolderPageShell(folderMeta, authSession = null) {
 function queryElements(mountNode) {
   const itemModalEls = queryItemModalEls(mountNode);
   const folderModalEls = queryFolderModalEls(mountNode);
+  const moveModalEls = queryMoveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
   const chatPanelEls = queryChatPanelEls(mountNode);
@@ -125,6 +136,7 @@ function queryElements(mountNode) {
   return {
     ...itemModalEls,
     ...folderModalEls,
+    ...moveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
     ...chatPanelEls,
@@ -146,6 +158,7 @@ function queryElements(mountNode) {
     recentTasksList: mountNode.querySelector("#recent-tasks-list"),
     refreshBtn: mountNode.querySelector("#refresh-btn"),
     deleteFolderBtn: mountNode.querySelector("#delete-folder-btn"),
+    renameFolderBtn: mountNode.querySelector("#rename-folder-btn"),
     newFolderBtn: mountNode.querySelector("#new-folder-btn"),
     subfoldersSection: mountNode.querySelector("#subfolders-section"),
     subfoldersGrid: mountNode.querySelector("#subfolders-grid"),
@@ -186,6 +199,7 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       let currentOffset = 0;
       const PAGE_SIZE = 20;
       let dbFolderMeta = null;
+      let moveModalResolver = null;
       let attachment = {
         name: "",
         fileDataUrl: null,
@@ -245,12 +259,71 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         disposers.push(() => target.removeEventListener(eventName, handler, options));
       }
 
+      on(document, "click", () => {
+        closeAllActionMenus(mountNode);
+      });
+
       function getState() {
         return store.getState();
       }
 
       function setState(patch) {
         return store.setState(patch);
+      }
+
+      function resolveMoveDialog(value) {
+        if (!moveModalResolver) return;
+        const resolver = moveModalResolver;
+        moveModalResolver = null;
+        resolver(value);
+      }
+
+      function listMoveFolderSuggestions({ includeCurrentFolder = false } = {}) {
+        const values = new Set();
+
+        normalizeFolderDrafts(getState().draftFolders).forEach((folder) => {
+          const name = String(folder?.name || "").trim();
+          if (name) values.add(name);
+        });
+
+        subFolders.forEach((folder) => {
+          const name = String(folder?.name || "").trim();
+          if (name) values.add(name);
+        });
+
+        recentNotes.forEach((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          const name = String(note?.project || "").trim();
+          if (name) values.add(name);
+        });
+
+        if (!includeCurrentFolder) {
+          values.delete(String(folderMeta.name || "").trim());
+        }
+
+        return [...values].sort((a, b) => a.localeCompare(b));
+      }
+
+      function openMoveDialog({
+        title = "Move to folder",
+        confirmLabel = "Move",
+        initialValue = "",
+        includeCurrentFolder = false,
+      } = {}) {
+        if (moveModalResolver) {
+          resolveMoveDialog(null);
+        }
+
+        openMoveModal(els, {
+          title,
+          confirmLabel,
+          value: initialValue,
+          suggestions: listMoveFolderSuggestions({ includeCurrentFolder }),
+        });
+
+        return new Promise((resolve) => {
+          moveModalResolver = resolve;
+        });
       }
 
       function markAccessed(noteId) {
@@ -388,6 +461,189 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         setState({ mockNotes: nextMock, notes: [] });
       }
 
+      function renameDraftFolderName(oldName, nextName, { color = "", description = "", symbol = "" } = {}) {
+        const normalizedOld = String(oldName || "").trim().toLowerCase();
+        const normalizedNext = String(nextName || "").trim();
+        if (!normalizedOld || !normalizedNext) return;
+
+        const drafts = normalizeFolderDrafts(getState().draftFolders);
+        const oldDraft = drafts.find((entry) => entry.name.toLowerCase() === normalizedOld);
+        const baseColor = normalizeFolderColor(color || oldDraft?.color, fallbackColorForFolder(normalizedNext));
+        const baseDescription = String(description || oldDraft?.description || "").trim();
+        const baseSymbol = normalizeFolderSymbol(symbol || oldDraft?.symbol, "DOC");
+        const withoutOld = drafts.filter((entry) => entry.name.toLowerCase() !== normalizedOld);
+        const existingIndex = withoutOld.findIndex((entry) => entry.name.toLowerCase() === normalizedNext.toLowerCase());
+
+        if (existingIndex >= 0) {
+          withoutOld[existingIndex] = {
+            ...withoutOld[existingIndex],
+            color: withoutOld[existingIndex].color || baseColor,
+            description: withoutOld[existingIndex].description || baseDescription,
+            symbol: withoutOld[existingIndex].symbol || baseSymbol,
+          };
+        } else {
+          withoutOld.push({
+            name: normalizedNext,
+            color: baseColor,
+            description: baseDescription,
+            symbol: baseSymbol,
+          });
+        }
+
+        setState({ draftFolders: withoutOld });
+      }
+
+      async function moveAllProjectNotes(oldProject, nextProject) {
+        const normalizedOld = String(oldProject || "").trim();
+        const normalizedNext = String(nextProject || "").trim();
+        if (!normalizedOld || !normalizedNext || normalizedOld.toLowerCase() === normalizedNext.toLowerCase()) {
+          return 0;
+        }
+
+        const PAGE_LIMIT = 120;
+        let movedCount = 0;
+
+        for (let attempt = 0; attempt < 80; attempt++) {
+          const result = await apiClient.fetchNotes({ project: normalizedOld, limit: PAGE_LIMIT });
+          const items = Array.isArray(result?.items) ? result.items : [];
+          const ids = [...new Set(items
+            .map((entry, index) => String(normalizeCitation(entry, index).note.id || "").trim())
+            .filter(Boolean))];
+
+          if (!ids.length) break;
+          await apiClient.batchMoveNotes(ids, normalizedNext);
+          movedCount += ids.length;
+        }
+
+        return movedCount;
+      }
+
+      function renameFolderInFallback(oldName, nextName) {
+        const normalizedOld = String(oldName || "").trim().toLowerCase();
+        const normalizedNext = String(nextName || "").trim();
+        if (!normalizedOld || !normalizedNext) return;
+
+        const nextMock = (Array.isArray(getState().mockNotes) ? getState().mockNotes : []).map((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          if (String(note.project || "").trim().toLowerCase() !== normalizedOld) {
+            return entry;
+          }
+
+          const updated = { ...note, project: normalizedNext };
+          if (entry?.note) {
+            return { ...entry, note: updated };
+          }
+          return updated;
+        });
+
+        recentNotes = filterAndRankMockNotes(nextMock, {
+          project: folderMeta.name,
+          limit: 120,
+        });
+        const activeQuery = String(els.inlineSearchInput?.value || "").trim();
+        searchResults = activeQuery
+          ? filterAndRankMockNotes(nextMock, {
+              query: activeQuery,
+              project: folderMeta.name,
+              limit: 120,
+            })
+          : [];
+        setState({ mockNotes: nextMock, notes: recentNotes });
+        renderView();
+      }
+
+      async function renameFolder(folderEntry, { navigateAfterRename = false } = {}) {
+        const folder = folderEntry || {};
+        const oldName = String(folder.name || "").trim();
+        if (!oldName) return;
+
+        const nextName = String(
+          (await openMoveDialog({
+            title: `Rename "${oldName}"`,
+            confirmLabel: "Rename",
+            initialValue: oldName,
+          })) || ""
+        ).trim();
+        if (!nextName || nextName.toLowerCase() === oldName.toLowerCase()) return;
+
+        try {
+          const folderId = String(folder.id || "").trim();
+          if (folderId) {
+            await apiClient.updateFolder(folderId, { name: nextName });
+          } else {
+            const lookup = await apiClient.getFolder(oldName).catch(() => null);
+            const lookupId = String(lookup?.folder?.id || "").trim();
+            if (lookupId) {
+              await apiClient.updateFolder(lookupId, { name: nextName });
+            }
+          }
+        } catch (error) {
+          apiClient.adapterLog("rename_folder_metadata_failed", conciseTechnicalError(error, "Folder metadata rename failed"));
+        }
+
+        try {
+          const movedCount = await moveAllProjectNotes(oldName, nextName);
+          renameDraftFolderName(oldName, nextName, folder);
+          toast(
+            movedCount > 0
+              ? `Renamed folder and moved ${movedCount} item${movedCount === 1 ? "" : "s"}`
+              : "Folder renamed"
+          );
+          if (navigateAfterRename) {
+            navigate(`#/folder/${encodeURIComponent(nextName)}`);
+            return;
+          }
+          await refreshNotes();
+        } catch (error) {
+          const message = conciseTechnicalError(error, "Folder rename endpoint unavailable");
+          renameDraftFolderName(oldName, nextName, folder);
+          renameFolderInFallback(oldName, nextName);
+          toast("Folder renamed locally");
+          apiClient.adapterLog("rename_folder_fallback", message);
+          if (navigateAfterRename) {
+            navigate(`#/folder/${encodeURIComponent(nextName)}`);
+          }
+        }
+      }
+
+      async function deleteFolderEntry(folderEntry) {
+        const folder = folderEntry || {};
+        const folderName = String(folder.name || "").trim();
+        if (!folderName) return;
+
+        const confirmed = window.confirm(`Delete folder "${folderName}" and all its items?`);
+        if (!confirmed) return;
+
+        try {
+          const folderId = String(folder.id || "").trim();
+          if (folderId) {
+            await apiClient.deleteFolder(folderId).catch(() => null);
+          }
+          const result = await apiClient.deleteProject(folderName);
+          if (!isMounted) return;
+          removeDraftFolder(folderName);
+          const deletedCount = Number(result?.deletedCount || 0);
+          toast(deletedCount > 0 ? `Deleted ${deletedCount} item${deletedCount === 1 ? "" : "s"}` : "Folder deleted");
+          if (folderName.toLowerCase() === String(folderMeta.name || "").trim().toLowerCase()) {
+            navigate("#/");
+            return;
+          }
+          await refreshNotes();
+        } catch (error) {
+          if (!isMounted) return;
+          const message = conciseTechnicalError(error, "Folder delete endpoint unavailable");
+          removeDraftFolder(folderName);
+          if (folderName.toLowerCase() === String(folderMeta.name || "").trim().toLowerCase()) {
+            removeFolderFromFallback();
+            navigate("#/");
+          } else {
+            toast("Folder removed locally");
+            await refreshNotes();
+          }
+          apiClient.adapterLog("folder_delete_fallback", message);
+        }
+      }
+
       async function deleteNoteById(noteId) {
         const normalizedId = String(noteId || "").trim();
         if (!normalizedId) return;
@@ -418,28 +674,14 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       }
 
       async function deleteCurrentFolder() {
-        const folderName = String(folderMeta.name || "").trim();
-        if (!folderName) return;
-        const confirmed = window.confirm(`Delete folder "${folderName}" and all its items?`);
-        if (!confirmed) return;
-
         closeItemModal(els);
-        try {
-          const result = await apiClient.deleteProject(folderName);
-          if (!isMounted) return;
-          removeDraftFolder(folderName);
-          const deletedCount = Number(result?.deletedCount || 0);
-          toast(deletedCount > 0 ? `Deleted ${deletedCount} item${deletedCount === 1 ? "" : "s"}` : "Folder deleted");
-          navigate("#/");
-        } catch (error) {
-          if (!isMounted) return;
-          const message = conciseTechnicalError(error, "Folder delete endpoint unavailable");
-          removeDraftFolder(folderName);
-          removeFolderFromFallback();
-          toast("Folder removed locally");
-          apiClient.adapterLog("folder_delete_fallback", message);
-          navigate("#/");
-        }
+        await deleteFolderEntry({
+          id: dbFolderMeta?.id || "",
+          name: folderMeta.name,
+          color: folderMeta.color,
+          description: folderMeta.description,
+          symbol: folderMeta.symbol,
+        });
       }
 
       async function updateBreadcrumb(folder, root) {
@@ -483,9 +725,10 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
         subFolders.forEach((folder) => {
           if (isListView) {
-            const row = document.createElement("button");
+            const row = document.createElement("div");
             row.className = "subfolder-row";
-            row.type = "button";
+            row.tabIndex = 0;
+            row.setAttribute("role", "link");
 
             const dot = document.createElement("span");
             dot.className = "folder-row-dot";
@@ -495,8 +738,33 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             nameEl.className = "folder-row-name";
             nameEl.textContent = folder.name;
 
-            row.append(dot, nameEl);
-            row.addEventListener("click", () => {
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for folder ${folder.name}`,
+              actions: [
+                {
+                  label: "Rename folder",
+                  onSelect: async () => {
+                    await renameFolder(folder);
+                  },
+                },
+                {
+                  label: "Delete folder",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteFolderEntry(folder);
+                  },
+                },
+              ],
+            });
+
+            row.append(dot, nameEl, actionMenu);
+            row.addEventListener("click", (event) => {
+              if (event.target.closest(".action-menu")) return;
+              navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+            });
+            row.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
               navigate(`#/folder/${encodeURIComponent(folder.name)}`);
             });
             els.subfoldersGrid.appendChild(row);
@@ -511,8 +779,32 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             nameEl.className = "folder-pill-name";
             nameEl.textContent = folder.name;
 
-            card.appendChild(nameEl);
-            card.addEventListener("click", () => {
+            const footer = document.createElement("div");
+            footer.className = "folder-pill-footer subfolder-pill-footer";
+
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for folder ${folder.name}`,
+              actions: [
+                {
+                  label: "Rename folder",
+                  onSelect: async () => {
+                    await renameFolder(folder);
+                  },
+                },
+                {
+                  label: "Delete folder",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteFolderEntry(folder);
+                  },
+                },
+              ],
+            });
+
+            footer.append(actionMenu);
+            card.append(nameEl, footer);
+            card.addEventListener("click", (event) => {
+              if (event.target.closest(".action-menu")) return;
               navigate(`#/folder/${encodeURIComponent(folder.name)}`);
             });
             card.addEventListener("keydown", (event) => {
@@ -559,10 +851,11 @@ export function createFolderPage({ store, apiClient, auth = null }) {
           shell.className = "folder-file-tile-shell";
           shell.style.cssText = `animation: fadeInUp 200ms ease both;`;
 
-          const tile = document.createElement("button");
-          tile.type = "button";
+          const tile = document.createElement("article");
           tile.className = "folder-file-tile";
           tile.dataset.type = noteType;
+          tile.tabIndex = 0;
+          tile.setAttribute("role", "button");
 
           if (isListView) {
             const listIcon = document.createElement("span");
@@ -602,33 +895,37 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             const actions = document.createElement("div");
             actions.className = "list-view-actions";
 
-            const delBtn = document.createElement("button");
-            delBtn.type = "button";
-            delBtn.className = "folder-file-action-btn";
-            delBtn.title = "Delete";
-            delBtn.innerHTML = deleteIconMarkup();
-            delBtn.addEventListener("click", async (e) => {
-              e.stopPropagation();
-              await deleteNoteById(note.id);
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for item ${buildNoteTitle(note)}`,
+              actions: [
+                {
+                  label: "Move item",
+                  onSelect: async () => {
+                    const target = await openMoveDialog({
+                      title: "Move item to folder",
+                      confirmLabel: "Move",
+                    });
+                    if (!target) return;
+                    try {
+                      await apiClient.batchMoveNotes([note.id], target);
+                      toast("Moved");
+                      await refreshNotes();
+                    } catch {
+                      toast("Move failed", "error");
+                    }
+                  },
+                },
+                {
+                  label: "Delete item",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteNoteById(note.id);
+                  },
+                },
+              ],
             });
 
-            const moveBtn = document.createElement("button");
-            moveBtn.type = "button";
-            moveBtn.className = "folder-file-action-btn move-btn";
-            moveBtn.title = "Move";
-            moveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 7h10M8 4l3 3-3 3"/></svg>`;
-            moveBtn.addEventListener("click", async (e) => {
-              e.stopPropagation();
-              const target = window.prompt("Move to folder:");
-              if (!target || !target.trim()) return;
-              try {
-                await apiClient.batchMoveNotes([note.id], target.trim());
-                toast("Moved");
-                await refreshNotes();
-              } catch { toast("Move failed", "error"); }
-            });
-
-            actions.append(delBtn, moveBtn);
+            actions.append(actionMenu);
             tile.appendChild(actions);
           } else {
             const topRow = document.createElement("div");
@@ -648,33 +945,37 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             const actionRow = document.createElement("div");
             actionRow.className = "folder-file-actions";
 
-            const delActionBtn = document.createElement("button");
-            delActionBtn.type = "button";
-            delActionBtn.className = "folder-file-action-btn";
-            delActionBtn.title = "Delete";
-            delActionBtn.innerHTML = deleteIconMarkup();
-            delActionBtn.addEventListener("click", async (e) => {
-              e.stopPropagation();
-              await deleteNoteById(note.id);
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for item ${buildNoteTitle(note)}`,
+              actions: [
+                {
+                  label: "Move item",
+                  onSelect: async () => {
+                    const target = await openMoveDialog({
+                      title: "Move item to folder",
+                      confirmLabel: "Move",
+                    });
+                    if (!target) return;
+                    try {
+                      await apiClient.batchMoveNotes([note.id], target);
+                      toast("Moved");
+                      await refreshNotes();
+                    } catch {
+                      toast("Move failed", "error");
+                    }
+                  },
+                },
+                {
+                  label: "Delete item",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteNoteById(note.id);
+                  },
+                },
+              ],
             });
 
-            const moveBtn = document.createElement("button");
-            moveBtn.type = "button";
-            moveBtn.className = "folder-file-action-btn move-btn";
-            moveBtn.title = "Move";
-            moveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 7h10M8 4l3 3-3 3"/></svg>`;
-            moveBtn.addEventListener("click", async (e) => {
-              e.stopPropagation();
-              const target = window.prompt("Move to folder:");
-              if (!target || !target.trim()) return;
-              try {
-                await apiClient.batchMoveNotes([note.id], target.trim());
-                toast("Moved");
-                await refreshNotes();
-              } catch { toast("Move failed", "error"); }
-            });
-
-            actionRow.append(delActionBtn, moveBtn);
+            actionRow.append(actionMenu);
             topRow.append(typeIcon, typeBadge, spacer, actionRow);
             tile.appendChild(topRow);
 
@@ -736,6 +1037,11 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             openItemModal(els, note);
             markAccessed(note.id);
             renderView();
+          });
+          tile.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            tile.click();
           });
 
           if (selectMode) {
@@ -839,17 +1145,20 @@ export function createFolderPage({ store, apiClient, auth = null }) {
               renderView();
             });
 
-            const deleteBtn = document.createElement("button");
-            deleteBtn.type = "button";
-            deleteBtn.className = "recent-delete-btn";
-            deleteBtn.title = `Delete item ${buildNoteTitle(note)}`;
-            deleteBtn.setAttribute("aria-label", `Delete item ${buildNoteTitle(note)}`);
-            deleteBtn.innerHTML = deleteIconMarkup();
-            deleteBtn.addEventListener("click", async () => {
-              await deleteNoteById(note.id);
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for item ${buildNoteTitle(note)}`,
+              actions: [
+                {
+                  label: "Delete item",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteNoteById(note.id);
+                  },
+                },
+              ],
             });
 
-            row.append(item, deleteBtn);
+            row.append(item, actionMenu);
             els.recentNotesList.appendChild(row);
           });
         }
@@ -879,15 +1188,7 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
           item.append(dot, label);
 
-          const actions = document.createElement("span");
-          actions.className = "recent-task-actions";
-
-          const editBtn = document.createElement("button");
-          editBtn.type = "button";
-          editBtn.className = "task-action-btn task-edit-btn";
-          editBtn.title = "Edit task";
-          editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 2.5l3 3M1.5 9.5l6-6 3 3-6 6H1.5v-3z"/></svg>`;
-          editBtn.addEventListener("click", () => {
+          const startInlineEdit = () => {
             label.classList.add("hidden");
             const input = document.createElement("input");
             input.type = "text";
@@ -914,37 +1215,47 @@ export function createFolderPage({ store, apiClient, auth = null }) {
               if (e.key === "Escape") { input.remove(); label.classList.remove("hidden"); }
             });
             input.addEventListener("blur", save);
+          };
+
+          const actionMenu = createActionMenu({
+            ariaLabel: `Actions for task ${String(task.title || "").trim() || "(untitled task)"}`,
+            actions: [
+              {
+                label: "Edit task",
+                onSelect: async () => {
+                  startInlineEdit();
+                },
+              },
+              {
+                label: "Mark complete",
+                onSelect: async () => {
+                  try {
+                    await apiClient.updateTask(task.id, { status: "closed" });
+                    toast("Task completed");
+                    await refreshNotes();
+                  } catch {
+                    toast("Complete failed", "error");
+                  }
+                },
+              },
+              {
+                label: "Delete task",
+                tone: "danger",
+                onSelect: async () => {
+                  if (!window.confirm("Delete this task?")) return;
+                  try {
+                    await apiClient.deleteTask(task.id);
+                    toast("Task deleted");
+                    await refreshNotes();
+                  } catch {
+                    toast("Delete failed", "error");
+                  }
+                },
+              },
+            ],
           });
 
-          const completeBtn = document.createElement("button");
-          completeBtn.type = "button";
-          completeBtn.className = "task-action-btn task-complete-btn";
-          completeBtn.title = "Complete task";
-          completeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="2 7 6 11 12 3"/></svg>`;
-          completeBtn.addEventListener("click", async () => {
-            try {
-              await apiClient.updateTask(task.id, { status: "closed" });
-              toast("Task completed");
-              await refreshNotes();
-            } catch { toast("Complete failed", "error"); }
-          });
-
-          const deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.className = "task-action-btn task-delete-btn";
-          deleteBtn.title = "Delete task";
-          deleteBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="4" x2="12" y2="4"/><path d="M5 4V2.5h4V4M3 4l.7 8h6.6l.7-8"/></svg>`;
-          deleteBtn.addEventListener("click", async () => {
-            if (!window.confirm("Delete this task?")) return;
-            try {
-              await apiClient.deleteTask(task.id);
-              toast("Task deleted");
-              await refreshNotes();
-            } catch { toast("Delete failed", "error"); }
-          });
-
-          actions.append(editBtn, completeBtn, deleteBtn);
-          row.append(item, actions);
+          row.append(item, actionMenu);
           els.recentTasksList.appendChild(row);
         });
       }
@@ -1169,11 +1480,10 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
       function updateBatchBar() {
         if (!els.batchActionBar) return;
-        if (!selectMode || selectedIds.size === 0) {
-          els.batchActionBar.classList.add("hidden");
-          return;
-        }
-        els.batchActionBar.classList.remove("hidden");
+        const shouldShowBar = selectMode && selectedIds.size > 0;
+        els.batchActionBar.classList.toggle("hidden", !shouldShowBar);
+        document.body.classList.toggle("batch-mode-active", shouldShowBar);
+        if (!shouldShowBar) return;
         if (els.batchActionCount) {
           els.batchActionCount.textContent = `${selectedIds.size} selected`;
         }
@@ -1216,10 +1526,13 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
       on(els.batchMoveBtn, "click", async () => {
         if (selectedIds.size === 0) return;
-        const target = window.prompt("Move to folder:");
-        if (!target || !target.trim()) return;
+        const target = await openMoveDialog({
+          title: `Move ${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"}`,
+          confirmLabel: "Move",
+        });
+        if (!target) return;
         try {
-          await apiClient.batchMoveNotes([...selectedIds], target.trim());
+          await apiClient.batchMoveNotes([...selectedIds], target);
           if (!isMounted) return;
           toast(`Moved ${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"}`);
           toggleSelectMode(false);
@@ -1478,6 +1791,19 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         await deleteCurrentFolder();
       });
 
+      on(els.renameFolderBtn, "click", async () => {
+        await renameFolder(
+          {
+            id: dbFolderMeta?.id || "",
+            name: folderMeta.name,
+            color: folderMeta.color,
+            description: folderMeta.description,
+            symbol: folderMeta.symbol,
+          },
+          { navigateAfterRename: true }
+        );
+      });
+
       on(els.newFolderBtn, "click", () => {
         openFolderModal(els);
       });
@@ -1490,6 +1816,29 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         onColorSelect() {},
       });
       disposers.push(cleanupFolderModal);
+
+      const cleanupMoveModal = initMoveModalHandlers(els, {
+        onClose() {
+          closeMoveModal(els);
+          resolveMoveDialog(null);
+        },
+        onSubmit(value) {
+          const target = String(value || "").trim();
+          if (!target) {
+            els.moveModalInput?.focus();
+            return;
+          }
+          closeMoveModal(els);
+          resolveMoveDialog(target);
+        },
+        onInput(value) {
+          renderMoveModalSuggestions(els, listMoveFolderSuggestions(), value);
+        },
+        onSuggestionPick(value) {
+          renderMoveModalSuggestions(els, listMoveFolderSuggestions(), value);
+        },
+      });
+      disposers.push(cleanupMoveModal);
 
       on(els.folderForm, "submit", async (event) => {
         event.preventDefault();
@@ -1564,7 +1913,16 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       disposers.push(cleanupItemModal);
 
       // Chat panel
-      chatPanel = initChatPanel(els, { apiClient, toast });
+      chatPanel = initChatPanel(els, {
+        apiClient,
+        toast,
+        onOpenCitation(note) {
+          if (!note) return;
+          openItemModal(els, note);
+          markAccessed(note.id);
+          renderView();
+        },
+      });
       disposers.push(chatPanel.dispose);
 
       on(els.chatBtn, "click", () => {
@@ -1590,7 +1948,11 @@ export function createFolderPage({ store, apiClient, auth = null }) {
           if ((els.inlineSearchInput?.value || "").trim()) {
             clearInlineSearch();
           }
+          closeAllActionMenus(mountNode);
           closeItemModal(els);
+          closeFolderModal(els);
+          closeMoveModal(els);
+          resolveMoveDialog(null);
         },
       });
 
@@ -1694,6 +2056,10 @@ export function createFolderPage({ store, apiClient, auth = null }) {
           searchTimer = null;
         }
         closeItemModal(els);
+        closeFolderModal(els);
+        closeMoveModal(els);
+        resolveMoveDialog(null);
+        document.body.classList.remove("batch-mode-active");
         disposers.forEach((dispose) => {
           dispose();
         });

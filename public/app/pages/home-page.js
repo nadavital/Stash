@@ -19,6 +19,14 @@ import {
   initFolderModalHandlers,
 } from "../components/folder-modal/folder-modal.js";
 import {
+  renderMoveModalHTML,
+  queryMoveModalEls,
+  openMoveModal,
+  closeMoveModal,
+  renderMoveModalSuggestions,
+  initMoveModalHandlers,
+} from "../components/move-modal/move-modal.js";
+import {
   renderInlineSearchHTML,
   queryInlineSearchEls,
   renderSearchResults,
@@ -35,6 +43,7 @@ import {
   queryChatPanelEls,
   initChatPanel,
 } from "../components/chat-panel/chat-panel.js";
+import { createActionMenu, closeAllActionMenus } from "../components/action-menu/action-menu.js";
 import {
   normalizeFolderColor,
   fallbackColorForFolder,
@@ -54,7 +63,6 @@ import {
   iconTypeFor,
   getNoteProcessingState,
   fileToDataUrl,
-  deleteIconMarkup,
   relativeTime,
 } from "../services/note-utils.js";
 
@@ -97,6 +105,8 @@ function renderHomePageShell(authSession = null) {
 
     ${renderFolderModalHTML({ showKindRow: true })}
 
+    ${renderMoveModalHTML()}
+
     ${renderChatPanelHTML()}
   `;
 }
@@ -104,6 +114,7 @@ function renderHomePageShell(authSession = null) {
 function queryElements(mountNode) {
   const itemModalEls = queryItemModalEls(mountNode);
   const folderModalEls = queryFolderModalEls(mountNode);
+  const moveModalEls = queryMoveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
   const chatPanelEls = queryChatPanelEls(mountNode);
@@ -111,6 +122,7 @@ function queryElements(mountNode) {
   return {
     ...itemModalEls,
     ...folderModalEls,
+    ...moveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
     ...chatPanelEls,
@@ -173,6 +185,7 @@ export function createHomePage({ store, apiClient, auth = null }) {
       const selectedIds = new Set();
       let hasMoreNotes = false;
       let currentOffset = 0;
+      let moveModalResolver = null;
       const PAGE_SIZE = 20;
 
       function on(target, eventName, handler, options) {
@@ -181,12 +194,62 @@ export function createHomePage({ store, apiClient, auth = null }) {
         disposers.push(() => target.removeEventListener(eventName, handler, options));
       }
 
+      on(document, "click", () => {
+        closeAllActionMenus(mountNode);
+      });
+
       function getState() {
         return store.getState();
       }
 
       function setState(patch) {
         return store.setState(patch);
+      }
+
+      function resolveMoveDialog(value) {
+        if (!moveModalResolver) return;
+        const resolver = moveModalResolver;
+        moveModalResolver = null;
+        resolver(value);
+      }
+
+      function listMoveFolderSuggestions() {
+        const values = new Set();
+
+        dbFolders.forEach((folder) => {
+          const name = String(folder?.name || "").trim();
+          if (name) values.add(name);
+        });
+
+        normalizeFolderDrafts(getState().draftFolders).forEach((folder) => {
+          const name = String(folder?.name || "").trim();
+          if (name) values.add(name);
+        });
+
+        recentNotes.forEach((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          const name = String(note?.project || "").trim();
+          if (name) values.add(name);
+        });
+
+        return [...values].sort((a, b) => a.localeCompare(b));
+      }
+
+      function openMoveDialog({ title = "Move to folder", confirmLabel = "Move", initialValue = "" } = {}) {
+        if (moveModalResolver) {
+          resolveMoveDialog(null);
+        }
+
+        openMoveModal(els, {
+          title,
+          confirmLabel,
+          value: initialValue,
+          suggestions: listMoveFolderSuggestions(),
+        });
+
+        return new Promise((resolve) => {
+          moveModalResolver = resolve;
+        });
       }
 
       function markAccessed(noteId) {
@@ -365,14 +428,148 @@ export function createHomePage({ store, apiClient, auth = null }) {
         }
       }
 
-      async function deleteFolderByName(folderName) {
-        const normalizedFolder = String(folderName || "").trim();
+      function renameDraftFolderName(oldName, nextName, { color = "", description = "" } = {}) {
+        const normalizedOld = String(oldName || "").trim().toLowerCase();
+        const normalizedNext = String(nextName || "").trim();
+        if (!normalizedOld || !normalizedNext) return;
+
+        const drafts = normalizeFolderDrafts(getState().draftFolders);
+        const oldDraft = drafts.find((entry) => entry.name.toLowerCase() === normalizedOld);
+        const baseColor = normalizeFolderColor(color || oldDraft?.color, fallbackColorForFolder(normalizedNext));
+        const baseDescription = String(description || oldDraft?.description || "").trim();
+        const withoutOld = drafts.filter((entry) => entry.name.toLowerCase() !== normalizedOld);
+        const existingIndex = withoutOld.findIndex((entry) => entry.name.toLowerCase() === normalizedNext.toLowerCase());
+
+        if (existingIndex >= 0) {
+          withoutOld[existingIndex] = {
+            ...withoutOld[existingIndex],
+            color: withoutOld[existingIndex].color || baseColor,
+            description: withoutOld[existingIndex].description || baseDescription,
+          };
+        } else {
+          withoutOld.push({
+            name: normalizedNext,
+            color: baseColor,
+            description: baseDescription,
+          });
+        }
+
+        setState({ draftFolders: withoutOld });
+      }
+
+      async function moveAllProjectNotes(oldProject, nextProject) {
+        const normalizedOld = String(oldProject || "").trim();
+        const normalizedNext = String(nextProject || "").trim();
+        if (!normalizedOld || !normalizedNext || normalizedOld.toLowerCase() === normalizedNext.toLowerCase()) {
+          return 0;
+        }
+
+        const PAGE_LIMIT = 120;
+        let movedCount = 0;
+
+        for (let attempt = 0; attempt < 80; attempt++) {
+          const result = await apiClient.fetchNotes({ project: normalizedOld, limit: PAGE_LIMIT });
+          const items = Array.isArray(result?.items) ? result.items : [];
+          const ids = [...new Set(items
+            .map((entry, index) => String(normalizeCitation(entry, index).note.id || "").trim())
+            .filter(Boolean))];
+
+          if (!ids.length) break;
+          await apiClient.batchMoveNotes(ids, normalizedNext);
+          movedCount += ids.length;
+        }
+
+        return movedCount;
+      }
+
+      function renameFolderInFallback(oldName, nextName) {
+        const normalizedOld = String(oldName || "").trim().toLowerCase();
+        const normalizedNext = String(nextName || "").trim();
+        if (!normalizedOld || !normalizedNext) return;
+
+        const nextMock = (Array.isArray(getState().mockNotes) ? getState().mockNotes : []).map((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          if (String(note.project || "").trim().toLowerCase() !== normalizedOld) {
+            return entry;
+          }
+
+          const updated = { ...note, project: normalizedNext };
+          if (entry?.note) {
+            return { ...entry, note: updated };
+          }
+          return updated;
+        });
+
+        const activeQuery = (els.inlineSearchInput?.value || "").trim();
+        recentNotes = filterAndRankMockNotes(nextMock, { limit: 120 });
+        searchResults = activeQuery ? filterAndRankMockNotes(nextMock, { query: activeQuery, limit: 120 }) : [];
+        setState({ mockNotes: nextMock, notes: recentNotes });
+        renderView();
+      }
+
+      async function renameFolder(folderEntry) {
+        const folder = folderEntry || {};
+        const oldName = String(folder.name || "").trim();
+        if (!oldName) return;
+
+        const nextName = String(
+          (await openMoveDialog({
+            title: `Rename "${oldName}"`,
+            confirmLabel: "Rename",
+            initialValue: oldName,
+          })) || ""
+        ).trim();
+
+        if (!nextName || nextName.toLowerCase() === oldName.toLowerCase()) return;
+
+        try {
+          const folderId = String(folder.id || "").trim();
+          if (folderId) {
+            await apiClient.updateFolder(folderId, { name: nextName });
+          } else {
+            const lookup = await apiClient.getFolder(oldName).catch(() => null);
+            const lookupId = String(lookup?.folder?.id || "").trim();
+            if (lookupId) {
+              await apiClient.updateFolder(lookupId, { name: nextName });
+            }
+          }
+        } catch (error) {
+          apiClient.adapterLog("rename_folder_metadata_failed", conciseTechnicalError(error, "Folder metadata rename failed"));
+        }
+
+        try {
+          const movedCount = await moveAllProjectNotes(oldName, nextName);
+          renameDraftFolderName(oldName, nextName, folder);
+          clearInlineSearch();
+          toast(
+            movedCount > 0
+              ? `Renamed folder and moved ${movedCount} item${movedCount === 1 ? "" : "s"}`
+              : "Folder renamed"
+          );
+          await refreshNotes();
+        } catch (error) {
+          if (!isMounted) return;
+          const message = conciseTechnicalError(error, "Folder rename endpoint unavailable");
+          renameDraftFolderName(oldName, nextName, folder);
+          renameFolderInFallback(oldName, nextName);
+          toast("Folder renamed locally");
+          apiClient.adapterLog("rename_folder_fallback", message);
+        }
+      }
+
+      async function deleteFolder(folderEntry) {
+        const folder = folderEntry || {};
+        const normalizedFolder = String(folder.name || "").trim();
         if (!normalizedFolder) return;
 
         const confirmed = window.confirm(`Delete folder "${normalizedFolder}" and all its items?`);
         if (!confirmed) return;
 
         try {
+          const folderId = String(folder.id || "").trim();
+          if (folderId) {
+            await apiClient.deleteFolder(folderId).catch(() => null);
+          }
           const result = await apiClient.deleteProject(normalizedFolder);
           if (!isMounted) return;
           removeDraftFolder(normalizedFolder);
@@ -458,10 +655,10 @@ export function createHomePage({ store, apiClient, auth = null }) {
         folders.slice(0, 40).forEach((folder, folderIndex) => {
           if (isListView) {
             // List view: compact row
-            const row = document.createElement("button");
+            const row = document.createElement("div");
             row.className = "folder-pill-row";
-            row.type = "button";
             row.tabIndex = 0;
+            row.setAttribute("role", "link");
 
             const dot = document.createElement("span");
             dot.className = "folder-row-dot";
@@ -475,24 +672,35 @@ export function createHomePage({ store, apiClient, auth = null }) {
             countEl.className = "folder-row-count";
             countEl.textContent = `${folder.count}`;
 
-            const deleteBtn = document.createElement("button");
-            deleteBtn.type = "button";
-            deleteBtn.className = "folder-row-delete";
-            deleteBtn.title = `Delete folder ${folder.name}`;
-            deleteBtn.setAttribute("aria-label", `Delete folder ${folder.name}`);
-            deleteBtn.innerHTML = deleteIconMarkup();
-
-            row.append(dot, nameEl, countEl, deleteBtn);
-
-            row.addEventListener("click", (e) => {
-              if (e.target.closest(".folder-row-delete")) return;
-              navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for folder ${folder.name}`,
+              actions: [
+                {
+                  label: "Rename folder",
+                  onSelect: async () => {
+                    await renameFolder(folder);
+                  },
+                },
+                {
+                  label: "Delete folder",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteFolder(folder);
+                  },
+                },
+              ],
             });
 
-            deleteBtn.addEventListener("click", async (event) => {
+            row.append(dot, nameEl, countEl, actionMenu);
+
+            row.addEventListener("click", (e) => {
+              if (e.target.closest(".action-menu")) return;
+              navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+            });
+            row.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              event.stopPropagation();
-              await deleteFolderByName(folder.name);
+              navigate(`#/folder/${encodeURIComponent(folder.name)}`);
             });
 
             els.foldersList.appendChild(row);
@@ -516,14 +724,26 @@ export function createHomePage({ store, apiClient, auth = null }) {
             countEl.className = "folder-pill-count";
             countEl.textContent = `${folder.count} item${folder.count !== 1 ? "s" : ""}`;
 
-            const deleteBtn = document.createElement("button");
-            deleteBtn.type = "button";
-            deleteBtn.className = "folder-pill-delete";
-            deleteBtn.title = `Delete folder ${folder.name}`;
-            deleteBtn.setAttribute("aria-label", `Delete folder ${folder.name}`);
-            deleteBtn.innerHTML = deleteIconMarkup();
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for folder ${folder.name}`,
+              actions: [
+                {
+                  label: "Rename folder",
+                  onSelect: async () => {
+                    await renameFolder(folder);
+                  },
+                },
+                {
+                  label: "Delete folder",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteFolder(folder);
+                  },
+                },
+              ],
+            });
 
-            footer.append(countEl, deleteBtn);
+            footer.append(countEl, actionMenu);
             card.append(nameEl, footer);
 
             card.addEventListener("click", () => {
@@ -533,12 +753,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
               navigate(`#/folder/${encodeURIComponent(folder.name)}`);
-            });
-
-            deleteBtn.addEventListener("click", async (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              await deleteFolderByName(folder.name);
             });
 
             els.foldersList.appendChild(card);
@@ -611,14 +825,17 @@ export function createHomePage({ store, apiClient, auth = null }) {
               renderRecent();
             });
 
-            const deleteBtn = document.createElement("button");
-            deleteBtn.type = "button";
-            deleteBtn.className = "recent-delete-btn";
-            deleteBtn.title = `Delete item ${buildNoteTitle(note)}`;
-            deleteBtn.setAttribute("aria-label", `Delete item ${buildNoteTitle(note)}`);
-            deleteBtn.innerHTML = deleteIconMarkup();
-            deleteBtn.addEventListener("click", async () => {
-              await deleteNoteById(note.id);
+            const actionMenu = createActionMenu({
+              ariaLabel: `Actions for item ${buildNoteTitle(note)}`,
+              actions: [
+                {
+                  label: "Delete item",
+                  tone: "danger",
+                  onSelect: async () => {
+                    await deleteNoteById(note.id);
+                  },
+                },
+              ],
             });
 
             // Batch select checkbox
@@ -635,7 +852,7 @@ export function createHomePage({ store, apiClient, auth = null }) {
               row.prepend(checkbox);
             }
 
-            row.append(item, deleteBtn);
+            row.append(item, actionMenu);
             els.recentNotesList.appendChild(row);
           });
         }
@@ -690,16 +907,7 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
           item.append(dot, label);
 
-          const actions = document.createElement("span");
-          actions.className = "recent-task-actions";
-
-          // Edit button
-          const editBtn = document.createElement("button");
-          editBtn.type = "button";
-          editBtn.className = "task-action-btn task-edit-btn";
-          editBtn.title = "Edit task";
-          editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 2.5l3 3M1.5 9.5l6-6 3 3-6 6H1.5v-3z"/></svg>`;
-          editBtn.addEventListener("click", () => {
+          const startInlineEdit = () => {
             label.classList.add("hidden");
             const input = document.createElement("input");
             input.type = "text";
@@ -726,39 +934,47 @@ export function createHomePage({ store, apiClient, auth = null }) {
               if (e.key === "Escape") { input.remove(); label.classList.remove("hidden"); }
             });
             input.addEventListener("blur", save);
+          };
+
+          const actionMenu = createActionMenu({
+            ariaLabel: `Actions for task ${String(task.title || "").trim() || "(untitled task)"}`,
+            actions: [
+              {
+                label: "Edit task",
+                onSelect: async () => {
+                  startInlineEdit();
+                },
+              },
+              {
+                label: "Mark complete",
+                onSelect: async () => {
+                  try {
+                    await apiClient.updateTask(task.id, { status: "closed" });
+                    toast("Task completed");
+                    await refreshNotes();
+                  } catch {
+                    toast("Complete failed", "error");
+                  }
+                },
+              },
+              {
+                label: "Delete task",
+                tone: "danger",
+                onSelect: async () => {
+                  if (!window.confirm("Delete this task?")) return;
+                  try {
+                    await apiClient.deleteTask(task.id);
+                    toast("Task deleted");
+                    await refreshNotes();
+                  } catch {
+                    toast("Delete failed", "error");
+                  }
+                },
+              },
+            ],
           });
 
-          // Complete button
-          const completeBtn = document.createElement("button");
-          completeBtn.type = "button";
-          completeBtn.className = "task-action-btn task-complete-btn";
-          completeBtn.title = "Complete task";
-          completeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="2 7 6 11 12 3"/></svg>`;
-          completeBtn.addEventListener("click", async () => {
-            try {
-              await apiClient.updateTask(task.id, { status: "closed" });
-              toast("Task completed");
-              await refreshNotes();
-            } catch { toast("Complete failed", "error"); }
-          });
-
-          // Delete button
-          const deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.className = "task-action-btn task-delete-btn";
-          deleteBtn.title = "Delete task";
-          deleteBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="4" x2="12" y2="4"/><path d="M5 4V2.5h4V4M3 4l.7 8h6.6l.7-8"/></svg>`;
-          deleteBtn.addEventListener("click", async () => {
-            if (!window.confirm("Delete this task?")) return;
-            try {
-              await apiClient.deleteTask(task.id);
-              toast("Task deleted");
-              await refreshNotes();
-            } catch { toast("Delete failed", "error"); }
-          });
-
-          actions.append(editBtn, completeBtn, deleteBtn);
-          row.append(item, actions);
+          row.append(item, actionMenu);
           els.recentTasksList.appendChild(row);
         });
       }
@@ -1001,11 +1217,10 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
       function updateBatchBar() {
         if (!els.batchActionBar) return;
-        if (!selectMode || selectedIds.size === 0) {
-          els.batchActionBar.classList.add("hidden");
-          return;
-        }
-        els.batchActionBar.classList.remove("hidden");
+        const shouldShowBar = selectMode && selectedIds.size > 0;
+        els.batchActionBar.classList.toggle("hidden", !shouldShowBar);
+        document.body.classList.toggle("batch-mode-active", shouldShowBar);
+        if (!shouldShowBar) return;
         if (els.batchActionCount) {
           els.batchActionCount.textContent = `${selectedIds.size} selected`;
         }
@@ -1048,10 +1263,13 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
       on(els.batchMoveBtn, "click", async () => {
         if (selectedIds.size === 0) return;
-        const target = window.prompt("Move to folder:");
-        if (!target || !target.trim()) return;
+        const target = await openMoveDialog({
+          title: `Move ${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"}`,
+          confirmLabel: "Move",
+        });
+        if (!target) return;
         try {
-          await apiClient.batchMoveNotes([...selectedIds], target.trim());
+          await apiClient.batchMoveNotes([...selectedIds], target);
           if (!isMounted) return;
           toast(`Moved ${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"}`);
           toggleSelectMode(false);
@@ -1314,6 +1532,29 @@ export function createHomePage({ store, apiClient, auth = null }) {
       });
       disposers.push(cleanupFolderModal);
 
+      const cleanupMoveModal = initMoveModalHandlers(els, {
+        onClose() {
+          closeMoveModal(els);
+          resolveMoveDialog(null);
+        },
+        onSubmit(value) {
+          const target = String(value || "").trim();
+          if (!target) {
+            els.moveModalInput?.focus();
+            return;
+          }
+          closeMoveModal(els);
+          resolveMoveDialog(target);
+        },
+        onInput(value) {
+          renderMoveModalSuggestions(els, listMoveFolderSuggestions(), value);
+        },
+        onSuggestionPick(value) {
+          renderMoveModalSuggestions(els, listMoveFolderSuggestions(), value);
+        },
+      });
+      disposers.push(cleanupMoveModal);
+
       let chatPanel = null;
 
       // Item modal handlers via extracted component
@@ -1370,7 +1611,16 @@ export function createHomePage({ store, apiClient, auth = null }) {
       disposers.push(cleanupItemModal);
 
       // Chat panel
-      chatPanel = initChatPanel(els, { apiClient, toast });
+      chatPanel = initChatPanel(els, {
+        apiClient,
+        toast,
+        onOpenCitation(note) {
+          if (!note) return;
+          openItemModal(els, note);
+          markAccessed(note.id);
+          renderView();
+        },
+      });
       disposers.push(chatPanel.dispose);
 
       on(els.chatBtn, "click", () => {
@@ -1453,8 +1703,11 @@ export function createHomePage({ store, apiClient, auth = null }) {
           if ((els.inlineSearchInput?.value || "").trim()) {
             clearInlineSearch();
           }
+          closeAllActionMenus(mountNode);
           closeItemModal(els);
           closeFolderModal(els);
+          closeMoveModal(els);
+          resolveMoveDialog(null);
         },
       });
 
@@ -1535,6 +1788,9 @@ export function createHomePage({ store, apiClient, auth = null }) {
         }
         closeItemModal(els);
         closeFolderModal(els);
+        closeMoveModal(els);
+        resolveMoveDialog(null);
+        document.body.classList.remove("batch-mode-active");
         disposers.forEach((dispose) => {
           dispose();
         });

@@ -340,7 +340,7 @@
   color: var(--ink);
   padding: 10px 12px;
   font-size: var(--font-size-base);
-  font-family: var(--font-body);
+  font-family: var(--font-sans);
   line-height: var(--leading-relaxed);
   resize: vertical;
   transition: border-color 150ms ease;

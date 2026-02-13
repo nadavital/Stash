@@ -27,6 +27,7 @@
   gap: 8px;
   transition: background 150ms ease;
   overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--folder-accent, var(--border-subtle)) 24%, transparent);
 }
 
 /* Folder tab */
@@ -114,17 +115,13 @@
   filter: brightness(0.96);
 }
 
-.home-folders-list .folder-pill:hover .folder-pill-delete {
-  opacity: 1;
-}
-
 .home-folders-list .folder-pill:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 .home-folders-list .folder-pill-name {
-  font-size: var(--font-size-body-sm);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
   color: var(--ink);
@@ -140,40 +137,14 @@
   justify-content: space-between;
 }
 
+.folder-pill-footer > .action-menu {
+  margin-left: auto;
+}
+
 .home-folders-list .folder-pill-count {
-  font-size: var(--font-size-xs);
-  color: var(--muted);
-}
-
-.home-folders-list .folder-pill-delete {
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.home-folders-list .folder-pill-delete svg {
-  width: 12px;
-  height: 12px;
-}
-
-.home-folders-list .folder-pill-delete:hover {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.home-folders-list .folder-pill-delete:focus-visible {
-  outline: 2px solid rgba(180, 35, 24, 0.2);
-  outline-offset: 1px;
+  font-size: var(--font-size-caption);
+  color: var(--ink-secondary);
+  font-family: var(--font-mono);
 }
 
 /* Skeleton */
@@ -256,10 +227,6 @@
   background: var(--hover-bg);
 }
 
-.folder-pill-row:hover .folder-row-delete {
-  opacity: 1;
-}
-
 .folder-pill-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -286,7 +253,7 @@
 .folder-row-dot[data-color="slate"] { background: var(--folder-blue); }
 
 .folder-row-name {
-  font-size: var(--font-size-body-sm);
+  font-size: var(--font-size-base);
   font-weight: var(--weight-medium);
   color: var(--ink);
   overflow: hidden;
@@ -295,36 +262,14 @@
 }
 
 .folder-row-count {
-  font-size: var(--font-size-xs);
-  color: var(--muted);
+  font-size: var(--font-size-caption);
+  color: var(--ink-secondary);
   font-family: var(--font-mono);
   white-space: nowrap;
 }
 
-.folder-row-delete {
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.folder-row-delete svg {
-  width: 12px;
-  height: 12px;
-}
-
-.folder-row-delete:hover {
-  background: var(--danger-soft);
-  color: var(--danger);
+.folder-pill-row > .action-menu {
+  justify-self: end;
 }
 
 @media (max-width: 680px) {

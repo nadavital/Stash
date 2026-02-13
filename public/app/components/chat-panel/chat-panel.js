@@ -1,5 +1,4 @@
-import { buildNoteTitle } from "../../services/mappers.js";
-import { normalizeCitation } from "../../services/mappers.js";
+import { buildNoteTitle, buildContentPreview, normalizeCitation } from "../../services/mappers.js";
 
 export function renderChatPanelHTML() {
   return `
@@ -36,7 +35,7 @@ export function queryChatPanelEls(root) {
   };
 }
 
-export function initChatPanel(els, { apiClient, toast }) {
+export function initChatPanel(els, { apiClient, toast, onOpenCitation } = {}) {
   const handlers = [];
   let isAsking = false;
   let nextProjectHint = "";
@@ -69,10 +68,15 @@ export function initChatPanel(els, { apiClient, toast }) {
     return msg;
   }
 
-  function renderCitations(citations) {
-    if (!els.chatPanelCitations || !citations.length) return;
-    els.chatPanelCitations.classList.remove("hidden");
+  function renderCitations(citations = []) {
+    if (!els.chatPanelCitations) return;
     els.chatPanelCitations.innerHTML = "";
+    if (!citations.length) {
+      els.chatPanelCitations.classList.add("hidden");
+      return;
+    }
+
+    els.chatPanelCitations.classList.remove("hidden");
     const heading = document.createElement("p");
     heading.className = "chat-citations-heading";
     heading.textContent = "Sources";
@@ -80,9 +84,50 @@ export function initChatPanel(els, { apiClient, toast }) {
 
     citations.slice(0, 6).forEach((entry, index) => {
       const citation = normalizeCitation(entry, index);
+      const note = citation.note || {};
       const item = document.createElement("div");
       item.className = "chat-citation-item";
-      item.textContent = `[N${index + 1}] ${buildNoteTitle(citation.note)}`;
+
+      const title = document.createElement("span");
+      title.className = "chat-citation-title";
+      title.textContent = `[N${index + 1}] ${buildNoteTitle(note)}`;
+
+      const meta = document.createElement("span");
+      meta.className = "chat-citation-meta";
+      meta.textContent = String(note.project || note.sourceType || "Saved item");
+
+      const preview = document.createElement("span");
+      preview.className = "chat-citation-preview";
+      preview.textContent = buildContentPreview(note) || "Open this source";
+
+      const actions = document.createElement("div");
+      actions.className = "chat-citation-actions";
+
+      const openInAppBtn = document.createElement("button");
+      openInAppBtn.type = "button";
+      openInAppBtn.className = "chat-citation-action";
+      openInAppBtn.textContent = "Open item";
+      openInAppBtn.addEventListener("click", () => {
+        if (typeof onOpenCitation === "function") {
+          onOpenCitation(note);
+          return;
+        }
+      });
+
+      actions.appendChild(openInAppBtn);
+
+      const sourceUrl = String(note.sourceUrl || "").trim();
+      if (sourceUrl) {
+        const openSourceBtn = document.createElement("a");
+        openSourceBtn.className = "chat-citation-action";
+        openSourceBtn.href = sourceUrl;
+        openSourceBtn.target = "_blank";
+        openSourceBtn.rel = "noopener noreferrer";
+        openSourceBtn.textContent = "Open source";
+        actions.appendChild(openSourceBtn);
+      }
+
+      item.append(title, meta, preview, actions);
       els.chatPanelCitations.appendChild(item);
     });
   }

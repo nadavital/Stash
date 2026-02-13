@@ -3,7 +3,7 @@
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 20px;
+  bottom: var(--toast-bottom-offset);
   transform: translate(-50%, 10px);
   background: var(--ink);
   color: var(--bg);
@@ -15,6 +15,10 @@
   opacity: 0;
   transition: opacity 180ms ease, transform 180ms ease;
   z-index: var(--z-toast);
+}
+
+body.batch-mode-active .toast {
+  bottom: calc(var(--toast-bottom-offset) + var(--batch-bar-height));
 }
 
 .toast.show {

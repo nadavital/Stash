@@ -154,10 +154,10 @@
 }
 
 .auth-gate-mode-toggle {
-  border: 1px solid var(--border-default);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--surface-muted);
-  color: var(--ink-primary);
+  background: var(--surface-subtle);
+  color: var(--ink);
   min-height: 36px;
   padding: 0 12px;
   font-size: var(--font-size-caption);

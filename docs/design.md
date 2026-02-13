@@ -156,6 +156,26 @@ Dark mode increases shadow intensity (e.g. `--shadow-2` becomes `rgba(0,0,0,0.2)
 | `--z-modal-alt` | `42` | Folder modal (above item modal) |
 | `--z-toast` | `50` | Toast notifications (topmost) |
 
+### Interaction Rail Tokens
+
+| Token | Purpose |
+|-------|---------|
+| `--safe-bottom` | Safe area inset for devices with a home indicator |
+| `--composer-offset` | Vertical offset for fixed composer from viewport edge |
+| `--composer-height` | Baseline composer control height |
+| `--batch-bar-height` | Height budget for batch action rail |
+| `--composer-total-offset` | Derived base offset used for other fixed elements |
+| `--page-bottom-space` | Bottom page padding to avoid fixed-UI overlap |
+| `--chat-bottom-offset` | Default chat panel bottom offset above composer |
+| `--toast-bottom-offset` | Default toast offset above composer |
+
+### Touch Target Tokens
+
+| Token | Purpose |
+|-------|---------|
+| `--tap-target` | Baseline interactive control size on desktop/tablet surfaces |
+| `--tap-target-mobile` | Enlarged minimum touch size for mobile controls |
+
 ### Transitions
 
 | Token | Value |
@@ -183,6 +203,8 @@ All component JS files live under `public/app/components/`. All component CSS fi
 | Folder Item Grid | `components/folder-item-grid/folder-item-grid.js` | `components/folder-item-grid.css` | `.folder-file-*` |
 | Item Modal | `components/item-modal/item-modal.js` | `components/item-modal.css` | `.item-modal-*` |
 | Folder Modal | `components/folder-modal/folder-modal.js` | `components/folder-modal.css` | `.folder-modal-*` |
+| Move Modal | `components/move-modal/move-modal.js` | `components/move-modal.css` | `.move-modal-*` |
+| Action Menu | `components/action-menu/action-menu.js` | `components/action-menu.css` | `.action-menu-*` |
 | Inline Search | `components/inline-search/inline-search.js` | `components/inline-search.css` | `.inline-search-*` |
 | Chat Panel | `components/chat-panel/chat-panel.js` | `components/chat-panel.css` | `.chat-panel-*` |
 | Sort/Filter | `components/sort-filter/sort-filter.js` | (in `topbar.css`) | `.sort-filter-*` |
@@ -270,10 +292,16 @@ Returns HTML string. Note cards are populated dynamically.
 The hero section at the top of a folder page: folder name, color swatch, description, and action buttons.
 
 ```js
-export function renderFolderHeroToolbar({ folderName, folderColor, folderSymbol, noteCount })
+export function renderFolderHeroToolbar({
+  folderName,
+  folderDescription,
+  folderColor,
+  folderSymbol,
+  showDeleteAction,
+})
 ```
 
-Returns HTML string.
+Returns HTML string. Includes `+ Folder`, `Rename`, and optional delete actions.
 
 ---
 
@@ -338,10 +366,44 @@ Right-side chat surface for grounded Q&A over saved notes, with source citations
 ```js
 export function renderChatPanelHTML()
 export function queryChatPanelEls(root)
-export function initChatPanel(els, { apiClient, toast })
+export function initChatPanel(els, { apiClient, toast, onOpenCitation })
 ```
 
 `initChatPanel()` returns controls for `toggle(show?)`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
+When `onOpenCitation` is provided, citation cards expose `Open item` for in-app context. If a source URL exists, `Open source` opens the original link in a new tab.
+The panel and controls use touch-target tokens (`--tap-target`, `--tap-target-mobile`) so close/send/citation actions remain comfortable on small screens.
+
+---
+
+#### Move Modal
+
+Reusable modal for selecting a destination folder during move actions.
+
+```js
+export function renderMoveModalHTML()
+export function queryMoveModalEls(root)
+export function renderMoveModalSuggestions(els, suggestions, currentValue)
+export function openMoveModal(els, options)
+export function closeMoveModal(els)
+export function setMoveModalLoading(els, loading)
+export function initMoveModalHandlers(els, { onClose, onSubmit, onInput, onSuggestionPick })
+```
+
+The modal is safe-area aware on mobile and supports stacked action buttons on very narrow viewports.
+
+---
+
+#### Action Menu
+
+Reusable compact menu used for per-item actions in dense list/grid surfaces.
+
+```js
+export function createActionMenu({ ariaLabel, actions })
+export function closeAllActionMenus(root)
+```
+
+The menu auto-repositions (`left`/`up`) when near viewport edges to stay fully visible on mobile and narrow layouts.
+Trigger and item sizing follow tap-target tokens to improve one-handed mobile use.
 
 ---
 

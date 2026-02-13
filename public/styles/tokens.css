@@ -78,6 +78,9 @@
   --transition-base: 200ms ease;
   --transition-slow: 300ms ease;
 
+  --tap-target: 40px;
+  --tap-target-mobile: 44px;
+
   --font-size-2xs: 0.62rem;
   --font-size-xs: 0.72rem;
   --font-size-caption: 0.78rem;
@@ -104,6 +107,15 @@
   --z-modal: 40;
   --z-modal-alt: 42;
   --z-toast: 50;
+
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --composer-offset: 12px;
+  --composer-height: 56px;
+  --batch-bar-height: 72px;
+  --composer-total-offset: calc(var(--composer-height) + var(--composer-offset) + var(--safe-bottom));
+  --page-bottom-space: calc(var(--composer-total-offset) + 28px);
+  --chat-bottom-offset: calc(var(--composer-total-offset) + 12px);
+  --toast-bottom-offset: calc(var(--composer-total-offset) + 16px);
 
   --on-accent: #ffffff;
 }

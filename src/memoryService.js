@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config, publicUploadPath } from "./config.js";
-import { noteRepo } from "./db.js";
+import { noteRepo } from "./storage/provider.js";
+import { enrichmentQueue } from "./queue.js";
 import {
   convertUploadToMarkdown,
   createEmbedding,
@@ -13,6 +14,44 @@ import {
   heuristicSummary,
   heuristicTags,
 } from "./openai.js";
+
+/**
+ * Simple LRU cache for query embeddings (avoids redundant OpenAI calls).
+ * Max 128 entries, 5 minute TTL.
+ */
+class EmbeddingCache {
+  constructor(maxSize = 128, ttlMs = 5 * 60 * 1000) {
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+    this.cache = new Map();
+  }
+
+  get(key) {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key);
+      return null;
+    }
+    // Move to end (most recently used)
+    this.cache.delete(key);
+    this.cache.set(key, entry);
+    return entry.value;
+  }
+
+  set(key, value) {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      // Delete oldest entry
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    this.cache.set(key, { value, timestamp: Date.now() });
+  }
+}
+
+const embeddingCache = new EmbeddingCache();
 
 const SOURCE_TYPES = new Set(["text", "link", "image", "file"]);
 const CONSOLIDATED_SECTIONS = [
@@ -28,6 +67,148 @@ const CONSOLIDATED_SECTIONS = [
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function authenticationError(message = "Unauthorized") {
+  const error = new Error(message);
+  error.status = 401;
+  return error;
+}
+
+function sanitizeIdForFileName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function resolveActor(actor = null, { allowServiceActor = false } = {}) {
+  const workspaceId = String(actor?.workspaceId || "").trim();
+  if (!workspaceId) {
+    throw authenticationError("Missing actor workspace id");
+  }
+  const userId = String(actor?.userId || "").trim();
+  if (!userId && !allowServiceActor) {
+    throw authenticationError("Missing actor user id");
+  }
+  const role = String(actor?.role || "member")
+    .trim()
+    .toLowerCase();
+  return { workspaceId, userId: userId || null, role };
+}
+
+function authorizationError(message = "Forbidden") {
+  const error = new Error(message);
+  error.status = 403;
+  return error;
+}
+
+function isWorkspaceManager(actorContext = null) {
+  const role = String(actorContext?.role || "").toLowerCase();
+  return role === "owner" || role === "admin";
+}
+
+function noteOwnerId(note = null) {
+  if (!note) return "";
+  const explicitOwner = String(note.ownerUserId || "").trim();
+  if (explicitOwner) return explicitOwner;
+  const creator = String(note.createdByUserId || "").trim();
+  if (creator) return creator;
+  const metadataActor = String(note.metadata?.actorUserId || "").trim();
+  return metadataActor;
+}
+
+function canReadNote(note, actorContext = null) {
+  if (!note || !actorContext) return false;
+  if (isWorkspaceManager(actorContext)) return true;
+  const userId = String(actorContext.userId || "").trim();
+  if (!userId) return false;
+  return noteOwnerId(note) === userId;
+}
+
+function assertCanReadNote(note, actorContext = null) {
+  if (!canReadNote(note, actorContext)) {
+    throw authorizationError("Forbidden: you do not have permission to access this item");
+  }
+}
+
+function canMutateNote(note, actorContext = null) {
+  if (!note || !actorContext) return false;
+  if (isWorkspaceManager(actorContext)) return true;
+  const userId = String(actorContext.userId || "").trim();
+  if (!userId) return false;
+  return noteOwnerId(note) === userId;
+}
+
+function assertCanMutateNote(note, actorContext = null) {
+  if (!canMutateNote(note, actorContext)) {
+    throw authorizationError("Forbidden: you do not have permission to modify this item");
+  }
+}
+
+function assertWorkspaceManager(actorContext = null) {
+  if (!isWorkspaceManager(actorContext)) {
+    throw authorizationError("Forbidden: this operation requires workspace owner/admin privileges");
+  }
+}
+
+async function listVisibleNotesForActor({
+  actorContext,
+  project = "",
+  limit = 200,
+  offset = 0,
+} = {}) {
+  const normalizedProject = String(project || "").trim();
+  const boundedLimit = clampInt(limit, 1, 10000, 200);
+  const boundedOffset = clampInt(offset, 0, 100000, 0);
+  if (isWorkspaceManager(actorContext)) {
+    return noteRepo.listByProject(
+      normalizedProject || null,
+      boundedLimit,
+      boundedOffset,
+      actorContext.workspaceId
+    );
+  }
+  return noteRepo.listByProjectForUser(
+    normalizedProject || null,
+    boundedLimit,
+    boundedOffset,
+    actorContext.workspaceId,
+    actorContext.userId
+  );
+}
+
+async function listSearchCandidatesForActor(actorContext, normalizedProject = "", maxCandidates = 500) {
+  if (isWorkspaceManager(actorContext)) {
+    return noteRepo.listByProject(
+      normalizedProject || null,
+      maxCandidates,
+      0,
+      actorContext.workspaceId
+    );
+  }
+  return noteRepo.listByProjectForUser(
+    normalizedProject || null,
+    maxCandidates,
+    0,
+    actorContext.workspaceId,
+    actorContext.userId
+  );
+}
+
+function getConsolidatedMemoryFilePath(workspaceId = config.defaultWorkspaceId) {
+  const normalizedWorkspaceId = String(workspaceId || config.defaultWorkspaceId || "").trim();
+  const basePath = config.consolidatedMemoryMarkdownFile;
+  if (!normalizedWorkspaceId || normalizedWorkspaceId === config.defaultWorkspaceId) {
+    return basePath;
+  }
+
+  const safeWorkspaceId = sanitizeIdForFileName(normalizedWorkspaceId) || "workspace";
+  const ext = path.extname(basePath) || ".md";
+  const name = path.basename(basePath, ext);
+  const dir = path.dirname(basePath);
+  return path.join(dir, `${name}-${safeWorkspaceId}${ext}`);
 }
 
 function clampInt(value, min, max, fallback) {
@@ -290,9 +471,16 @@ async function fetchLinkPreview(urlString) {
       extractHtmlMetaContent(html, "twitter:title", "property");
     const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const body = textOnlyFromHtml(html);
+    const ogImage =
+      extractHtmlMetaContent(html, "og:image", "property") ||
+      extractHtmlMetaContent(html, "og:image", "name") ||
+      extractHtmlMetaContent(html, "twitter:image", "name") ||
+      extractHtmlMetaContent(html, "twitter:image", "property") ||
+      "";
     return {
       title: normalizeLinkTitle(ogTitle || twitterTitle || (titleMatch ? titleMatch[1] : "")),
       excerpt: body.slice(0, 1600),
+      ogImage: ogImage || null,
     };
   } catch {
     return null;
@@ -430,7 +618,7 @@ function noteTextForEmbedding(note, linkPreview) {
   return parts.filter(Boolean).join("\n\n");
 }
 
-function tokenize(text) {
+export function tokenize(text) {
   return String(text || "")
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
@@ -438,7 +626,7 @@ function tokenize(text) {
     .filter(Boolean);
 }
 
-function buildBm25Index(docs, textSelector) {
+export function buildBm25Index(docs, textSelector) {
   const docTokens = docs.map((doc) => tokenize(textSelector(doc)));
   const docLengths = docTokens.map((tokens) => tokens.length);
   const avgDocLength = docLengths.length ? docLengths.reduce((sum, len) => sum + len, 0) / docLengths.length : 0;
@@ -502,7 +690,7 @@ function normalizeScores(items, scoreSelector) {
   return out;
 }
 
-function lexicalScore(note, queryTokens) {
+export function lexicalScore(note, queryTokens) {
   if (queryTokens.length === 0) return 0;
   const noteTokens = new Set(
     tokenize(
@@ -698,8 +886,8 @@ function buildConsolidatedEntry(note) {
   return parts.join("\n");
 }
 
-async function updateConsolidatedMemoryFile(note) {
-  const filePath = config.consolidatedMemoryMarkdownFile;
+async function updateConsolidatedMemoryFile(note, workspaceId = config.defaultWorkspaceId) {
+  const filePath = getConsolidatedMemoryFilePath(workspaceId);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
 
   let content;
@@ -732,6 +920,18 @@ async function updateConsolidatedMemoryFile(note) {
 
   content = content.replace(/\*\*Last Updated:\*\* .*/, `**Last Updated:** ${nowIso()}`);
   await fs.writeFile(filePath, content, "utf8");
+
+  // Archive if over 512KB
+  const fileSize = Buffer.byteLength(content, "utf8");
+  if (fileSize > 512 * 1024) {
+    const timestamp = nowIso().replace(/[:.]/g, "-");
+    const archivePath = path.join(
+      path.dirname(filePath),
+      `consolidated-memory-archive-${timestamp}.md`
+    );
+    await fs.copyFile(filePath, archivePath);
+    await fs.writeFile(filePath, makeConsolidatedTemplate(), "utf8");
+  }
 }
 
 function extractNoteIdFromConsolidatedBlock(blockLines) {
@@ -744,7 +944,7 @@ function extractNoteIdFromConsolidatedBlock(blockLines) {
   return "";
 }
 
-async function removeConsolidatedMemoryEntries(noteIds = []) {
+async function removeConsolidatedMemoryEntries(noteIds = [], workspaceId = config.defaultWorkspaceId) {
   const idSet = new Set(
     (Array.isArray(noteIds) ? noteIds : [])
       .map((id) => String(id || "").trim())
@@ -752,7 +952,7 @@ async function removeConsolidatedMemoryEntries(noteIds = []) {
   );
   if (idSet.size === 0) return;
 
-  const filePath = config.consolidatedMemoryMarkdownFile;
+  const filePath = getConsolidatedMemoryFilePath(workspaceId);
   let content = "";
   try {
     content = await fs.readFile(filePath, "utf8");
@@ -812,7 +1012,7 @@ function imagePathToAbsoluteUploadPath(imagePath) {
   return path.join(config.uploadDir, fileName);
 }
 
-async function cleanupDeletedNotesArtifacts(notes = []) {
+async function cleanupDeletedNotesArtifacts(notes = [], workspaceId = config.defaultWorkspaceId) {
   const noteList = Array.isArray(notes) ? notes : [];
   if (!noteList.length) return;
 
@@ -846,9 +1046,152 @@ async function cleanupDeletedNotesArtifacts(notes = []) {
     );
   }
 
-  await removeConsolidatedMemoryEntries(noteIds);
+  await removeConsolidatedMemoryEntries(noteIds, workspaceId);
 }
 
+/**
+ * Phase B: Background enrichment job for a note.
+ * Loads the note, runs AI enrichment, generates embedding,
+ * updates DB, updates consolidated memory, and emits SSE event.
+ */
+async function processEnrichment({
+  noteId,
+  workspaceId,
+  requestedProject,
+  normalizedSourceType,
+  normalizedSourceUrl,
+  hasFileUpload,
+  uploadEnrichment,
+  fileDataUrl,
+  fileName,
+  fileMime,
+}) {
+  const tStart = Date.now();
+  await noteRepo.updateStatus(noteId, "enriching", workspaceId);
+
+  let note = await noteRepo.getNoteById(noteId, workspaceId);
+  if (!note) throw new Error(`Note not found: ${noteId}`);
+
+  // If file upload and OpenAI available, do full extraction now (background)
+  if (hasFileUpload && fileDataUrl && hasOpenAI()) {
+    try {
+      const parsedUpload = await convertUploadToMarkdown({
+        fileDataUrl,
+        fileName: fileName || `upload.${(fileMime || "").split("/")[1] || "bin"}`,
+        fileMimeType: fileMime || "application/octet-stream",
+      });
+      if (parsedUpload.rawContent || parsedUpload.markdownContent) {
+        await noteRepo.updateEnrichment({
+          id: noteId,
+          summary: note.summary,
+          tags: note.tags,
+          project: note.project,
+          embedding: null,
+        metadata: {
+          ...(note.metadata || {}),
+          rawContent: parsedUpload.rawContent || null,
+          markdownContent: parsedUpload.markdownContent || null,
+        },
+        updatedAt: nowIso(),
+        workspaceId,
+      });
+        note = await noteRepo.getNoteById(noteId, workspaceId);
+      }
+      uploadEnrichment = {
+        summary: parsedUpload.summary || "",
+        tags: Array.isArray(parsedUpload.tags) ? parsedUpload.tags : [],
+        project: parsedUpload.project || "",
+      };
+    } catch {
+      // file conversion failed — continue with heuristic enrichment
+    }
+  }
+
+  // For links, do full preview fetch + title inference in background
+  let linkPreview = null;
+  if (normalizedSourceType === "link" && normalizedSourceUrl) {
+    linkPreview = await fetchLinkPreview(normalizedSourceUrl);
+    const linkTitle = await inferLinkTitleWithOpenAI({
+      sourceUrl: normalizedSourceUrl,
+      linkPreview,
+    });
+    if (linkTitle || linkPreview?.ogImage) {
+      await noteRepo.updateEnrichment({
+        id: noteId,
+        summary: note.summary,
+        tags: note.tags,
+        project: note.project,
+        embedding: null,
+        metadata: {
+          ...(note.metadata || {}),
+          ...(linkTitle ? { title: linkTitle, linkTitle } : {}),
+          ...(linkPreview?.ogImage ? { ogImage: linkPreview.ogImage } : {}),
+        },
+        updatedAt: nowIso(),
+        workspaceId,
+      });
+      note = await noteRepo.getNoteById(noteId, workspaceId);
+    }
+  }
+
+  const enrichment = await buildEnrichment(note, linkPreview, uploadEnrichment);
+  const finalProject =
+    requestedProject || (normalizedSourceType === "file" ? "General" : enrichment.project);
+  const embeddingText = noteTextForEmbedding(
+    {
+      ...note,
+      summary: enrichment.summary,
+      tags: enrichment.tags,
+      project: finalProject,
+    },
+    linkPreview
+  );
+
+  let embedding;
+  let embeddingSource = "openai";
+  try {
+    if (normalizedSourceType === "file" && embeddingText.length > 5000) {
+      embedding = pseudoEmbedding(embeddingText);
+      embeddingSource = "pseudo-large-upload";
+    } else {
+      embedding = await createEmbedding(embeddingText);
+    }
+  } catch {
+    embedding = pseudoEmbedding(embeddingText);
+    embeddingSource = "pseudo-fallback";
+  }
+
+  const enrichedNote = await noteRepo.updateEnrichment({
+    id: noteId,
+    summary: enrichment.summary,
+    tags: enrichment.tags,
+    project: finalProject,
+    embedding,
+    metadata: {
+      ...(note.metadata || {}),
+      enrichmentSource: enrichment.enrichmentSource,
+      embeddingSource,
+      processingMs: Date.now() - tStart,
+      enrichedAt: nowIso(),
+    },
+    updatedAt: nowIso(),
+    workspaceId,
+  });
+
+  await noteRepo.updateStatus(noteId, "ready", workspaceId);
+
+  if (hasFileUpload) {
+    await updateConsolidatedMemoryFile(enrichedNote, workspaceId);
+  }
+
+  return enrichedNote;
+}
+
+/**
+ * Phase A: Synchronous note creation.
+ * Saves the note instantly with heuristic enrichment, then enqueues
+ * background AI enrichment. Returns the note immediately (<200ms).
+ */
 export async function createMemory({
   content = "",
   sourceType = "text",
@@ -859,8 +1202,9 @@ export async function createMemory({
   fileMimeType = "",
   project = "",
   metadata = {},
+  actor = null,
 }) {
-  const tStart = Date.now();
+  const actorContext = resolveActor(actor);
   const requestedSourceType = normalizeSourceType(sourceType);
   const requestedProject = String(project || "").trim();
   const normalizedSourceUrl = String(sourceUrl || "").trim();
@@ -899,30 +1243,14 @@ export async function createMemory({
     imageData = await saveImageDataUrl(normalizedFileDataUrl);
   }
 
+  // For file uploads, attempt text extraction synchronously (fast path)
   let rawContent = null;
   let markdownContent = null;
   let uploadEnrichment = null;
   let uploadParsingError = "";
   if (normalizedFileDataUrl) {
-    if (hasOpenAI()) {
-      try {
-        const parsedUpload = await convertUploadToMarkdown({
-          fileDataUrl: normalizedFileDataUrl,
-          fileName: normalizedFileName || `upload.${uploadMime?.split("/")[1] || "bin"}`,
-          fileMimeType: uploadMime || "application/octet-stream",
-        });
-        rawContent = parsedUpload.rawContent || null;
-        markdownContent = parsedUpload.markdownContent || null;
-        uploadEnrichment = {
-          summary: parsedUpload.summary || "",
-          tags: Array.isArray(parsedUpload.tags) ? parsedUpload.tags : [],
-          project: parsedUpload.project || "",
-        };
-      } catch (error) {
-        uploadParsingError = error instanceof Error ? error.message : String(error);
-      }
-    }
-
+    // Try OpenAI-based upload conversion in background instead
+    // For sync path, only do lightweight text extraction
     if (!rawContent && !markdownContent) {
       const textExtract = maybeDecodeTextUpload(normalizedFileDataUrl, uploadMime, normalizedFileName);
       if (textExtract) {
@@ -946,21 +1274,21 @@ export async function createMemory({
     throw new Error("Missing content");
   }
 
-  const linkPreview = normalizedSourceType === "link" && normalizedSourceUrl ? await fetchLinkPreview(normalizedSourceUrl) : null;
-  const linkTitle =
-    normalizedSourceType === "link" && normalizedSourceUrl
-      ? await inferLinkTitleWithOpenAI({ sourceUrl: normalizedSourceUrl, linkPreview })
-      : "";
-
+  // For links, infer a quick title from URL (no network calls in sync path)
+  let linkTitle = "";
   if (normalizedSourceType === "link" && normalizedSourceUrl) {
+    linkTitle = inferEntityTitleFromUrl(normalizedSourceUrl) || "Saved link";
     normalizedContent = normalizedSourceUrl;
   }
 
   const id = crypto.randomUUID();
   const createdAt = nowIso();
   const seedTags = heuristicTags(`${normalizedContent} ${normalizedSourceUrl}`);
-  const note = noteRepo.createNote({
+  const note = await noteRepo.createNote({
     id,
+    workspaceId: actorContext.workspaceId,
+    ownerUserId: actorContext.userId,
+    createdByUserId: actorContext.userId,
     content: normalizedContent,
     sourceType: normalizedSourceType,
     sourceUrl: normalizedSourceUrl || null,
@@ -986,65 +1314,88 @@ export async function createMemory({
       uploadParsingError: uploadParsingError || null,
       linkTitle: linkTitle || null,
     },
+    status: "pending",
   });
 
-  const enrichment = await buildEnrichment(note, linkPreview, uploadEnrichment);
-  const finalProject =
-    requestedProject || (normalizedSourceType === "file" ? "General" : enrichment.project);
-  const embeddingText = noteTextForEmbedding(
-    {
-      ...note,
-      summary: enrichment.summary,
-      tags: enrichment.tags,
-      project: finalProject,
-    },
-    linkPreview
-  );
-
-  let embedding;
-  let embeddingSource = "openai";
-  try {
-    if (normalizedSourceType === "file" && embeddingText.length > 5000) {
-      embedding = pseudoEmbedding(embeddingText);
-      embeddingSource = "pseudo-large-upload";
-    } else {
-      embedding = await createEmbedding(embeddingText);
-    }
-  } catch {
-    embedding = pseudoEmbedding(embeddingText);
-    embeddingSource = "pseudo-fallback";
-  }
-
-  const enrichedNote = noteRepo.updateEnrichment({
-    id,
-    summary: enrichment.summary,
-    tags: enrichment.tags,
-    project: finalProject,
-    embedding,
-    metadata: {
-      ...(note.metadata || {}),
-      enrichmentSource: enrichment.enrichmentSource,
-      embeddingSource,
-      processingMs: Date.now() - tStart,
-      enrichedAt: nowIso(),
-    },
-    updatedAt: nowIso(),
+  // Enqueue background enrichment
+  enrichmentQueue.enqueue({
+    id: note.id,
+    workspaceId: actorContext.workspaceId,
+    fn: () =>
+      processEnrichment({
+        noteId: note.id,
+        workspaceId: actorContext.workspaceId,
+        requestedProject,
+        normalizedSourceType,
+        normalizedSourceUrl,
+        hasFileUpload: Boolean(normalizedFileDataUrl),
+        uploadEnrichment,
+        fileDataUrl: normalizedFileDataUrl,
+        fileName: normalizedFileName,
+        fileMime: uploadMime,
+      }),
   });
 
-  if (normalizedFileDataUrl) {
-    await updateConsolidatedMemoryFile(enrichedNote);
-  }
-
-  return enrichedNote;
+  return note;
 }
 
-export async function deleteMemory({ id } = {}) {
+export async function updateMemory({ id, content, summary, tags, project, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
+  assertCanMutateNote(existing, actorContext);
+
+  const newContent = content !== undefined ? String(content) : existing.content;
+  const contentChanged = content !== undefined && newContent !== existing.content;
+
+  const updatedNote = await noteRepo.updateNote({
+    id: normalizedId,
+    content: newContent,
+    summary: summary !== undefined ? String(summary) : existing.summary,
+    tags: tags !== undefined ? tags : existing.tags,
+    project: project !== undefined ? String(project) : existing.project,
+    workspaceId: actorContext.workspaceId,
+  });
+
+  // Re-enrich if content changed
+  if (contentChanged) {
+    await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
+    enrichmentQueue.enqueue({
+      id: normalizedId,
+      workspaceId: actorContext.workspaceId,
+      fn: () =>
+        processEnrichment({
+          noteId: normalizedId,
+          workspaceId: actorContext.workspaceId,
+          requestedProject: updatedNote.project || "",
+          normalizedSourceType: updatedNote.sourceType || "text",
+          normalizedSourceUrl: updatedNote.sourceUrl || "",
+          hasFileUpload: false,
+          uploadEnrichment: null,
+          fileDataUrl: null,
+          fileName: updatedNote.fileName || "",
+          fileMime: updatedNote.fileMime || "",
+        }),
+    });
+  } else {
+    // Sync consolidated file even without re-enrichment
+    await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
+  }
+
+  return updatedNote;
+}
+
+export async function deleteMemory({ id, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
   const normalizedId = String(id || "").trim();
   if (!normalizedId) {
     throw new Error("Missing id");
   }
 
-  const note = noteRepo.getNoteById(normalizedId);
+  const note = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!note) {
     return {
       id: normalizedId,
@@ -1052,21 +1403,24 @@ export async function deleteMemory({ id } = {}) {
     };
   }
 
-  noteRepo.deleteNote(normalizedId);
-  await cleanupDeletedNotesArtifacts([note]);
+  assertCanMutateNote(note, actorContext);
+  await noteRepo.deleteNote(normalizedId, actorContext.workspaceId);
+  await cleanupDeletedNotesArtifacts([note], actorContext.workspaceId);
   return {
     id: normalizedId,
     deleted: true,
   };
 }
 
-export async function deleteProjectMemories({ project } = {}) {
+export async function deleteProjectMemories({ project, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  assertWorkspaceManager(actorContext);
   const normalizedProject = String(project || "").trim();
   if (!normalizedProject) {
     throw new Error("Missing project");
   }
 
-  const notes = noteRepo.listByExactProject(normalizedProject);
+  const notes = await noteRepo.listByExactProject(normalizedProject, actorContext.workspaceId);
   if (!notes.length) {
     return {
       project: normalizedProject,
@@ -1075,8 +1429,8 @@ export async function deleteProjectMemories({ project } = {}) {
     };
   }
 
-  const deletedCount = noteRepo.deleteByProject(normalizedProject);
-  await cleanupDeletedNotesArtifacts(notes);
+  const deletedCount = await noteRepo.deleteByProject(normalizedProject, actorContext.workspaceId);
+  await cleanupDeletedNotesArtifacts(notes, actorContext.workspaceId);
   return {
     project: normalizedProject,
     deletedCount,
@@ -1084,20 +1438,63 @@ export async function deleteProjectMemories({ project } = {}) {
   };
 }
 
-export async function listRecentMemories(limit = 20) {
-  return noteRepo.listRecent(clampInt(limit, 1, 200, 20));
+export async function batchDeleteMemories({ ids, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedIds = Array.isArray(ids) ? ids.map((id) => String(id || "").trim()).filter(Boolean) : [];
+  if (!normalizedIds.length) return { deleted: 0 };
+
+  // Fetch notes before deleting so we can clean up artifacts
+  const notes = (await Promise.all(
+    normalizedIds.map((id) => noteRepo.getNoteById(id, actorContext.workspaceId))
+  )).filter(Boolean);
+
+  for (const note of notes) {
+    assertCanMutateNote(note, actorContext);
+  }
+
+  const deleted = await noteRepo.batchDelete(normalizedIds, actorContext.workspaceId);
+  await cleanupDeletedNotesArtifacts(notes, actorContext.workspaceId);
+  return { deleted };
 }
 
-export async function getMemoryRawContent({ id, includeMarkdown = true, maxChars = 12000 } = {}) {
+export async function batchMoveMemories({ ids, project = "", actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedIds = Array.isArray(ids) ? ids.map((id) => String(id || "").trim()).filter(Boolean) : [];
+  if (!normalizedIds.length) return { moved: 0 };
+
+  const notes = (await Promise.all(
+    normalizedIds.map((id) => noteRepo.getNoteById(id, actorContext.workspaceId))
+  )).filter(Boolean);
+
+  for (const note of notes) {
+    assertCanMutateNote(note, actorContext);
+  }
+
+  const moved = await noteRepo.batchMove(normalizedIds, String(project || ""), actorContext.workspaceId);
+  return { moved };
+}
+
+export async function listRecentMemories(limit = 20, offset = 0, actor = null) {
+  const actorContext = resolveActor(actor);
+  return await listVisibleNotesForActor({
+    actorContext,
+    limit: clampInt(limit, 1, 200, 20),
+    offset: clampInt(offset, 0, 100000, 0),
+  });
+}
+
+export async function getMemoryRawContent({ id, includeMarkdown = true, maxChars = 12000, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
   const normalizedId = String(id || "").trim();
   if (!normalizedId) {
     throw new Error("Missing id");
   }
 
-  const note = noteRepo.getNoteById(normalizedId);
+  const note = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!note) {
     throw new Error(`Memory not found: ${normalizedId}`);
   }
+  assertCanReadNote(note, actorContext);
 
   const boundedMax = clampInt(maxChars, 200, 200000, 12000);
   return {
@@ -1112,7 +1509,8 @@ export async function getMemoryRawContent({ id, includeMarkdown = true, maxChars
   };
 }
 
-export async function searchRawMemories({ query = "", project = "", limit = 8, includeMarkdown = true } = {}) {
+export async function searchRawMemories({ query = "", project = "", limit = 8, includeMarkdown = true, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
   const normalizedQuery = String(query || "").trim();
   if (!normalizedQuery) {
     throw new Error("Missing query");
@@ -1120,7 +1518,7 @@ export async function searchRawMemories({ query = "", project = "", limit = 8, i
 
   const boundedLimit = clampInt(limit, 1, 100, 8);
   const normalizedProject = String(project || "").trim();
-  const candidates = noteRepo.listByProject(normalizedProject || null, 500);
+  const candidates = await listSearchCandidatesForActor(actorContext, normalizedProject, 500);
   const tokenizedQuery = tokenize(normalizedQuery);
   const bm25Index = buildBm25Index(candidates, (note) => `${note.rawContent || ""}\n${note.markdownContent || ""}\n${note.content || ""}`);
   const scored = candidates
@@ -1169,10 +1567,12 @@ export async function searchRawMemories({ query = "", project = "", limit = 8, i
   return ranked;
 }
 
-export async function readExtractedMarkdownMemory({ filePath = "", maxChars = 30000 } = {}) {
+export async function readExtractedMarkdownMemory({ filePath = "", maxChars = 30000, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  assertWorkspaceManager(actorContext);
   const boundedMax = clampInt(maxChars, 200, 500000, 30000);
   const requestedPath = String(filePath || "").trim();
-  const resolvedFilePath = requestedPath || config.consolidatedMemoryMarkdownFile;
+  const resolvedFilePath = requestedPath || getConsolidatedMemoryFilePath(actorContext.workspaceId);
   let content;
   try {
     content = await fs.readFile(resolvedFilePath, "utf8");
@@ -1196,11 +1596,16 @@ export async function readExtractedMarkdownMemory({ filePath = "", maxChars = 30
   };
 }
 
-export function listProjects() {
-  return noteRepo.listProjects();
+export async function listProjects(actor = null) {
+  const actorContext = resolveActor(actor);
+  if (isWorkspaceManager(actorContext)) {
+    return noteRepo.listProjects(actorContext.workspaceId);
+  }
+  return noteRepo.listProjectsForUser(actorContext.workspaceId, actorContext.userId);
 }
 
-export async function searchNotesBm25({ query = "", project = "", limit = 8, includeMarkdown = false } = {}) {
+export async function searchNotesBm25({ query = "", project = "", limit = 8, includeMarkdown = false, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
   const normalizedQuery = String(query || "").trim();
   if (!normalizedQuery) {
     throw new Error("Missing query");
@@ -1208,7 +1613,7 @@ export async function searchNotesBm25({ query = "", project = "", limit = 8, inc
 
   const boundedLimit = clampInt(limit, 1, 100, 8);
   const normalizedProject = String(project || "").trim();
-  const notes = noteRepo.listByProject(normalizedProject || null, 500);
+  const notes = await listSearchCandidatesForActor(actorContext, normalizedProject, 500);
   if (notes.length === 0) return [];
 
   const queryTokens = tokenize(normalizedQuery);
@@ -1249,17 +1654,23 @@ export async function searchNotesBm25({ query = "", project = "", limit = 8, inc
   }));
 }
 
-export async function searchMemories({ query = "", project = "", limit = 15 } = {}) {
+export async function searchMemories({ query = "", project = "", limit = 15, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
   const boundedLimit = clampInt(limit, 1, 100, 15);
   const normalizedQuery = String(query || "").trim();
   const normalizedProject = String(project || "").trim();
 
   if (!normalizedQuery) {
-    const notes = noteRepo.listByProject(normalizedProject || null, boundedLimit);
+    const notes = await listVisibleNotesForActor({
+      actorContext,
+      project: normalizedProject,
+      limit: boundedLimit,
+      offset: 0,
+    });
     return notes.map((note, index) => materializeCitation(note, 1 - index * 0.001, index + 1));
   }
 
-  const notes = noteRepo.listByProject(normalizedProject || null, 500);
+  const notes = await listSearchCandidatesForActor(actorContext, normalizedProject, 500);
   if (notes.length === 0) return [];
 
   const queryTokens = tokenize(normalizedQuery);
@@ -1268,11 +1679,14 @@ export async function searchMemories({ query = "", project = "", limit = 15 } = 
     (note) =>
       `${note.content || ""}\n${note.rawContent || ""}\n${note.markdownContent || ""}\n${note.summary || ""}\n${(note.tags || []).join(" ")}\n${note.project || ""}\n${note.fileName || ""}`
   );
-  let queryEmbedding;
-  try {
-    queryEmbedding = await createEmbedding(normalizedQuery);
-  } catch {
-    queryEmbedding = pseudoEmbedding(normalizedQuery);
+  let queryEmbedding = embeddingCache.get(normalizedQuery);
+  if (!queryEmbedding) {
+    try {
+      queryEmbedding = await createEmbedding(normalizedQuery);
+    } catch {
+      queryEmbedding = pseudoEmbedding(normalizedQuery);
+    }
+    embeddingCache.set(normalizedQuery, queryEmbedding);
   }
 
   const ranked = notes.map((note, docIndex) => {
@@ -1302,7 +1716,52 @@ export async function searchMemories({ query = "", project = "", limit = 15 } = 
   return combined.slice(0, boundedLimit).map((item, index) => materializeCitation(item.note, item.score, index + 1));
 }
 
-function buildCitationBlock(citations) {
+function serializeNotesAsMarkdown(notes = []) {
+  return (Array.isArray(notes) ? notes : [])
+    .map((note) => {
+      const title = note.summary || note.content?.slice(0, 80) || "(untitled)";
+      const tags = (note.tags || []).map((tag) => `\`${tag}\``).join(" ");
+      const body = note.markdownContent || note.rawContent || note.content || "";
+      return `## ${title}\n\n${tags ? `Tags: ${tags}\n\n` : ""}${body}\n\n---\n`;
+    })
+    .join("\n");
+}
+
+export async function listTags(actor = null) {
+  const actorContext = resolveActor(actor);
+  if (isWorkspaceManager(actorContext)) {
+    return noteRepo.listTags(actorContext.workspaceId);
+  }
+  return noteRepo.listTagsForUser(actorContext.workspaceId, actorContext.userId);
+}
+
+export async function getMemoryStats(actor = null) {
+  const actorContext = resolveActor(actor);
+  if (isWorkspaceManager(actorContext)) {
+    return noteRepo.getStats(actorContext.workspaceId);
+  }
+  return noteRepo.getStatsForUser(actorContext.workspaceId, actorContext.userId);
+}
+
+export async function exportMemories({ project = null, format = "json", actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedProject = String(project || "").trim();
+
+  const notes = await listVisibleNotesForActor({
+    actorContext,
+    project: normalizedProject,
+    limit: 10000,
+    offset: 0,
+  });
+
+  if (String(format || "").toLowerCase() === "markdown") {
+    return serializeNotesAsMarkdown(notes);
+  }
+
+  return JSON.stringify(notes, null, 2);
+}
+
+export function buildCitationBlock(citations) {
   return citations
     .map((entry, idx) => {
       const label = `N${idx + 1}`;
@@ -1320,13 +1779,13 @@ function buildCitationBlock(citations) {
     .join("\n\n");
 }
 
-export async function askMemories({ question, project = "", limit = 6 }) {
+export async function askMemories({ question, project = "", limit = 6, actor = null }) {
   const normalizedQuestion = String(question || "").trim();
   if (!normalizedQuestion) {
     throw new Error("Missing question");
   }
 
-  const citations = await searchMemories({ query: normalizedQuestion, project, limit });
+  const citations = await searchMemories({ query: normalizedQuestion, project, limit, actor });
   if (citations.length === 0) {
     return {
       answer: "No relevant memory found yet. Save a few notes first.",
@@ -1384,9 +1843,9 @@ export async function askMemories({ question, project = "", limit = 6 }) {
   }
 }
 
-export async function buildProjectContext({ task, project = "", limit = 8 }) {
+export async function buildProjectContext({ task, project = "", limit = 8, actor = null }) {
   const normalizedTask = String(task || "").trim();
-  const citations = await searchMemories({ query: normalizedTask || project || "recent", project, limit });
+  const citations = await searchMemories({ query: normalizedTask || project || "recent", project, limit, actor });
   if (citations.length === 0) {
     return {
       context: "No project context found yet.",

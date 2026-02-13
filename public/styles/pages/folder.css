@@ -1,6 +1,12 @@
 .page-folder {
   gap: 18px;
-  padding-bottom: 108px;
+  padding-bottom: 80px;
+}
+
+.page-folder.page-drag-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  border-radius: 12px;
 }
 
 .folder-layout {
@@ -14,6 +20,7 @@
   min-width: 0;
   display: grid;
   gap: 12px;
+  animation: fadeInUp 180ms ease both;
 }
 
 .page-folder .composer-shell {
@@ -22,7 +29,7 @@
   bottom: 12px;
   transform: translateX(-50%);
   width: min(980px, calc(100vw - 56px));
-  z-index: 24;
+  z-index: var(--z-sticky);
 }
 
 @media (max-width: 980px) {

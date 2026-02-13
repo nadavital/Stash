@@ -4,159 +4,171 @@
 
 .home-folders-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(186px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
+  gap: 20px 14px;
+  padding-top: 16px;
+  align-content: start;
 }
 
 .folder-tile,
 .home-folders-list .folder-pill {
   position: relative;
-  min-height: 148px;
-  border-radius: 16px;
-  border: 1px solid #eaecf0;
-  background: #ffffff;
+  min-height: 88px;
+  border-radius: 2px 10px 10px 10px;
+  border: 0;
+  background: var(--folder-accent-soft, var(--surface-strong));
   text-decoration: none;
-  padding: 14px;
+  padding: 12px;
   color: var(--ink);
-  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
-  overflow: hidden;
   cursor: pointer;
-  display: grid;
-  grid-template-rows: auto auto 1fr;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
   gap: 8px;
+  transition: background 150ms ease;
+  overflow: visible;
 }
 
+/* Folder tab */
+.home-folders-list .folder-pill::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% - 1px);
+  left: 0;
+  width: 40px;
+  height: 12px;
+  background: var(--folder-accent-soft, var(--surface-subtle));
+  border: 0;
+  border-radius: 6px 6px 0 0;
+}
+
+/* Color variants — ChatGPT palette */
+.home-folders-list .folder-pill[data-color="green"] {
+  --folder-accent: var(--folder-green);
+  --folder-accent-soft: rgba(4, 184, 76, 0.12);
+}
+
+.home-folders-list .folder-pill[data-color="blue"] {
+  --folder-accent: var(--folder-blue);
+  --folder-accent-soft: rgba(2, 133, 255, 0.12);
+}
+
+.home-folders-list .folder-pill[data-color="purple"] {
+  --folder-accent: var(--folder-purple);
+  --folder-accent-soft: rgba(146, 79, 247, 0.12);
+}
+
+.home-folders-list .folder-pill[data-color="orange"] {
+  --folder-accent: var(--folder-orange);
+  --folder-accent-soft: rgba(251, 106, 34, 0.12);
+}
+
+.home-folders-list .folder-pill[data-color="pink"] {
+  --folder-accent: var(--folder-pink);
+  --folder-accent-soft: rgba(255, 102, 173, 0.12);
+}
+
+.home-folders-list .folder-pill[data-color="red"] {
+  --folder-accent: var(--folder-red);
+  --folder-accent-soft: rgba(250, 66, 62, 0.12);
+}
+
+.home-folders-list .folder-pill[data-color="yellow"] {
+  --folder-accent: var(--folder-yellow);
+  --folder-accent-soft: rgba(255, 195, 0, 0.12);
+}
+
+/* Backward-compat: map old color names */
 .home-folders-list .folder-pill[data-color="sky"] {
-  --folder-accent: #8fb7ff;
-  --folder-accent-soft: rgba(143, 183, 255, 0.08);
+  --folder-accent: var(--folder-blue);
+  --folder-accent-soft: rgba(2, 133, 255, 0.12);
 }
 
 .home-folders-list .folder-pill[data-color="mint"] {
-  --folder-accent: #5ec99a;
-  --folder-accent-soft: rgba(94, 201, 154, 0.08);
+  --folder-accent: var(--folder-green);
+  --folder-accent-soft: rgba(4, 184, 76, 0.12);
 }
 
 .home-folders-list .folder-pill[data-color="sand"] {
-  --folder-accent: #e0a840;
-  --folder-accent-soft: rgba(224, 168, 64, 0.08);
+  --folder-accent: var(--folder-orange);
+  --folder-accent-soft: rgba(251, 106, 34, 0.12);
 }
 
 .home-folders-list .folder-pill[data-color="rose"] {
-  --folder-accent: #e8729a;
-  --folder-accent-soft: rgba(232, 114, 154, 0.08);
+  --folder-accent: var(--folder-pink);
+  --folder-accent-soft: rgba(255, 102, 173, 0.12);
 }
 
 .home-folders-list .folder-pill[data-color="violet"] {
-  --folder-accent: #9b7cef;
-  --folder-accent-soft: rgba(155, 124, 239, 0.08);
+  --folder-accent: var(--folder-purple);
+  --folder-accent-soft: rgba(146, 79, 247, 0.12);
 }
 
 .home-folders-list .folder-pill[data-color="slate"] {
-  --folder-accent: #7e92ad;
-  --folder-accent-soft: rgba(126, 146, 173, 0.08);
+  --folder-accent: var(--folder-blue);
+  --folder-accent-soft: rgba(2, 133, 255, 0.12);
 }
 
 .home-folders-list .folder-pill:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.1);
-  border-color: #d0d5dd;
-  background: var(--folder-accent-soft, rgba(143, 183, 255, 0.05));
+  background: var(--folder-accent-soft, var(--hover-bg));
+  filter: brightness(0.96);
+}
+
+.home-folders-list .folder-pill:hover .folder-pill-delete {
+  opacity: 1;
 }
 
 .home-folders-list .folder-pill:focus-visible {
-  outline: 2px solid var(--folder-accent, var(--accent));
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.folder-pill-top {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.home-folders-list .folder-pill-kind-icon {
-  width: 26px;
-  height: 22px;
-  border-radius: 6px;
-  background: #f3f5f9;
-  color: #667085;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.home-folders-list .folder-pill-kind-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.home-folders-list .folder-symbol-badge {
-  min-width: 32px;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--folder-accent-soft, rgba(143, 183, 255, 0.12));
-  color: var(--folder-accent, #667085);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 6px;
-  font-size: 0.64rem;
-  font-weight: 600;
-  font-family: var(--font-mono);
-  letter-spacing: 0.04em;
-}
-
 .home-folders-list .folder-pill-name {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--ink);
   display: -webkit-box;
-  font-size: 0.94rem;
-  font-weight: 650;
-  line-height: 1.3;
-  min-height: calc(1.3em * 2);
   overflow: hidden;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  text-wrap: pretty;
-  color: var(--ink);
+}
+
+.folder-pill-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .home-folders-list .folder-pill-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 22px;
-  border-radius: 6px;
-  background: #f3f5f9;
-  color: #667085;
-  font-size: 0.72rem;
-  font-family: var(--font-mono);
-  font-weight: 500;
-  padding: 0 6px;
+  font-size: var(--font-size-xs);
+  color: var(--muted);
 }
 
 .home-folders-list .folder-pill-delete {
-  width: 24px;
+  width: 22px;
   height: 22px;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #98a2b3;
+  color: var(--muted);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   padding: 0;
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 
 .home-folders-list .folder-pill-delete svg {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
 }
 
 .home-folders-list .folder-pill-delete:hover {
-  background: #fee4e2;
-  color: #b42318;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .home-folders-list .folder-pill-delete:focus-visible {
@@ -164,19 +176,12 @@
   outline-offset: 1px;
 }
 
-.folder-pill-desc {
-  margin: 0;
-  color: #667085;
-  font-size: 0.8rem;
-  line-height: 1.4;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
+/* Skeleton */
 .folder-tile-skeleton {
-  border: 1px solid #edf0f5;
+  border: 0;
+  border-radius: 2px 10px 10px 10px;
+  background: var(--surface-strong);
+  min-height: 88px;
   animation: folderPulse 1.2s ease-in-out infinite;
 }
 
@@ -190,8 +195,140 @@
   }
 }
 
+/* Empty state */
+.home-folders-empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.home-folders-empty-icon {
+  width: 48px;
+  height: 48px;
+  fill: var(--border-strong);
+  margin-bottom: 12px;
+}
+
+.home-folders-empty-heading {
+  font-size: var(--font-size-md);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-secondary);
+  margin-bottom: 4px;
+}
+
+.home-folders-empty-sub {
+  font-size: var(--font-size-sm);
+  color: var(--muted);
+}
+
+/* List view mode */
+.home-folders-list.view-list {
+  grid-template-columns: 1fr;
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.home-folders-list.view-list .folder-pill {
+  display: none;
+}
+
+.folder-pill-row {
+  display: grid;
+  grid-template-columns: 12px 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  transition: background 120ms ease;
+}
+
+.folder-pill-row:hover {
+  background: var(--hover-bg);
+}
+
+.folder-pill-row:hover .folder-row-delete {
+  opacity: 1;
+}
+
+.folder-pill-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.folder-row-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+}
+
+.folder-row-dot[data-color="green"] { background: var(--folder-green); }
+.folder-row-dot[data-color="blue"] { background: var(--folder-blue); }
+.folder-row-dot[data-color="purple"] { background: var(--folder-purple); }
+.folder-row-dot[data-color="orange"] { background: var(--folder-orange); }
+.folder-row-dot[data-color="pink"] { background: var(--folder-pink); }
+.folder-row-dot[data-color="red"] { background: var(--folder-red); }
+.folder-row-dot[data-color="yellow"] { background: var(--folder-yellow); }
+.folder-row-dot[data-color="sky"] { background: var(--folder-blue); }
+.folder-row-dot[data-color="mint"] { background: var(--folder-green); }
+.folder-row-dot[data-color="sand"] { background: var(--folder-orange); }
+.folder-row-dot[data-color="rose"] { background: var(--folder-pink); }
+.folder-row-dot[data-color="violet"] { background: var(--folder-purple); }
+.folder-row-dot[data-color="slate"] { background: var(--folder-blue); }
+
+.folder-row-name {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-row-count {
+  font-size: var(--font-size-xs);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.folder-row-delete {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.folder-row-delete svg {
+  width: 12px;
+  height: 12px;
+}
+
+.folder-row-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 @media (max-width: 680px) {
   .home-folders-list {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
 }

@@ -1,10 +1,49 @@
-import { renderComposer } from "../components/composer/composer.js";
+import { renderComposer, initComposerAutoResize } from "../components/composer/composer.js";
 import { renderFolderHeroToolbar } from "../components/folder-hero-toolbar/folder-hero-toolbar.js";
 import { renderFolderItemGrid } from "../components/folder-item-grid/folder-item-grid.js";
 import { renderHomeRecentList } from "../components/home-recent-list/home-recent-list.js";
 import { renderTopbar } from "../components/topbar/topbar.js";
+import { showToast } from "../components/toast/toast.js";
 import {
-  buildNoteDescription,
+  renderItemModalHTML,
+  queryItemModalEls,
+  openItemModal,
+  closeItemModal,
+  initItemModalHandlers,
+} from "../components/item-modal/item-modal.js";
+import {
+  renderFolderModalHTML,
+  queryFolderModalEls,
+  openFolderModal,
+  closeFolderModal,
+  getSelectedFolderColor,
+  initFolderModalHandlers,
+} from "../components/folder-modal/folder-modal.js";
+import {
+  renderInlineSearchHTML,
+  queryInlineSearchEls,
+  renderSearchResults,
+  initInlineSearchHandlers,
+} from "../components/inline-search/inline-search.js";
+import {
+  renderSortFilterHTML,
+  querySortFilterEls,
+  initSortFilter,
+  toggleSortFilterDropdown,
+} from "../components/sort-filter/sort-filter.js";
+import {
+  renderChatPanelHTML,
+  queryChatPanelEls,
+  initChatPanel,
+} from "../components/chat-panel/chat-panel.js";
+import {
+  normalizeFolderColor,
+  fallbackColorForFolder,
+  normalizeFolderDrafts,
+  resolveFolderMeta,
+} from "../services/folder-utils.js";
+import { initKeyboardShortcuts } from "../services/keyboard.js";
+import {
   buildContentPreview,
   buildLocalFallbackNote,
   buildNoteTitle,
@@ -13,161 +52,44 @@ import {
   inferCaptureType,
   normalizeCitation,
 } from "../services/mappers.js";
+import {
+  iconTypeFor,
+  isProcessedNote,
+  fileToDataUrl,
+  deleteIconMarkup,
+  noteTypeIconMarkup,
+  relativeTime,
+} from "../services/note-utils.js";
 
-const FOLDER_COLOR_TOKENS = ["sky", "mint", "sand", "rose", "violet", "slate"];
-const FOLDER_SYMBOL_OPTIONS = ["DOC", "PLAN", "CODE", "LINK", "MEDIA", "NOTE"];
-
-function normalizeFolderColor(value, fallback = "sky") {
-  const normalized = String(value || "").toLowerCase().trim();
-  return FOLDER_COLOR_TOKENS.includes(normalized) ? normalized : fallback;
-}
-
-function normalizeFolderSymbol(value, fallback = "DOC") {
-  const normalized = String(value || "")
-    .toUpperCase()
-    .trim();
-  return FOLDER_SYMBOL_OPTIONS.includes(normalized) ? normalized : fallback;
-}
-
-function fallbackColorForFolder(name = "") {
-  const total = String(name)
-    .split("")
-    .reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return FOLDER_COLOR_TOKENS[total % FOLDER_COLOR_TOKENS.length] || "sky";
-}
-
-function normalizeFolderDrafts(rawDrafts = []) {
-  const map = new Map();
-
-  (Array.isArray(rawDrafts) ? rawDrafts : []).forEach((entry) => {
-    const draft =
-      typeof entry === "string"
-        ? { name: entry, description: "", color: fallbackColorForFolder(entry), symbol: "DOC" }
-        : {
-            name: entry?.name || "",
-            description: entry?.description || "",
-            color: normalizeFolderColor(entry?.color, fallbackColorForFolder(entry?.name || "")),
-            symbol: normalizeFolderSymbol(entry?.symbol, "DOC"),
-          };
-
-    const name = String(draft.name || "").trim();
-    if (!name) return;
-
-    map.set(name.toLowerCase(), {
-      name,
-      description: String(draft.description || "").trim(),
-      color: normalizeFolderColor(draft.color, fallbackColorForFolder(name)),
-      symbol: normalizeFolderSymbol(draft.symbol, "DOC"),
-    });
-  });
-
-  return [...map.values()];
-}
-
-function resolveFolderMeta(folderName, draftFolders) {
-  const normalizedName = String(folderName || "").trim() || "General";
-  const drafts = normalizeFolderDrafts(draftFolders);
-  const found = drafts.find((entry) => entry.name.toLowerCase() === normalizedName.toLowerCase());
-
-  if (found) return found;
-
-  return {
-    name: normalizedName,
-    description: "",
-    color: fallbackColorForFolder(normalizedName),
-    symbol: "DOC",
-  };
-}
-
-function iconTypeFor(note) {
-  if (note.sourceType === "image") return "image";
-  if (note.sourceType === "link") return "link";
-  if ((note.sourceType || "").toLowerCase() === "file") return "file";
-  return "text";
-}
-
-function noteTypeIconMarkup(type) {
-  if (type === "image") {
-    return `
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path fill="currentColor" d="M4.5 3A2.5 2.5 0 0 0 2 5.5v9A2.5 2.5 0 0 0 4.5 17h11a2.5 2.5 0 0 0 2.5-2.5v-9A2.5 2.5 0 0 0 15.5 3h-11Zm8.7 3.8a1.3 1.3 0 1 1 0 2.6 1.3 1.3 0 0 1 0-2.6Zm-8.7 8V13l2.8-2.8a1 1 0 0 1 1.4 0L11 12.5l1.4-1.4a1 1 0 0 1 1.4 0l2.2 2.2v1.5h-11Z"/>
-      </svg>
-    `;
-  }
-  if (type === "link") {
-    return `
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path fill="currentColor" d="M7.6 6.2a3 3 0 0 1 4.2 0 .8.8 0 1 1-1.1 1.1 1.4 1.4 0 0 0-2 2l.6.6a1.4 1.4 0 0 0 2 0 .8.8 0 0 1 1.1 1.1 3 3 0 0 1-4.2 0l-.6-.6a3 3 0 0 1 0-4.2Zm4.8 3.6a.8.8 0 0 1 1.1-1.1l.6.6a3 3 0 1 1-4.2 4.2.8.8 0 1 1 1.1-1.1 1.4 1.4 0 1 0 2-2l-.6-.6Z"/>
-      </svg>
-    `;
-  }
+function renderFolderPageShell(folderMeta, authSession = null) {
   return `
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <path fill="currentColor" d="M5 2.5A2.5 2.5 0 0 0 2.5 5v10A2.5 2.5 0 0 0 5 17.5h10a2.5 2.5 0 0 0 2.5-2.5V8.8a2.5 2.5 0 0 0-.7-1.8l-3.8-3.8a2.5 2.5 0 0 0-1.8-.7H5Zm5.4 1.6L15.9 9h-4a1.5 1.5 0 0 1-1.5-1.5v-3.4Z"/>
-    </svg>
-  `;
-}
+    <section class="page page-folder" style="position:relative;">
+      ${renderTopbar({
+        showSortFilter: true,
+        showViewToggle: true,
+        showSelectToggle: true,
+        showChatToggle: true,
+        auth: authSession,
+        showSignOut: true,
+      })}
 
-function deleteIconMarkup() {
-  return `
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <path fill="currentColor" d="M8.5 3a1 1 0 0 0-1 1v.5H5.2a.8.8 0 1 0 0 1.6h.5v9.2A1.7 1.7 0 0 0 7.4 17h5.2a1.7 1.7 0 0 0 1.7-1.7V6.1h.5a.8.8 0 1 0 0-1.6h-2.3V4a1 1 0 0 0-1-1h-3Zm.6 3.1a.8.8 0 0 1 .8.8v6a.8.8 0 1 1-1.6 0v-6a.8.8 0 0 1 .8-.8Zm2.4 0a.8.8 0 0 1 .8.8v6a.8.8 0 1 1-1.6 0v-6a.8.8 0 0 1 .8-.8Z"/>
-    </svg>
-  `;
-}
-
-function compactInlineText(value) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function buildModalSummary(note) {
-  const summary = String(note.summary || "").trim();
-  if (summary && summary.toLowerCase() !== "(no summary)") {
-    return summary;
-  }
-  return buildNoteDescription(note);
-}
-
-function buildModalFullExtract(note) {
-  const extracted = String(note.markdownContent || note.rawContent || "").trim();
-  if (extracted) return extracted;
-
-  const content = String(note.content || "").trim();
-  if (content && !/^file:|^uploaded file:/i.test(content)) {
-    return content;
-  }
-  return "";
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function isProcessedNote(note) {
-  return Boolean(String(note.summary || "").trim()) && String(note.summary || "").trim() !== "(no summary)";
-}
-
-function renderFolderPageShell(folderMeta) {
-  return `
-    <section class="page page-folder">
-      ${renderTopbar()}
+      ${renderSortFilterHTML()}
 
       <section class="folder-layout">
         <div class="folder-explorer-pane">
+          ${renderInlineSearchHTML()}
           ${renderFolderHeroToolbar({
             folderName: folderMeta.name,
             folderDescription: folderMeta.description,
             folderColor: folderMeta.color,
             folderSymbol: folderMeta.symbol,
           })}
+          <div id="subfolders-section" class="subfolders-section hidden">
+            <div class="subfolders-head">
+              <p class="subfolders-title">Folders</p>
+            </div>
+            <div id="subfolders-grid" class="subfolders-grid"></div>
+          </div>
           ${renderFolderItemGrid()}
         </div>
 
@@ -177,28 +99,37 @@ function renderFolderPageShell(folderMeta) {
       ${renderComposer({ mode: "folder" })}
     </section>
 
-    <div id="item-modal" class="item-modal hidden" aria-hidden="true">
-      <div id="item-modal-backdrop" class="item-modal-backdrop"></div>
-      <article class="item-modal-panel" role="dialog" aria-modal="true" aria-labelledby="item-modal-title">
-        <button id="item-modal-close" class="item-modal-close" type="button" aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
-        </button>
-        <p id="item-modal-project" class="item-modal-project"></p>
-        <h3 id="item-modal-title" class="item-modal-title"></h3>
-        <div id="item-modal-content" class="item-modal-content"></div>
-        <button id="item-modal-toggle" class="item-modal-toggle hidden" type="button" aria-expanded="false">Show full extracted text</button>
-        <pre id="item-modal-full-content" class="item-modal-full-content hidden"></pre>
-        <img id="item-modal-image" class="item-modal-image hidden" alt="Item preview" />
-      </article>
+    <div id="batch-action-bar" class="batch-action-bar hidden">
+      <span id="batch-action-count" class="batch-action-count">0 selected</span>
+      <button id="batch-move-btn" class="batch-action-btn" type="button">Move to...</button>
+      <button id="batch-delete-btn" class="batch-action-btn batch-action-btn--danger" type="button">Delete All</button>
+      <button id="batch-cancel-btn" class="batch-action-btn batch-cancel-btn" type="button">Cancel</button>
     </div>
+
+    ${renderItemModalHTML()}
+
+    ${renderFolderModalHTML()}
+
+    ${renderChatPanelHTML()}
   `;
 }
 
 function queryElements(mountNode) {
+  const itemModalEls = queryItemModalEls(mountNode);
+  const folderModalEls = queryFolderModalEls(mountNode);
+  const inlineSearchEls = queryInlineSearchEls(mountNode);
+  const sortFilterEls = querySortFilterEls(mountNode);
+  const chatPanelEls = queryChatPanelEls(mountNode);
+
   return {
-    topbarSearchWrap: mountNode.querySelector("#topbar-search-wrap"),
-    topbarSearchToggle: mountNode.querySelector("#topbar-search-toggle"),
-    topbarSearchInput: mountNode.querySelector("#topbar-search-input"),
+    ...itemModalEls,
+    ...folderModalEls,
+    ...inlineSearchEls,
+    ...sortFilterEls,
+    ...chatPanelEls,
+    topbarSortBtn: mountNode.querySelector("#topbar-sort-btn"),
+    viewGridBtn: mountNode.querySelector("#view-grid-btn"),
+    viewListBtn: mountNode.querySelector("#view-list-btn"),
     captureForm: mountNode.querySelector("#capture-form"),
     contentInput: mountNode.querySelector("#content-input"),
     projectInput: mountNode.querySelector("#project-input"),
@@ -214,90 +145,30 @@ function queryElements(mountNode) {
     recentTasksList: mountNode.querySelector("#recent-tasks-list"),
     refreshBtn: mountNode.querySelector("#refresh-btn"),
     deleteFolderBtn: mountNode.querySelector("#delete-folder-btn"),
+    newFolderBtn: mountNode.querySelector("#new-folder-btn"),
+    subfoldersSection: mountNode.querySelector("#subfolders-section"),
+    subfoldersGrid: mountNode.querySelector("#subfolders-grid"),
     folderItemsGrid: mountNode.querySelector("#folder-items-grid"),
-    itemModal: mountNode.querySelector("#item-modal"),
-    itemModalBackdrop: mountNode.querySelector("#item-modal-backdrop"),
-    itemModalClose: mountNode.querySelector("#item-modal-close"),
-    itemModalProject: mountNode.querySelector("#item-modal-project"),
-    itemModalTitle: mountNode.querySelector("#item-modal-title"),
-    itemModalContent: mountNode.querySelector("#item-modal-content"),
-    itemModalToggle: mountNode.querySelector("#item-modal-toggle"),
-    itemModalFullContent: mountNode.querySelector("#item-modal-full-content"),
-    itemModalImage: mountNode.querySelector("#item-modal-image"),
+    selectBtn: mountNode.querySelector("#topbar-select-btn"),
+    chatBtn: mountNode.querySelector("#topbar-chat-btn"),
+    signOutBtn: mountNode.querySelector("#topbar-signout-btn"),
+    batchActionBar: mountNode.querySelector("#batch-action-bar"),
+    batchActionCount: mountNode.querySelector("#batch-action-count"),
+    batchDeleteBtn: mountNode.querySelector("#batch-delete-btn"),
+    batchMoveBtn: mountNode.querySelector("#batch-move-btn"),
+    batchCancelBtn: mountNode.querySelector("#batch-cancel-btn"),
     toast: document.getElementById("toast"),
   };
 }
 
-function openModalForItem(els, note) {
-  if (!els.itemModal || !note) return;
-
-  els.itemModalTitle.textContent = buildNoteTitle(note);
-  const projectParts = [note.project || "General"];
-  if (note.fileName) {
-    projectParts.push(note.fileName);
-  }
-  els.itemModalProject.textContent = projectParts.join(" • ");
-  const summaryText = buildModalSummary(note);
-  els.itemModalContent.textContent = summaryText || "No AI description available yet.";
-
-  const fullExtract = buildModalFullExtract(note);
-  const hasDistinctFull =
-    fullExtract &&
-    compactInlineText(fullExtract) !== compactInlineText(summaryText) &&
-    fullExtract.length > 60;
-
-  if (els.itemModalToggle && els.itemModalFullContent) {
-    els.itemModalToggle.classList.toggle("hidden", !hasDistinctFull);
-    els.itemModalFullContent.classList.add("hidden");
-    els.itemModalToggle.textContent = "Show full extracted text";
-    els.itemModalToggle.setAttribute("aria-expanded", "false");
-    els.itemModalFullContent.textContent = hasDistinctFull ? fullExtract : "";
-    els.itemModalToggle.onclick = hasDistinctFull
-      ? () => {
-          const expanded = els.itemModalToggle.getAttribute("aria-expanded") === "true";
-          const nextExpanded = !expanded;
-          els.itemModalToggle.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
-          els.itemModalToggle.textContent = nextExpanded ? "Hide full extracted text" : "Show full extracted text";
-          els.itemModalFullContent.classList.toggle("hidden", !nextExpanded);
-        }
-      : null;
-  }
-
-  if (note.imagePath) {
-    els.itemModalImage.src = note.imagePath;
-    els.itemModalImage.classList.remove("hidden");
-  } else {
-    els.itemModalImage.src = "";
-    els.itemModalImage.classList.add("hidden");
-  }
-
-  els.itemModal.classList.remove("hidden");
-  els.itemModal.setAttribute("aria-hidden", "false");
-  document.body.classList.add("modal-open");
-}
-
-function closeModal(els) {
-  if (!els.itemModal) return;
-  if (els.itemModalToggle && els.itemModalFullContent) {
-    els.itemModalToggle.classList.add("hidden");
-    els.itemModalToggle.textContent = "Show full extracted text";
-    els.itemModalToggle.setAttribute("aria-expanded", "false");
-    els.itemModalToggle.onclick = null;
-    els.itemModalFullContent.classList.add("hidden");
-    els.itemModalFullContent.textContent = "";
-  }
-  els.itemModal.classList.add("hidden");
-  els.itemModal.setAttribute("aria-hidden", "true");
-  document.body.classList.remove("modal-open");
-}
-
-export function createFolderPage({ store, apiClient }) {
+export function createFolderPage({ store, apiClient, auth = null }) {
   return {
     async mount({ mountNode, route, navigate }) {
       const folderName = route.folderId || "general";
       const folderMeta = resolveFolderMeta(folderName, store.getState().draftFolders);
+      const authSession = auth?.getSession?.() || null;
 
-      mountNode.innerHTML = renderFolderPageShell(folderMeta);
+      mountNode.innerHTML = renderFolderPageShell(folderMeta, authSession);
       const els = queryElements(mountNode);
       const disposers = [];
       let isMounted = true;
@@ -305,6 +176,15 @@ export function createFolderPage({ store, apiClient }) {
       let openTasks = [];
       let recentNotes = [];
       let searchResults = [];
+      let sortMode = "newest";
+      let filterType = "all";
+      let subFolders = [];
+      let selectMode = false;
+      const selectedIds = new Set();
+      let hasMoreNotes = false;
+      let currentOffset = 0;
+      const PAGE_SIZE = 20;
+      let dbFolderMeta = null;
       let attachment = {
         name: "",
         fileDataUrl: null,
@@ -355,7 +235,7 @@ export function createFolderPage({ store, apiClient }) {
           name: normalizedName,
           description: folderMeta.description || "",
           color: normalizeFolderColor(folderMeta.color, fallbackColorForFolder(normalizedName)),
-          symbol: normalizeFolderSymbol(folderMeta.symbol, "DOC"),
+          symbol: folderMeta.symbol || "DOC",
         });
 
         setState({ draftFolders: drafts });
@@ -396,38 +276,46 @@ export function createFolderPage({ store, apiClient }) {
         }
       }
 
-      function showToast(message, tone = "success") {
-        if (!els.toast) return;
-        const state = getState();
-        els.toast.textContent = message;
-        els.toast.classList.remove("hidden", "show", "error");
-        if (tone === "error") {
-          els.toast.classList.add("error");
-        }
-
-        requestAnimationFrame(() => {
-          els.toast.classList.add("show");
-        });
-
-        if (state.toastTimer) {
-          clearTimeout(state.toastTimer);
-        }
-
-        const toastTimer = window.setTimeout(() => {
-          els.toast.classList.remove("show");
-          window.setTimeout(() => {
-            els.toast.classList.add("hidden");
-          }, 180);
-        }, 2200);
-
-        setState({ toastTimer });
+      function toast(message, tone = "success") {
+        showToast(message, tone, store);
       }
 
-      function setSearchExpanded(expanded) {
-        const isExpanded = Boolean(expanded);
-        els.topbarSearchWrap?.classList.toggle("is-open", isExpanded);
-        els.topbarSearchWrap?.setAttribute("data-expanded", isExpanded ? "true" : "false");
-        els.topbarSearchToggle?.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+      function clearInlineSearch() {
+        if (els.inlineSearchInput) {
+          els.inlineSearchInput.value = "";
+        }
+        scheduleSearchRefresh({ immediate: true });
+      }
+
+      function applySortFilter(items) {
+        if (!Array.isArray(items)) return [];
+        let filtered = items;
+        if (filterType !== "all") {
+          filtered = items.filter((entry, index) => {
+            const note = normalizeCitation(entry, index).note;
+            return iconTypeFor(note) === filterType;
+          });
+        }
+        if (sortMode === "oldest") {
+          filtered = [...filtered].sort((a, b) => {
+            const na = normalizeCitation(a, 0).note;
+            const nb = normalizeCitation(b, 0).note;
+            return (na.createdAt || "").localeCompare(nb.createdAt || "");
+          });
+        } else if (sortMode === "az") {
+          filtered = [...filtered].sort((a, b) => {
+            const na = normalizeCitation(a, 0).note;
+            const nb = normalizeCitation(b, 0).note;
+            return buildNoteTitle(na).localeCompare(buildNoteTitle(nb));
+          });
+        } else if (sortMode === "za") {
+          filtered = [...filtered].sort((a, b) => {
+            const na = normalizeCitation(a, 0).note;
+            const nb = normalizeCitation(b, 0).note;
+            return buildNoteTitle(nb).localeCompare(buildNoteTitle(na));
+          });
+        }
+        return filtered;
       }
 
       function removeNoteFromFallback(noteId) {
@@ -436,7 +324,7 @@ export function createFolderPage({ store, apiClient }) {
         const nextMock = (Array.isArray(getState().mockNotes) ? getState().mockNotes : []).filter(
           (entry, index) => normalizeCitation(entry, index).note.id !== normalizedId
         );
-        const activeQuery = (els.topbarSearchInput?.value || "").trim();
+        const activeQuery = (els.inlineSearchInput?.value || "").trim();
         recentNotes = filterAndRankMockNotes(nextMock, {
           project: folderMeta.name,
           limit: 120,
@@ -468,24 +356,24 @@ export function createFolderPage({ store, apiClient }) {
         const confirmed = window.confirm("Delete this item? This action cannot be undone.");
         if (!confirmed) return;
 
-        closeModal(els);
+        closeItemModal(els);
         try {
           await apiClient.deleteNote(normalizedId);
           if (!isMounted) return;
-          showToast("Item deleted");
+          toast("Item deleted");
           await refreshNotes();
         } catch (error) {
           if (!isMounted) return;
           const message = conciseTechnicalError(error, "Delete endpoint unavailable");
           const alreadyDeleted = /not found|request failed \(404\)/i.test(message);
           if (alreadyDeleted) {
-            showToast("Item already deleted");
+            toast("Item already deleted");
             await refreshNotes();
             return;
           }
 
           removeNoteFromFallback(normalizedId);
-          showToast("Deleted locally");
+          toast("Deleted locally");
           apiClient.adapterLog("folder_delete_note_fallback", message);
         }
       }
@@ -496,23 +384,108 @@ export function createFolderPage({ store, apiClient }) {
         const confirmed = window.confirm(`Delete folder "${folderName}" and all its items?`);
         if (!confirmed) return;
 
-        closeModal(els);
+        closeItemModal(els);
         try {
           const result = await apiClient.deleteProject(folderName);
           if (!isMounted) return;
           removeDraftFolder(folderName);
           const deletedCount = Number(result?.deletedCount || 0);
-          showToast(deletedCount > 0 ? `Deleted ${deletedCount} item${deletedCount === 1 ? "" : "s"}` : "Folder deleted");
+          toast(deletedCount > 0 ? `Deleted ${deletedCount} item${deletedCount === 1 ? "" : "s"}` : "Folder deleted");
           navigate("#/");
         } catch (error) {
           if (!isMounted) return;
           const message = conciseTechnicalError(error, "Folder delete endpoint unavailable");
           removeDraftFolder(folderName);
           removeFolderFromFallback();
-          showToast("Folder removed locally");
+          toast("Folder removed locally");
           apiClient.adapterLog("folder_delete_fallback", message);
           navigate("#/");
         }
+      }
+
+      async function updateBreadcrumb(folder, root) {
+        if (!folder?.parentId) return;
+        const breadcrumb = root.querySelector(".folder-breadcrumb");
+        if (!breadcrumb) return;
+        try {
+          const parentResult = await apiClient.getFolder(folder.parentId);
+          const parent = parentResult?.folder;
+          if (!parent || !isMounted) return;
+          breadcrumb.innerHTML = `
+            <a class="folder-back-link" href="#/">Folders</a>
+            <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>
+            <a class="folder-back-link" href="#/folder/${encodeURIComponent(parent.name)}">${parent.name}</a>
+            <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>
+            <span class="folder-breadcrumb-current">
+              <span class="folder-color-dot" data-color="${folder.color || 'green'}" aria-hidden="true"></span>
+              <span class="folder-current-name">${folder.name}</span>
+            </span>
+          `;
+        } catch { /* breadcrumb stays default */ }
+      }
+
+      function renderSubfolders() {
+        if (!els.subfoldersSection || !els.subfoldersGrid) return;
+        if (!subFolders.length) {
+          els.subfoldersSection.classList.add("hidden");
+          return;
+        }
+        els.subfoldersSection.classList.remove("hidden");
+        els.subfoldersGrid.innerHTML = "";
+
+        const isListView = (getState().viewMode || "grid") === "list";
+        if (isListView) {
+          els.subfoldersGrid.classList.add("view-list");
+        } else {
+          els.subfoldersGrid.classList.remove("view-list");
+        }
+
+        subFolders.forEach((folder) => {
+          if (isListView) {
+            const row = document.createElement("button");
+            row.className = "subfolder-row";
+            row.type = "button";
+
+            const dot = document.createElement("span");
+            dot.className = "folder-row-dot";
+            dot.dataset.color = folder.color || "green";
+
+            const nameEl = document.createElement("span");
+            nameEl.className = "folder-row-name";
+            nameEl.textContent = folder.name;
+
+            row.append(dot, nameEl);
+            row.addEventListener("click", () => {
+              navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+            });
+            els.subfoldersGrid.appendChild(row);
+          } else {
+            const card = document.createElement("article");
+            card.className = "folder-pill subfolder-pill";
+            card.tabIndex = 0;
+            card.setAttribute("role", "link");
+            card.dataset.color = folder.color || "green";
+
+            const nameEl = document.createElement("span");
+            nameEl.className = "folder-pill-name";
+            nameEl.textContent = folder.name;
+
+            card.appendChild(nameEl);
+            card.addEventListener("click", () => {
+              navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+            });
+            card.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              navigate(`#/folder/${encodeURIComponent(folder.name)}`);
+            });
+            els.subfoldersGrid.appendChild(card);
+          }
+        });
+      }
+
+      function extractDomain(url) {
+        try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
       }
 
       function renderFolderItems(items) {
@@ -528,73 +501,243 @@ export function createFolderPage({ store, apiClient }) {
           return;
         }
 
-        const accessedSet = new Set(getState().accessedIds || []);
+        const isListView = (getState().viewMode || "grid") === "list";
+        if (isListView) {
+          els.folderItemsGrid.classList.add("view-list");
+        } else {
+          els.folderItemsGrid.classList.remove("view-list");
+        }
 
         list.slice(0, 60).forEach((entry, index) => {
           const note = normalizeCitation(entry, index).note;
+          const noteType = iconTypeFor(note);
+          const isLink = noteType === "link";
+          const ogImage = note.metadata?.ogImage || "";
+
           const shell = document.createElement("div");
           shell.className = "folder-file-tile-shell";
+          shell.style.cssText = `animation: fadeInUp 200ms ease both;`;
 
           const tile = document.createElement("button");
           tile.type = "button";
           tile.className = "folder-file-tile";
-          tile.dataset.type = iconTypeFor(note);
+          tile.dataset.type = noteType;
 
-          const createdAt = note.createdAt ? new Date(note.createdAt) : null;
-          const createdLabel = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleDateString() : "";
+          if (isListView) {
+            const listIcon = document.createElement("span");
+            listIcon.className = "list-view-icon";
+            listIcon.innerHTML = noteTypeIconMarkup(noteType);
+            tile.appendChild(listIcon);
 
-          const typeBadge = document.createElement("span");
-          typeBadge.className = "folder-file-type";
-          typeBadge.textContent = note.sourceType || "text";
+            const body = document.createElement("div");
+            body.className = "folder-file-body";
 
-          const typeIcon = document.createElement("span");
-          typeIcon.className = "folder-file-kind-icon";
-          typeIcon.dataset.type = tile.dataset.type;
-          typeIcon.innerHTML = noteTypeIconMarkup(typeIcon.dataset.type);
+            const titleEl = document.createElement("p");
+            titleEl.className = "folder-file-title";
+            titleEl.textContent = buildNoteTitle(note);
+            body.appendChild(titleEl);
 
-          const topRow = document.createElement("div");
-          topRow.className = "folder-file-top";
-          topRow.append(typeIcon, typeBadge);
+            if (isLink && note.sourceUrl) {
+              const domainEl = document.createElement("p");
+              domainEl.className = "folder-file-domain";
+              domainEl.textContent = extractDomain(note.sourceUrl);
+              body.appendChild(domainEl);
+            } else {
+              const previewText = buildContentPreview(note) || "";
+              if (previewText) {
+                const previewEl = document.createElement("p");
+                previewEl.className = "folder-file-preview";
+                previewEl.textContent = previewText;
+                body.appendChild(previewEl);
+              }
+            }
+            tile.appendChild(body);
 
-          const titleEl = document.createElement("p");
-          titleEl.className = "folder-file-title";
-          titleEl.textContent = buildNoteTitle(note);
+            const timeEl = document.createElement("span");
+            timeEl.className = "list-view-time";
+            timeEl.textContent = relativeTime(note.createdAt);
+            tile.appendChild(timeEl);
 
-          const previewEl = document.createElement("p");
-          previewEl.className = "folder-file-preview";
-          previewEl.textContent = buildContentPreview(note) || "No preview";
+            const actions = document.createElement("div");
+            actions.className = "list-view-actions";
 
-          const metaEl = document.createElement("p");
-          metaEl.className = "folder-file-meta";
-          metaEl.textContent = createdLabel;
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "folder-file-action-btn";
+            delBtn.title = "Delete";
+            delBtn.innerHTML = deleteIconMarkup();
+            delBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              await deleteNoteById(note.id);
+            });
 
-          const stateRow = document.createElement("p");
-          stateRow.className = "folder-file-state";
-          const processed = isProcessedNote(note);
-          const accessed = accessedSet.has(String(note.id || ""));
-          stateRow.textContent = `${processed ? "Processed" : "Pending"}${accessed ? " • Opened" : ""}`;
+            const moveBtn = document.createElement("button");
+            moveBtn.type = "button";
+            moveBtn.className = "folder-file-action-btn move-btn";
+            moveBtn.title = "Move";
+            moveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 7h10M8 4l3 3-3 3"/></svg>`;
+            moveBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              const target = window.prompt("Move to folder:");
+              if (!target || !target.trim()) return;
+              try {
+                await apiClient.batchMoveNotes([note.id], target.trim());
+                toast("Moved");
+                await refreshNotes();
+              } catch { toast("Move failed", "error"); }
+            });
 
-          tile.append(topRow, titleEl, previewEl, metaEl, stateRow);
+            actions.append(delBtn, moveBtn);
+            tile.appendChild(actions);
+          } else {
+            const topRow = document.createElement("div");
+            topRow.className = "folder-file-top-row";
 
-          tile.addEventListener("click", () => {
-            openModalForItem(els, note);
+            const typeIcon = document.createElement("span");
+            typeIcon.className = "folder-file-kind-icon";
+            typeIcon.innerHTML = noteTypeIconMarkup(noteType);
+
+            const typeBadge = document.createElement("span");
+            typeBadge.className = "folder-file-type";
+            typeBadge.textContent = note.sourceType || "text";
+
+            const spacer = document.createElement("span");
+            spacer.className = "folder-file-spacer";
+
+            const actionRow = document.createElement("div");
+            actionRow.className = "folder-file-actions";
+
+            const delActionBtn = document.createElement("button");
+            delActionBtn.type = "button";
+            delActionBtn.className = "folder-file-action-btn";
+            delActionBtn.title = "Delete";
+            delActionBtn.innerHTML = deleteIconMarkup();
+            delActionBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              await deleteNoteById(note.id);
+            });
+
+            const moveBtn = document.createElement("button");
+            moveBtn.type = "button";
+            moveBtn.className = "folder-file-action-btn move-btn";
+            moveBtn.title = "Move";
+            moveBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 7h10M8 4l3 3-3 3"/></svg>`;
+            moveBtn.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              const target = window.prompt("Move to folder:");
+              if (!target || !target.trim()) return;
+              try {
+                await apiClient.batchMoveNotes([note.id], target.trim());
+                toast("Moved");
+                await refreshNotes();
+              } catch { toast("Move failed", "error"); }
+            });
+
+            actionRow.append(delActionBtn, moveBtn);
+            topRow.append(typeIcon, typeBadge, spacer, actionRow);
+            tile.appendChild(topRow);
+
+            const heroSrc = note.imagePath || (isLink && ogImage ? ogImage : "");
+            if (heroSrc) {
+              const thumb = document.createElement("img");
+              thumb.className = "folder-file-thumb";
+              thumb.src = heroSrc;
+              thumb.alt = buildNoteTitle(note);
+              thumb.loading = "lazy";
+              thumb.onerror = () => { thumb.style.display = "none"; };
+              tile.appendChild(thumb);
+            }
+
+            const body = document.createElement("div");
+            body.className = "folder-file-body";
+
+            const titleEl = document.createElement("p");
+            titleEl.className = "folder-file-title";
+            titleEl.textContent = buildNoteTitle(note);
+            body.appendChild(titleEl);
+
+            if (isLink && note.sourceUrl) {
+              const domainEl = document.createElement("p");
+              domainEl.className = "folder-file-domain";
+              domainEl.textContent = extractDomain(note.sourceUrl);
+              body.appendChild(domainEl);
+            } else {
+              const previewText = buildContentPreview(note) || "";
+              if (previewText) {
+                const previewEl = document.createElement("p");
+                previewEl.className = "folder-file-preview";
+                previewEl.textContent = previewText;
+                body.appendChild(previewEl);
+              }
+            }
+            tile.appendChild(body);
+
+            const footer = document.createElement("div");
+            footer.className = "folder-file-footer";
+
+            const timeEl = document.createElement("span");
+            timeEl.className = "folder-file-time";
+            timeEl.textContent = relativeTime(note.createdAt);
+            footer.appendChild(timeEl);
+
+            tile.appendChild(footer);
+          }
+
+          tile.addEventListener("click", (e) => {
+            if (e.target.closest(".folder-file-actions") || e.target.closest(".list-view-actions")) return;
+            if (selectMode) {
+              toggleNoteSelection(note.id);
+              shell.classList.toggle("is-selected", selectedIds.has(String(note.id)));
+              const cb = shell.querySelector(".batch-select-checkbox");
+              if (cb) cb.checked = selectedIds.has(String(note.id));
+              return;
+            }
+            openItemModal(els, note);
             markAccessed(note.id);
             renderView();
           });
 
-          const deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.className = "folder-file-delete";
-          deleteBtn.title = `Delete item ${buildNoteTitle(note)}`;
-          deleteBtn.setAttribute("aria-label", `Delete item ${buildNoteTitle(note)}`);
-          deleteBtn.innerHTML = deleteIconMarkup();
-          deleteBtn.addEventListener("click", async () => {
-            await deleteNoteById(note.id);
-          });
+          if (selectMode) {
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "batch-select-checkbox";
+            checkbox.checked = selectedIds.has(String(note.id));
+            checkbox.style.display = "block";
+            checkbox.addEventListener("change", () => {
+              toggleNoteSelection(note.id);
+              shell.classList.toggle("is-selected", selectedIds.has(String(note.id)));
+            });
+            shell.prepend(checkbox);
+          }
 
-          shell.append(tile, deleteBtn);
+          shell.appendChild(tile);
           els.folderItemsGrid.appendChild(shell);
         });
+
+        // Load more button
+        if (hasMoreNotes && list.length > 0) {
+          const loadMoreBtn = document.createElement("button");
+          loadMoreBtn.type = "button";
+          loadMoreBtn.className = "batch-action-btn";
+          loadMoreBtn.style.cssText = "width: 100%; margin-top: 12px; grid-column: 1 / -1;";
+          loadMoreBtn.textContent = "Load more";
+          loadMoreBtn.addEventListener("click", async () => {
+            currentOffset += PAGE_SIZE;
+            try {
+              const moreResult = await apiClient.fetchNotes({ project: folderMeta.name, limit: PAGE_SIZE, offset: currentOffset });
+              if (!isMounted) return;
+              const moreItems = Array.isArray(moreResult.items) ? moreResult.items : [];
+              recentNotes = [...recentNotes, ...moreItems];
+              hasMoreNotes = moreResult.hasMore;
+              setState({ notes: recentNotes });
+              renderView();
+            } catch {
+              if (!isMounted) return;
+              toast("Failed to load more", "error");
+            }
+          });
+          els.folderItemsGrid.appendChild(loadMoreBtn);
+        }
       }
 
       function renderRecent() {
@@ -631,6 +774,10 @@ export function createFolderPage({ store, apiClient }) {
             label.className = "recent-item-label";
             label.textContent = buildNoteTitle(note);
 
+            const timeEl = document.createElement("span");
+            timeEl.className = "recent-item-time";
+            timeEl.textContent = relativeTime(note.createdAt);
+
             const states = document.createElement("span");
             states.className = "recent-item-states";
 
@@ -644,10 +791,10 @@ export function createFolderPage({ store, apiClient }) {
             accessedDot.title = "Opened";
 
             states.append(processedDot, accessedDot);
-            item.append(icon, label, states);
+            item.append(icon, label, timeEl, states);
 
             item.addEventListener("click", () => {
-              openModalForItem(els, note);
+              openItemModal(els, note);
               markAccessed(note.id);
               renderView();
             });
@@ -676,6 +823,9 @@ export function createFolderPage({ store, apiClient }) {
         }
 
         taskItems.forEach((task) => {
+          const row = document.createElement("div");
+          row.className = "recent-task-row";
+
           const item = document.createElement("div");
           item.className = "recent-task-item";
           item.title = task.title || "";
@@ -688,7 +838,74 @@ export function createFolderPage({ store, apiClient }) {
           label.textContent = String(task.title || "").trim() || "(untitled task)";
 
           item.append(dot, label);
-          els.recentTasksList.appendChild(item);
+
+          const actions = document.createElement("span");
+          actions.className = "recent-task-actions";
+
+          const editBtn = document.createElement("button");
+          editBtn.type = "button";
+          editBtn.className = "task-action-btn task-edit-btn";
+          editBtn.title = "Edit task";
+          editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 2.5l3 3M1.5 9.5l6-6 3 3-6 6H1.5v-3z"/></svg>`;
+          editBtn.addEventListener("click", () => {
+            label.classList.add("hidden");
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "task-inline-edit";
+            input.value = String(task.title || "").trim();
+            item.insertBefore(input, label);
+            input.focus();
+            input.select();
+            const save = async () => {
+              const newTitle = input.value.trim();
+              if (newTitle && newTitle !== task.title) {
+                try {
+                  await apiClient.updateTask(task.id, { title: newTitle });
+                  toast("Task updated");
+                  await refreshNotes();
+                } catch { toast("Update failed", "error"); }
+              } else {
+                input.remove();
+                label.classList.remove("hidden");
+              }
+            };
+            input.addEventListener("keydown", (e) => {
+              if (e.key === "Enter") { e.preventDefault(); save(); }
+              if (e.key === "Escape") { input.remove(); label.classList.remove("hidden"); }
+            });
+            input.addEventListener("blur", save);
+          });
+
+          const completeBtn = document.createElement("button");
+          completeBtn.type = "button";
+          completeBtn.className = "task-action-btn task-complete-btn";
+          completeBtn.title = "Complete task";
+          completeBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="2 7 6 11 12 3"/></svg>`;
+          completeBtn.addEventListener("click", async () => {
+            try {
+              await apiClient.updateTask(task.id, { status: "closed" });
+              toast("Task completed");
+              await refreshNotes();
+            } catch { toast("Complete failed", "error"); }
+          });
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "task-action-btn task-delete-btn";
+          deleteBtn.title = "Delete task";
+          deleteBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="2" y1="4" x2="12" y2="4"/><path d="M5 4V2.5h4V4M3 4l.7 8h6.6l.7-8"/></svg>`;
+          deleteBtn.addEventListener("click", async () => {
+            if (!window.confirm("Delete this task?")) return;
+            try {
+              await apiClient.deleteTask(task.id);
+              toast("Task deleted");
+              await refreshNotes();
+            } catch { toast("Delete failed", "error"); }
+          });
+
+          actions.append(editBtn, completeBtn, deleteBtn);
+          row.append(item, actions);
+          els.recentTasksList.appendChild(row);
         });
       }
 
@@ -734,23 +951,49 @@ export function createFolderPage({ store, apiClient }) {
         }
       }
 
+      function renderInlineSearchResults() {
+        if (!els.folderItemsGrid) return;
+        const query = String(els.inlineSearchInput?.value || "").trim();
+        if (!query) return;
+
+        renderSearchResults(els.folderItemsGrid, searchResults, {
+          onOpen(note) {
+            openItemModal(els, note);
+            markAccessed(note.id);
+            renderView();
+          },
+          onDelete(noteId) {
+            deleteNoteById(noteId);
+          },
+        });
+      }
+
       function renderView() {
-        const query = String(els.topbarSearchInput?.value || "").trim();
-        const visibleNotes = query ? searchResults : recentNotes;
-        renderFolderItems(visibleNotes);
+        const query = String(els.inlineSearchInput?.value || "").trim();
+
+        if (query) {
+          renderInlineSearchResults();
+          renderRecent();
+          renderProjectOptions();
+          return;
+        }
+
+        renderSubfolders();
+        renderFolderItems(applySortFilter(recentNotes));
         renderRecent();
         renderProjectOptions();
       }
 
       async function refreshNotes() {
-        const query = (els.topbarSearchInput?.value || "").trim();
+        const query = (els.inlineSearchInput?.value || "").trim();
         const includeSearch = Boolean(query);
+        currentOffset = 0;
 
         try {
           const requests = [
             apiClient.fetchNotes({
               project: folderMeta.name,
-              limit: 120,
+              limit: PAGE_SIZE,
             }),
           ];
           if (includeSearch) {
@@ -763,15 +1006,18 @@ export function createFolderPage({ store, apiClient }) {
             );
           }
           requests.push(apiClient.fetchTasks({ status: "open" }));
+          requests.push(apiClient.getFolder(folderMeta.name).catch(() => null));
 
           const results = await Promise.allSettled(requests);
           const recentResult = results[0];
           const searchResult = includeSearch ? results[1] : null;
           const tasksResult = includeSearch ? results[2] : results[1];
+          const folderMetaResult = includeSearch ? results[3] : results[2];
           if (recentResult.status !== "fulfilled") throw recentResult.reason;
 
           if (!isMounted) return;
           recentNotes = Array.isArray(recentResult.value?.items) ? recentResult.value.items : [];
+          hasMoreNotes = recentResult.value?.hasMore || false;
           searchResults =
             includeSearch && searchResult?.status === "fulfilled" && Array.isArray(searchResult.value?.items)
               ? searchResult.value.items
@@ -781,6 +1027,18 @@ export function createFolderPage({ store, apiClient }) {
             tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value?.items)
               ? tasksResult.value.items
               : [];
+
+          if (folderMetaResult?.status === "fulfilled" && folderMetaResult.value?.folder) {
+            dbFolderMeta = folderMetaResult.value.folder;
+            try {
+              const childrenResult = await apiClient.fetchSubfolders(dbFolderMeta.id);
+              subFolders = Array.isArray(childrenResult?.items) ? childrenResult.items : [];
+            } catch { subFolders = []; }
+            if (dbFolderMeta.parentId) {
+              updateBreadcrumb(dbFolderMeta, mountNode);
+            }
+          }
+
           renderView();
         } catch (error) {
           if (!isMounted) return;
@@ -855,33 +1113,141 @@ export function createFolderPage({ store, apiClient }) {
         els.selectedFilePill?.classList.remove("hidden");
       }
 
-      on(els.topbarSearchToggle, "click", () => {
-        const expanded = els.topbarSearchWrap?.classList.contains("is-open");
-        setSearchExpanded(!expanded);
-        if (!expanded) {
-          els.topbarSearchInput?.focus();
+      // Batch select mode
+      function toggleSelectMode(active) {
+        selectMode = typeof active === "boolean" ? active : !selectMode;
+        selectedIds.clear();
+        const page = mountNode.querySelector(".page-folder");
+        if (page) page.classList.toggle("select-mode", selectMode);
+        if (els.selectBtn) els.selectBtn.classList.toggle("is-active", selectMode);
+        if (els.selectBtn) els.selectBtn.textContent = selectMode ? "Done" : "Select";
+        updateBatchBar();
+        renderView();
+      }
+
+      function updateBatchBar() {
+        if (!els.batchActionBar) return;
+        if (!selectMode || selectedIds.size === 0) {
+          els.batchActionBar.classList.add("hidden");
+          return;
+        }
+        els.batchActionBar.classList.remove("hidden");
+        if (els.batchActionCount) {
+          els.batchActionCount.textContent = `${selectedIds.size} selected`;
+        }
+      }
+
+      function toggleNoteSelection(noteId) {
+        const id = String(noteId || "").trim();
+        if (!id) return;
+        if (selectedIds.has(id)) {
+          selectedIds.delete(id);
+        } else {
+          selectedIds.add(id);
+        }
+        updateBatchBar();
+      }
+
+      on(els.selectBtn, "click", () => {
+        toggleSelectMode();
+      });
+
+      on(els.batchCancelBtn, "click", () => {
+        toggleSelectMode(false);
+      });
+
+      on(els.batchDeleteBtn, "click", async () => {
+        if (selectedIds.size === 0) return;
+        const confirmed = window.confirm(`Delete ${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"}?`);
+        if (!confirmed) return;
+        try {
+          await apiClient.batchDeleteNotes([...selectedIds]);
+          if (!isMounted) return;
+          toast(`Deleted ${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"}`);
+          toggleSelectMode(false);
+          await refreshNotes();
+        } catch (error) {
+          if (!isMounted) return;
+          toast(conciseTechnicalError(error, "Batch delete failed"), "error");
         }
       });
 
-      on(els.topbarSearchInput, "keydown", async (event) => {
-        if (event.key !== "Enter") return;
-        event.preventDefault();
-        scheduleSearchRefresh({ immediate: true });
-      });
-
-      on(els.topbarSearchInput, "input", () => {
-        const query = String(els.topbarSearchInput?.value || "").trim();
-        scheduleSearchRefresh({ immediate: query.length === 0 });
-      });
-
-      on(mountNode, "click", (event) => {
-        const target = event.target;
-        if (!(target instanceof Node)) return;
-        const insideSearch = els.topbarSearchWrap?.contains(target);
-        if (!insideSearch && !(els.topbarSearchInput?.value || "").trim()) {
-          setSearchExpanded(false);
+      on(els.batchMoveBtn, "click", async () => {
+        if (selectedIds.size === 0) return;
+        const target = window.prompt("Move to folder:");
+        if (!target || !target.trim()) return;
+        try {
+          await apiClient.batchMoveNotes([...selectedIds], target.trim());
+          if (!isMounted) return;
+          toast(`Moved ${selectedIds.size} item${selectedIds.size === 1 ? "" : "s"}`);
+          toggleSelectMode(false);
+          await refreshNotes();
+        } catch (error) {
+          if (!isMounted) return;
+          toast(conciseTechnicalError(error, "Batch move failed"), "error");
         }
       });
+
+      // View toggle handlers
+      const viewMode = getState().viewMode || "grid";
+      if (viewMode === "list") {
+        els.viewGridBtn?.classList.remove("is-active");
+        els.viewListBtn?.classList.add("is-active");
+        els.folderItemsGrid?.classList.add("view-list");
+        els.subfoldersGrid?.classList.add("view-list");
+      }
+
+      on(els.viewGridBtn, "click", () => {
+        setState({ viewMode: "grid" });
+        els.viewGridBtn?.classList.add("is-active");
+        els.viewListBtn?.classList.remove("is-active");
+        els.folderItemsGrid?.classList.remove("view-list");
+        els.subfoldersGrid?.classList.remove("view-list");
+        renderView();
+      });
+
+      on(els.viewListBtn, "click", () => {
+        setState({ viewMode: "list" });
+        els.viewListBtn?.classList.add("is-active");
+        els.viewGridBtn?.classList.remove("is-active");
+        els.folderItemsGrid?.classList.add("view-list");
+        els.subfoldersGrid?.classList.add("view-list");
+        renderView();
+      });
+
+      // Sort/filter via extracted component
+      on(els.topbarSortBtn, "click", (event) => {
+        event.stopPropagation();
+        toggleSortFilterDropdown(els);
+      });
+
+      const cleanupSortFilter = initSortFilter(els, {
+        onSortChange(newSort) {
+          sortMode = newSort;
+          renderView();
+        },
+        onFilterChange(newFilter) {
+          filterType = newFilter;
+          renderView();
+        },
+      });
+      disposers.push(cleanupSortFilter);
+
+      // Inline search via extracted component
+      const cleanupInlineSearch = initInlineSearchHandlers(els, {
+        onInput(value) {
+          scheduleSearchRefresh({ immediate: value.length === 0 });
+        },
+        onClear() {
+          clearInlineSearch();
+        },
+        onKeydown(key) {
+          if (key === "enter") {
+            scheduleSearchRefresh({ immediate: true });
+          }
+        },
+      });
+      disposers.push(cleanupInlineSearch);
 
       on(els.attachmentToggle, "click", () => {
         els.fileInput?.click();
@@ -896,13 +1262,65 @@ export function createFolderPage({ store, apiClient }) {
           setAttachment(file.name || "file", fileDataUrl, file.type || "");
         } catch (error) {
           setCaptureHint(conciseTechnicalError(error, "File read failed"), "warn");
-          showToast("File read failed", "error");
+          toast("File read failed", "error");
         }
       });
 
       on(els.clearFileBtn, "click", () => {
         clearAttachment();
       });
+
+      const composerShell = mountNode.querySelector('.composer-shell');
+      if (composerShell) {
+        on(composerShell, 'dragover', (e) => {
+          e.preventDefault();
+          composerShell.classList.add('drag-active');
+        });
+        on(composerShell, 'dragleave', (e) => {
+          if (!composerShell.contains(e.relatedTarget)) {
+            composerShell.classList.remove('drag-active');
+          }
+        });
+        on(composerShell, 'drop', async (e) => {
+          e.preventDefault();
+          composerShell.classList.remove('drag-active');
+          const file = e.dataTransfer?.files?.[0];
+          if (!file) return;
+          try {
+            const dataUrl = await fileToDataUrl(file);
+            setAttachment(file.name || 'file', dataUrl, file.type || '');
+          } catch (err) {
+            toast('File read failed', 'error');
+          }
+        });
+      }
+
+      // Full-page drop zone
+      const pageEl = mountNode.querySelector('.page-folder');
+      if (pageEl) {
+        on(pageEl, 'dragover', (e) => {
+          e.preventDefault();
+          pageEl.classList.add('page-drag-active');
+        });
+        on(pageEl, 'dragleave', (e) => {
+          if (!pageEl.contains(e.relatedTarget)) {
+            pageEl.classList.remove('page-drag-active');
+          }
+        });
+        on(pageEl, 'drop', async (e) => {
+          e.preventDefault();
+          pageEl.classList.remove('page-drag-active');
+          const file = e.dataTransfer?.files?.[0];
+          if (!file) return;
+          try {
+            const dataUrl = await fileToDataUrl(file);
+            setAttachment(file.name || 'file', dataUrl, file.type || '');
+            els.contentInput?.focus();
+          } catch {
+            toast('File read failed', 'error');
+          }
+        });
+      }
 
       on(els.projectSelect, "change", () => {
         if (!els.projectInput) return;
@@ -919,7 +1337,7 @@ export function createFolderPage({ store, apiClient }) {
 
         if (!content && !attachment.fileDataUrl) {
           setCaptureHint("Add text, link, image, or file.", "warn");
-          showToast("Add content first", "error");
+          toast("Add content first", "error");
           els.contentInput?.focus();
           return;
         }
@@ -953,7 +1371,7 @@ export function createFolderPage({ store, apiClient }) {
           if (!isMounted) return;
 
           setCaptureHint("Saved.");
-          showToast("Item saved");
+          toast("Item saved");
           await refreshNotes();
         } catch (error) {
           if (!isMounted) return;
@@ -969,10 +1387,10 @@ export function createFolderPage({ store, apiClient }) {
               setAttachment(pendingAttachment.name || "file", pendingAttachment.fileDataUrl, pendingAttachment.fileMimeType || "");
             }
             setCaptureHint(message, "warn");
-            showToast("Save failed", "error");
+            toast("Save failed", "error");
           } else {
             const nextMock = [buildLocalFallbackNote(payload), ...getState().mockNotes];
-            const activeQuery = (els.topbarSearchInput?.value || "").trim();
+            const activeQuery = (els.inlineSearchInput?.value || "").trim();
             recentNotes = filterAndRankMockNotes(nextMock, {
               project: folderMeta.name,
               limit: 120,
@@ -987,7 +1405,7 @@ export function createFolderPage({ store, apiClient }) {
             setState({ mockNotes: nextMock, notes: recentNotes });
 
             setCaptureHint("Saved locally.", "warn");
-            showToast("Saved locally");
+            toast("Saved locally");
             renderView();
             apiClient.adapterLog("folder_save_fallback", message);
           }
@@ -1006,28 +1424,137 @@ export function createFolderPage({ store, apiClient }) {
         await deleteCurrentFolder();
       });
 
-      on(els.itemModalClose, "click", () => {
-        closeModal(els);
+      on(els.newFolderBtn, "click", () => {
+        openFolderModal(els);
       });
 
-      on(els.itemModalBackdrop, "click", () => {
-        closeModal(els);
+      // Folder modal handlers via extracted component
+      const cleanupFolderModal = initFolderModalHandlers(els, {
+        onClose() {
+          closeFolderModal(els);
+        },
+        onColorSelect() {},
       });
+      disposers.push(cleanupFolderModal);
 
-      on(document, "keydown", (event) => {
-        if (event.key === "Escape") {
-          closeModal(els);
+      on(els.folderForm, "submit", async (event) => {
+        event.preventDefault();
+        const name = String(els.folderNameInput?.value || "").trim();
+        if (!name) { els.folderNameInput?.focus(); return; }
+        const description = String(els.folderDescriptionInput?.value || "").trim();
+        const color = getSelectedFolderColor(els);
+        const parentId = dbFolderMeta?.id || null;
+        try {
+          await apiClient.createFolder({ name, description, color, parentId });
+          closeFolderModal(els);
+          toast("Folder created");
+          await refreshNotes();
+        } catch (err) {
+          toast("Failed to create folder", "error");
         }
       });
 
+      // Item modal handlers via extracted component
+      const cleanupItemModal = initItemModalHandlers(els, {
+        onClose() {
+          closeItemModal(els);
+        },
+        async onSave(noteId, payload) {
+          try {
+            await apiClient.updateNote(noteId, payload);
+            if (!isMounted) return;
+            closeItemModal(els);
+            toast("Note updated");
+            await refreshNotes();
+          } catch (error) {
+            if (!isMounted) return;
+            toast(conciseTechnicalError(error, "Update failed"), "error");
+          }
+        },
+      });
+      disposers.push(cleanupItemModal);
+
+      // Chat panel
+      const chatPanel = initChatPanel(els, { apiClient, toast });
+      disposers.push(chatPanel.dispose);
+
+      on(els.chatBtn, "click", () => {
+        chatPanel.toggle();
+      });
+
+      on(els.signOutBtn, "click", async () => {
+        try {
+          await auth?.onSignOut?.();
+        } catch {
+          // no-op
+        }
+      });
+
+      const cleanupKeyboard = initKeyboardShortcuts({
+        onSearch() {
+          els.inlineSearchInput?.focus();
+        },
+        onComposer() {
+          els.contentInput?.focus();
+        },
+        onEscape() {
+          if ((els.inlineSearchInput?.value || "").trim()) {
+            clearInlineSearch();
+          }
+          closeItemModal(els);
+        },
+      });
+
       ensureDraftFolder(folderMeta.name);
-      setSearchExpanded(false);
       clearAttachment();
       setCaptureHint("");
+
+      const cleanupAutoResize = initComposerAutoResize(mountNode);
+      disposers.push(cleanupAutoResize);
+
+      function showSkeletons() {
+        if (els.recentNotesList) {
+          els.recentNotesList.innerHTML = Array.from({ length: 5 }, () =>
+            `<div class="skeleton-row"><div class="skeleton-dot skeleton-pulse"></div><div class="skeleton-line skeleton-pulse w-80" style="flex:1"></div></div>`
+          ).join('');
+        }
+        if (els.folderItemsGrid) {
+          els.folderItemsGrid.innerHTML = Array.from({ length: 6 }, () =>
+            `<div class="skeleton-card skeleton-pulse"></div>`
+          ).join('');
+        }
+      }
+      showSkeletons();
+
       await refreshNotes();
+
+      // Subscribe to SSE for real-time enrichment updates
+      const unsubscribeSSE = apiClient.subscribeToEvents?.((event) => {
+        if (!isMounted) return;
+        if (event.type === "job:complete" && event.result) {
+          const enrichedNote = event.result;
+          if (enrichedNote.project !== folderMeta.name) return;
+          for (let i = 0; i < recentNotes.length; i++) {
+            const entry = recentNotes[i];
+            const noteObj = entry?.note || entry;
+            if (noteObj.id === enrichedNote.id) {
+              if (entry?.note) {
+                recentNotes[i] = { ...entry, note: enrichedNote };
+              } else {
+                recentNotes[i] = enrichedNote;
+              }
+              break;
+            }
+          }
+          setState({ notes: recentNotes });
+          renderView();
+        }
+      });
 
       return () => {
         isMounted = false;
+        cleanupKeyboard();
+        if (unsubscribeSSE) unsubscribeSSE();
         const state = getState();
         if (state.toastTimer) {
           clearTimeout(state.toastTimer);
@@ -1037,7 +1564,7 @@ export function createFolderPage({ store, apiClient }) {
           clearTimeout(searchTimer);
           searchTimer = null;
         }
-        closeModal(els);
+        closeItemModal(els);
         disposers.forEach((dispose) => {
           dispose();
         });

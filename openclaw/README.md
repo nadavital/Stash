@@ -8,6 +8,14 @@ This project includes an OpenClaw-ready command bridge that calls the same servi
 node openclaw/bridge.js <tool_name> '<json_args>'
 ```
 
+All bridge tool calls require auth:
+
+```bash
+export STASH_SESSION_TOKEN='<session_token>'
+# optional workspace override
+export STASH_WORKSPACE_ID='<workspace_id>'
+```
+
 Example:
 
 ```bash

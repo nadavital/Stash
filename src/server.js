@@ -7,15 +7,44 @@ import { config, ROOT_DIR } from "./config.js";
 import { hasOpenAI } from "./openai.js";
 import {
   askMemories,
+  batchMoveMemories,
+  batchDeleteMemories,
+  buildCitationBlock,
   buildProjectContext,
   createMemory,
   deleteMemory,
   deleteProjectMemories,
+  exportMemories,
+  getMemoryStats,
   listProjects,
   listRecentMemories,
+  listTags,
   searchMemories,
+  updateMemory,
 } from "./memoryService.js";
-import { taskRepo } from "./tasksDb.js";
+import { createStreamingResponse } from "./openai.js";
+import { noteRepo, taskRepo, folderRepo, authRepo, providerName, storageBridgeMode } from "./storage/provider.js";
+import { enrichmentQueue } from "./queue.js";
+import { logger, requestLogger } from "./logger.js";
+import { createRateLimiter } from "./rateLimit.js";
+import { validateNotePayload, validateBatchPayload } from "./validate.js";
+import { extractSessionTokenFromHeaders } from "./authHeaders.js";
+import {
+  deleteFirebaseUser,
+  firebaseChangePassword,
+  firebaseSendEmailVerification,
+  firebaseRefreshIdToken,
+  firebaseSendPasswordResetEmail,
+  firebaseSignInWithEmailPassword,
+  firebaseSignUpWithEmailPassword,
+  isFirebaseConfigured,
+  revokeFirebaseUserSessions,
+  verifyFirebaseIdToken,
+} from "./firebaseAuthLazy.js";
+
+const checkRate = createRateLimiter();
+const checkAuthRate = createRateLimiter({ windowMs: 10 * 60 * 1000, maxRequests: 50 });
+const startedAt = Date.now();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +79,182 @@ function sendText(res, statusCode, text) {
     "Content-Length": Buffer.byteLength(text),
   });
   res.end(text);
+}
+
+function sendUnauthorized(res) {
+  sendJson(res, 401, {
+    error: "Unauthorized",
+    hint:
+      config.authProvider === "firebase"
+        ? "Sign in via Firebase auth endpoint, then send Authorization: Bearer <id_token>"
+        : "Sign in via POST /api/auth/login, then send Authorization: Bearer <token>",
+  });
+}
+
+function resolveErrorStatus(error, fallback = 400) {
+  const candidate = Number(error?.status);
+  return Number.isFinite(candidate) && candidate >= 400 && candidate <= 599 ? candidate : fallback;
+}
+
+function isWorkspaceManager(actor = null) {
+  const role = String(actor?.role || "").toLowerCase();
+  return role === "owner" || role === "admin";
+}
+
+function getRequestIp(req) {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    "unknown"
+  );
+}
+
+const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_CAPTCHA_THRESHOLD = 8;
+const authFailureByIp = new Map();
+
+function getAuthFailureStatus(ip) {
+  const normalizedIp = String(ip || "unknown").trim() || "unknown";
+  const now = Date.now();
+  const entries = (authFailureByIp.get(normalizedIp) || []).filter((ts) => now - ts < AUTH_FAILURE_WINDOW_MS);
+  if (entries.length > 0) {
+    authFailureByIp.set(normalizedIp, entries);
+  } else {
+    authFailureByIp.delete(normalizedIp);
+  }
+  return {
+    count: entries.length,
+    requiresCaptcha: entries.length >= AUTH_CAPTCHA_THRESHOLD,
+  };
+}
+
+function registerAuthFailure(ip) {
+  const normalizedIp = String(ip || "unknown").trim() || "unknown";
+  const now = Date.now();
+  const entries = (authFailureByIp.get(normalizedIp) || []).filter((ts) => now - ts < AUTH_FAILURE_WINDOW_MS);
+  entries.push(now);
+  authFailureByIp.set(normalizedIp, entries);
+  return {
+    count: entries.length,
+    requiresCaptcha: entries.length >= AUTH_CAPTCHA_THRESHOLD,
+  };
+}
+
+function clearAuthFailures(ip) {
+  const normalizedIp = String(ip || "unknown").trim() || "unknown";
+  authFailureByIp.delete(normalizedIp);
+}
+
+function recordAuthEvent(event = {}) {
+  const outcome = String(event.outcome || "unknown").toLowerCase();
+  const logPayload = {
+    eventType: event.eventType || "auth.unknown",
+    outcome,
+    provider: event.provider || "",
+    userId: event.userId || "",
+    workspaceId: event.workspaceId || "",
+    email: event.email || "",
+    ip: event.ip || "",
+    reason: event.reason || "",
+    metadata: event.metadata || null,
+  };
+  Promise.resolve(authRepo.recordAuthEvent(logPayload)).catch((error) => {
+    logger.warn("auth_event_write_failed", {
+      eventType: logPayload.eventType,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  if (outcome === "failure") {
+    logger.warn("auth_event", logPayload);
+  } else {
+    logger.info("auth_event", logPayload);
+  }
+}
+
+function buildSessionResponseFromActor({
+  actor,
+  token,
+  refreshToken = "",
+  createdAt = "",
+  expiresAt = "",
+  provider = "local",
+}) {
+  return {
+    token,
+    refreshToken: String(refreshToken || "").trim(),
+    user: {
+      id: actor.userId,
+      email: actor.userEmail,
+      displayName: actor.userName || "",
+      emailVerified: actor.emailVerified !== false,
+    },
+    workspace: {
+      id: actor.workspaceId,
+      slug: actor.workspaceSlug || "",
+      name: actor.workspaceName,
+    },
+    role: actor.role || "member",
+    createdAt: createdAt || new Date().toISOString(),
+    expiresAt: expiresAt || "",
+    provider,
+  };
+}
+
+function buildFirebaseSessionPayload(firebaseAuthResult, actor) {
+  const expiresInSeconds = Number(firebaseAuthResult?.expiresIn || 0);
+  const expiresAt = Number.isFinite(expiresInSeconds) && expiresInSeconds > 0
+    ? new Date(Date.now() + expiresInSeconds * 1000).toISOString()
+    : "";
+
+  return buildSessionResponseFromActor({
+    actor,
+    token: String(firebaseAuthResult?.idToken || "").trim(),
+    refreshToken: String(firebaseAuthResult?.refreshToken || "").trim(),
+    createdAt: new Date().toISOString(),
+    expiresAt,
+    provider: "firebase",
+  });
+}
+
+async function buildActorFromRequest(req, { url = null, allowQueryToken = false } = {}) {
+  const token = extractSessionTokenFromHeaders(req.headers);
+  const tokenFromQuery = allowQueryToken ? url?.searchParams?.get("sessionToken") || "" : "";
+  const finalToken = token || String(tokenFromQuery).trim();
+  if (!finalToken) return null;
+  const preferredWorkspaceId =
+    String(req.headers["x-workspace-id"] || "").trim() ||
+    String(url?.searchParams?.get("workspaceId") || "").trim();
+
+  if (config.authProvider === "firebase") {
+    try {
+      const claims = await verifyFirebaseIdToken(finalToken);
+      const actor = await authRepo.resolveFirebaseActorFromClaims(claims, { preferredWorkspaceId });
+      return {
+        token: finalToken,
+        provider: "firebase",
+        ...actor,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const session = await authRepo.getSession(finalToken);
+  if (!session) return null;
+  try {
+    const actor = await authRepo.buildActorForUserId(session.user.id, {
+      preferredWorkspaceId,
+      emailVerified: true,
+    });
+    return {
+      token: finalToken,
+      provider: "local",
+      ...actor,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function readJsonBody(req, maxBytes = 15 * 1024 * 1024) {
@@ -97,14 +302,601 @@ async function serveFile(res, absolutePath) {
   }
 }
 
+function handleSSE(req, res, actor) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+
+  // Send initial connected event
+  res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`);
+
+  // Keepalive ping every 30s
+  const keepalive = setInterval(() => {
+    res.write(`: keepalive ${new Date().toISOString()}\n\n`);
+  }, 30000);
+
+  // Subscribe to queue events
+  const unsubscribe = enrichmentQueue.subscribe((event) => {
+    const eventWorkspaceId =
+      event?.workspaceId || event?.result?.workspaceId || event?.result?.note?.workspaceId || null;
+    if (eventWorkspaceId && eventWorkspaceId !== actor.workspaceId) {
+      return;
+    }
+    const eventType = event.type || "message";
+    res.write(`event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`);
+  });
+
+  // Cleanup on client disconnect
+  req.on("close", () => {
+    clearInterval(keepalive);
+    unsubscribe();
+  });
+}
+
 async function handleApi(req, res, url) {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Session-Token, X-Workspace-Id",
+      "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
     });
     res.end();
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/health") {
+    const mem = process.memoryUsage();
+    sendJson(res, 200, {
+      ok: true,
+      serverTime: new Date().toISOString(),
+      uptime: Math.floor((Date.now() - startedAt) / 1000),
+      openaiConfigured: hasOpenAI(),
+      auth: {
+        provider: config.authProvider,
+        firebaseConfigured: await isFirebaseConfigured(),
+      },
+      dbProvider: providerName,
+      dbBridgeMode: storageBridgeMode,
+      memory: {
+        rss: Math.round(mem.rss / 1024 / 1024),
+        heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+        heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+      },
+      queue: {
+        pending: enrichmentQueue.pending ?? 0,
+        running: enrichmentQueue.active ?? 0,
+      },
+    });
+    return;
+  }
+
+  const requestIp = getRequestIp(req);
+  const authWritePaths = new Set([
+    "/api/auth/login",
+    "/api/auth/signup",
+    "/api/auth/password-reset",
+    "/api/auth/password-change",
+    "/api/auth/email-verification/send",
+  ]);
+
+  if (req.method === "POST" && authWritePaths.has(url.pathname)) {
+    const strictRate = checkAuthRate(req);
+    if (!strictRate.allowed) {
+      sendJson(res, 429, {
+        error: "Too many authentication requests",
+        retryAfter: strictRate.retryAfter,
+        captchaRequired: true,
+      });
+      return;
+    }
+
+    const failureStatus = getAuthFailureStatus(requestIp);
+    if (failureStatus.requiresCaptcha) {
+      sendJson(res, 429, {
+        error: "Additional verification required before more auth attempts",
+        captchaRequired: true,
+      });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/login") {
+    const body = await readJsonBody(req);
+    if (body.workspaceId || body.workspaceName) {
+      sendJson(res, 400, { error: "Workspace override is not allowed in auth endpoints" });
+      return;
+    }
+    try {
+      let session;
+      if (config.authProvider === "firebase") {
+        const firebaseResult = await firebaseSignInWithEmailPassword({
+          email: body.email,
+          password: body.password,
+        });
+        const claims = await verifyFirebaseIdToken(firebaseResult.idToken);
+        const actor = await authRepo.resolveFirebaseActorFromClaims(claims);
+        session = buildFirebaseSessionPayload(firebaseResult, actor);
+        session.user.emailVerified = Boolean(actor.emailVerified);
+        if (config.authRequireEmailVerification && !actor.emailVerified) {
+          try {
+            await firebaseSendEmailVerification({ idToken: firebaseResult.idToken });
+          } catch {
+            // no-op
+          }
+          session.requiresEmailVerification = true;
+        }
+      } else {
+        session = await authRepo.loginAndIssueSession({
+          email: body.email,
+          password: body.password,
+        });
+      }
+      clearAuthFailures(requestIp);
+      recordAuthEvent({
+        eventType: "auth.login",
+        outcome: "success",
+        provider: config.authProvider,
+        userId: session.user?.id || "",
+        workspaceId: session.workspace?.id || "",
+        email: session.user?.email || body.email || "",
+        ip: requestIp,
+      });
+      sendJson(res, 200, { session });
+    } catch (error) {
+      const failure = registerAuthFailure(requestIp);
+      recordAuthEvent({
+        eventType: "auth.login",
+        outcome: "failure",
+        provider: config.authProvider,
+        email: body.email || "",
+        ip: requestIp,
+        reason: error instanceof Error ? error.message : "Login failed",
+        metadata: failure,
+      });
+      if (failure.requiresCaptcha) {
+        logger.warn("auth_suspicious_activity", {
+          ip: requestIp,
+          eventType: "auth.login",
+          failures: failure.count,
+        });
+      }
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Login failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/signup") {
+    const body = await readJsonBody(req);
+    if (body.workspaceId || body.workspaceName) {
+      sendJson(res, 400, { error: "Workspace override is not allowed in auth endpoints" });
+      return;
+    }
+    try {
+      let session;
+      if (config.authProvider === "firebase") {
+        const firebaseResult = await firebaseSignUpWithEmailPassword({
+          email: body.email,
+          password: body.password,
+          name: body.name || "",
+        });
+        const claims = await verifyFirebaseIdToken(firebaseResult.idToken);
+        const actor = await authRepo.resolveFirebaseActorFromClaims(claims);
+        session = buildFirebaseSessionPayload(firebaseResult, actor);
+        session.user.emailVerified = Boolean(actor.emailVerified);
+        if (config.authRequireEmailVerification && !actor.emailVerified) {
+          try {
+            await firebaseSendEmailVerification({ idToken: firebaseResult.idToken });
+          } catch {
+            // no-op
+          }
+          session.requiresEmailVerification = true;
+        }
+      } else {
+        session = await authRepo.signUpAndIssueSession({
+          email: body.email,
+          name: body.name,
+          password: body.password,
+        });
+      }
+      clearAuthFailures(requestIp);
+      recordAuthEvent({
+        eventType: "auth.signup",
+        outcome: "success",
+        provider: config.authProvider,
+        userId: session.user?.id || "",
+        workspaceId: session.workspace?.id || "",
+        email: session.user?.email || body.email || "",
+        ip: requestIp,
+      });
+      sendJson(res, 201, { session });
+    } catch (error) {
+      const failure = registerAuthFailure(requestIp);
+      recordAuthEvent({
+        eventType: "auth.signup",
+        outcome: "failure",
+        provider: config.authProvider,
+        email: body.email || "",
+        ip: requestIp,
+        reason: error instanceof Error ? error.message : "Sign up failed",
+        metadata: failure,
+      });
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Sign up failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/password-reset") {
+    const body = await readJsonBody(req);
+    if (config.authProvider !== "firebase") {
+      sendJson(res, 400, { error: "Password reset via API is only available with Firebase auth provider" });
+      return;
+    }
+    try {
+      await firebaseSendPasswordResetEmail({ email: body.email });
+      clearAuthFailures(requestIp);
+      recordAuthEvent({
+        eventType: "auth.password_reset.request",
+        outcome: "success",
+        provider: "firebase",
+        email: body.email || "",
+        ip: requestIp,
+      });
+      sendJson(res, 200, { ok: true });
+    } catch (error) {
+      const failure = registerAuthFailure(requestIp);
+      recordAuthEvent({
+        eventType: "auth.password_reset.request",
+        outcome: "failure",
+        provider: "firebase",
+        email: body.email || "",
+        ip: requestIp,
+        reason: error instanceof Error ? error.message : "Password reset failed",
+        metadata: failure,
+      });
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Password reset failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/refresh") {
+    const body = await readJsonBody(req);
+    if (config.authProvider !== "firebase") {
+      sendJson(res, 400, { error: "Token refresh is only available with Firebase auth provider" });
+      return;
+    }
+    try {
+      const refreshed = await firebaseRefreshIdToken(body.refreshToken);
+      const claims = await verifyFirebaseIdToken(refreshed.idToken);
+      const actor = await authRepo.resolveFirebaseActorFromClaims(claims);
+      const session = buildFirebaseSessionPayload(refreshed, actor);
+      session.user.emailVerified = Boolean(actor.emailVerified);
+      if (config.authRequireEmailVerification && !actor.emailVerified) {
+        session.requiresEmailVerification = true;
+      }
+      sendJson(res, 200, { session });
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Token refresh failed" });
+    }
+    return;
+  }
+
+  const actor = await buildActorFromRequest(req, {
+    url,
+    allowQueryToken: req.method === "GET" && url.pathname === "/api/events",
+  });
+  if (!actor) {
+    sendUnauthorized(res);
+    return;
+  }
+
+  const requiresEmailVerification =
+    config.authProvider === "firebase" &&
+    config.authRequireEmailVerification &&
+    !actor.emailVerified;
+
+  if (req.method === "GET" && url.pathname === "/api/auth/session") {
+    sendJson(res, 200, {
+      actor: {
+        userId: actor.userId,
+        userEmail: actor.userEmail,
+        userName: actor.userName || "",
+        workspaceId: actor.workspaceId,
+        workspaceName: actor.workspaceName,
+        workspaceSlug: actor.workspaceSlug || "",
+        role: actor.role,
+        emailVerified: Boolean(actor.emailVerified),
+        provider: actor.provider || config.authProvider,
+      },
+      requiresEmailVerification,
+    });
+    return;
+  }
+
+  if (requiresEmailVerification) {
+    const allowWhileUnverified =
+      (req.method === "POST" && url.pathname === "/api/auth/email-verification/send") ||
+      (req.method === "POST" && url.pathname === "/api/auth/signout-all") ||
+      (req.method === "DELETE" && url.pathname === "/api/auth/account");
+    if (!allowWhileUnverified) {
+      sendJson(res, 403, {
+        error: "Email verification required before accessing app data",
+        requiresEmailVerification: true,
+      });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/email-verification/send") {
+    if (config.authProvider !== "firebase") {
+      sendJson(res, 400, { error: "Email verification endpoint is only available with Firebase auth provider" });
+      return;
+    }
+    try {
+      await firebaseSendEmailVerification({ idToken: actor.token });
+      recordAuthEvent({
+        eventType: "auth.email_verification.send",
+        outcome: "success",
+        provider: "firebase",
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+      });
+      sendJson(res, 200, { ok: true });
+    } catch (error) {
+      recordAuthEvent({
+        eventType: "auth.email_verification.send",
+        outcome: "failure",
+        provider: "firebase",
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+        reason: error instanceof Error ? error.message : "Email verification send failed",
+      });
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Email verification send failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/password-change") {
+    const body = await readJsonBody(req);
+    try {
+      if (config.authProvider === "firebase") {
+        const updated = await firebaseChangePassword({
+          idToken: actor.token,
+          newPassword: body.newPassword,
+        });
+        const claims = await verifyFirebaseIdToken(updated.idToken);
+        const updatedActor = await authRepo.resolveFirebaseActorFromClaims(claims, {
+          preferredWorkspaceId: actor.workspaceId,
+        });
+        const session = buildFirebaseSessionPayload(updated, updatedActor);
+        session.user.emailVerified = Boolean(updatedActor.emailVerified);
+        sendJson(res, 200, { ok: true, session });
+      } else {
+        await authRepo.changeLocalPassword({
+          userId: actor.userId,
+          currentPassword: body.currentPassword,
+          newPassword: body.newPassword,
+        });
+        sendJson(res, 200, { ok: true });
+      }
+      recordAuthEvent({
+        eventType: "auth.password_change",
+        outcome: "success",
+        provider: config.authProvider,
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+      });
+    } catch (error) {
+      const failure = registerAuthFailure(requestIp);
+      recordAuthEvent({
+        eventType: "auth.password_change",
+        outcome: "failure",
+        provider: config.authProvider,
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+        reason: error instanceof Error ? error.message : "Password change failed",
+        metadata: failure,
+      });
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Password change failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/auth/signout-all") {
+    try {
+      if (config.authProvider === "firebase") {
+        await revokeFirebaseUserSessions(actor.authProviderSubject);
+      }
+      const localRevoked = await authRepo.revokeAllSessionsForUser(actor.userId);
+      recordAuthEvent({
+        eventType: "auth.signout_all",
+        outcome: "success",
+        provider: config.authProvider,
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+        metadata: { localRevoked: localRevoked.revoked || 0 },
+      });
+      sendJson(res, 200, { ok: true, revokedLocalSessions: localRevoked.revoked || 0 });
+    } catch (error) {
+      recordAuthEvent({
+        eventType: "auth.signout_all",
+        outcome: "failure",
+        provider: config.authProvider,
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+        reason: error instanceof Error ? error.message : "Sign out all failed",
+      });
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Sign out all failed" });
+    }
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/auth/account") {
+    const body = await readJsonBody(req);
+    try {
+      if (config.authProvider === "local") {
+        await authRepo.authenticateUser({
+          email: actor.userEmail,
+          password: body.password,
+        });
+      }
+      if (config.authProvider === "firebase") {
+        await deleteFirebaseUser(actor.authProviderSubject, { idToken: actor.token });
+      }
+      await authRepo.deleteUserAccount(actor.userId);
+      recordAuthEvent({
+        eventType: "auth.account_delete",
+        outcome: "success",
+        provider: config.authProvider,
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+      });
+      sendJson(res, 200, { ok: true, deleted: true });
+    } catch (error) {
+      recordAuthEvent({
+        eventType: "auth.account_delete",
+        outcome: "failure",
+        provider: config.authProvider,
+        userId: actor.userId,
+        workspaceId: actor.workspaceId,
+        email: actor.userEmail,
+        ip: requestIp,
+        reason: error instanceof Error ? error.message : "Account delete failed",
+      });
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Account delete failed" });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/workspaces") {
+    const items = await authRepo.listWorkspacesForUser(actor.userId);
+    sendJson(res, 200, { items, count: items.length });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/workspaces/invites/incoming") {
+    const items = await authRepo.listIncomingWorkspaceInvites(
+      actor.userEmail,
+      Number(url.searchParams.get("limit") || "50")
+    );
+    sendJson(res, 200, { items, count: items.length });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/workspaces/invites") {
+    if (!isWorkspaceManager(actor)) {
+      sendJson(res, 403, { error: "Forbidden: only workspace owners/admins can list invites" });
+      return;
+    }
+    const status = url.searchParams.get("status") || "";
+    const limit = Number(url.searchParams.get("limit") || "100");
+    const items = await authRepo.listWorkspaceInvites(actor.workspaceId, { status, limit });
+    sendJson(res, 200, { items, count: items.length });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/workspaces/invites") {
+    if (!isWorkspaceManager(actor)) {
+      sendJson(res, 403, { error: "Forbidden: only workspace owners/admins can create invites" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const invite = await authRepo.createWorkspaceInvite({
+        workspaceId: actor.workspaceId,
+        invitedByUserId: actor.userId,
+        email: body.email,
+        role: body.role || "member",
+        expiresInHours: Number(body.expiresInHours || "72"),
+      });
+      sendJson(res, 201, { invite });
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Invite create failed" });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname.startsWith("/api/workspaces/invites/") && url.pathname.endsWith("/accept")) {
+    const token = decodeURIComponent(
+      url.pathname.slice("/api/workspaces/invites/".length, url.pathname.lastIndexOf("/accept"))
+    ).trim();
+    if (!token) {
+      sendJson(res, 400, { error: "Missing invite token" });
+      return;
+    }
+    try {
+      const invite = await authRepo.acceptWorkspaceInvite({
+        token,
+        userId: actor.userId,
+        userEmail: actor.userEmail,
+      });
+      sendJson(res, 200, { invite });
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Invite accept failed" });
+    }
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/workspaces/invites/")) {
+    if (!isWorkspaceManager(actor)) {
+      sendJson(res, 403, { error: "Forbidden: only workspace owners/admins can revoke invites" });
+      return;
+    }
+    const inviteId = decodeURIComponent(url.pathname.slice("/api/workspaces/invites/".length)).trim();
+    if (!inviteId) {
+      sendJson(res, 400, { error: "Missing invite id" });
+      return;
+    }
+    try {
+      const invite = await authRepo.revokeWorkspaceInvite({ id: inviteId, workspaceId: actor.workspaceId });
+      sendJson(res, 200, { invite });
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Invite revoke failed" });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/auth/audit") {
+    if (!isWorkspaceManager(actor)) {
+      sendJson(res, 403, { error: "Forbidden: only workspace owners/admins can view auth audit logs" });
+      return;
+    }
+    const limit = Number(url.searchParams.get("limit") || "100");
+    const items = await authRepo.listAuthEventsForWorkspace(actor.workspaceId, limit);
+    sendJson(res, 200, { items, count: items.length });
+    return;
+  }
+
+  // SSE endpoint — requires an authenticated actor.
+  if (req.method === "GET" && url.pathname === "/api/events") {
+    handleSSE(req, res, actor);
     return;
   }
 
@@ -116,13 +908,17 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const result = await deleteMemory({ id });
-    if (!result.deleted) {
-      sendJson(res, 404, { error: `Memory not found: ${id}` });
-      return;
+    try {
+      const result = await deleteMemory({ id, actor });
+      if (!result.deleted) {
+        sendJson(res, 404, { error: `Memory not found: ${id}` });
+        return;
+      }
+      sendJson(res, 200, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Delete failed" });
     }
-
-    sendJson(res, 200, result);
     return;
   }
 
@@ -134,18 +930,13 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const result = await deleteProjectMemories({ project });
-    sendJson(res, 200, result);
-    return;
-  }
-
-  if (req.method === "GET" && url.pathname === "/api/health") {
-    sendJson(res, 200, {
-      ok: true,
-      serverTime: new Date().toISOString(),
-      openaiConfigured: hasOpenAI(),
-      cwd: process.cwd(),
-    });
+    try {
+      const result = await deleteProjectMemories({ project, actor });
+      sendJson(res, 200, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Delete project failed" });
+    }
     return;
   }
 
@@ -153,11 +944,12 @@ async function handleApi(req, res, url) {
     const query = url.searchParams.get("query") || "";
     const project = url.searchParams.get("project") || "";
     const limit = Number(url.searchParams.get("limit") || "20");
+    const offset = Number(url.searchParams.get("offset") || "0");
 
     const hasScopedSearch = Boolean(query.trim()) || Boolean(project.trim());
     const results = hasScopedSearch
-      ? await searchMemories({ query, project, limit })
-      : (await listRecentMemories(limit)).map((note, index) => ({
+      ? await searchMemories({ query, project, limit, actor })
+      : (await listRecentMemories(limit, offset, actor)).map((note, index) => ({
           rank: index + 1,
           score: 1,
           note,
@@ -166,25 +958,40 @@ async function handleApi(req, res, url) {
     sendJson(res, 200, {
       items: results,
       count: results.length,
+      offset,
+      limit,
+      hasMore: results.length === limit,
     });
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/api/recent") {
     const limit = Number(url.searchParams.get("limit") || "20");
-    const notes = await listRecentMemories(limit);
-    sendJson(res, 200, { items: notes, count: notes.length });
+    const offset = Number(url.searchParams.get("offset") || "0");
+    const notes = await listRecentMemories(limit, offset, actor);
+    sendJson(res, 200, {
+      items: notes,
+      count: notes.length,
+      offset,
+      limit,
+      hasMore: notes.length === limit,
+    });
     return;
   }
 
   if (req.method === "GET" && url.pathname === "/api/projects") {
-    const projects = listProjects();
+    const projects = await listProjects(actor);
     sendJson(res, 200, { items: projects, count: projects.length });
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/notes") {
     const body = await readJsonBody(req);
+    const validation = validateNotePayload(body);
+    if (!validation.valid) {
+      sendJson(res, 400, { error: validation.errors.join("; ") });
+      return;
+    }
     const note = await createMemory({
       content: body.content,
       sourceType: body.sourceType,
@@ -196,7 +1003,9 @@ async function handleApi(req, res, url) {
       project: body.project,
       metadata: {
         createdFrom: "web-app",
+        actorUserId: actor.userId,
       },
+      actor,
     });
     sendJson(res, 201, { note });
     return;
@@ -204,10 +1013,101 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/chat") {
     const body = await readJsonBody(req);
+    const wantsStream = (req.headers.accept || "").includes("text/event-stream");
+
+    if (wantsStream) {
+      // Streaming path: search first, then stream OpenAI tokens
+      const question = String(body.question || "").trim();
+      if (!question) {
+        sendJson(res, 400, { error: "Missing question" });
+        return;
+      }
+      const citations = await searchMemories({
+        query: question,
+        project: body.project || "",
+        limit: Number(body.limit || 6),
+        actor,
+      });
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+
+      // Send citations first
+      res.write(`event: citations\ndata: ${JSON.stringify({ citations })}\n\n`);
+
+      if (citations.length === 0) {
+        res.write(`event: token\ndata: ${JSON.stringify({ token: "No relevant memory found yet. Save a few notes first." })}\n\n`);
+        res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+        return;
+      }
+
+      try {
+        const context = buildCitationBlock(citations);
+        const streamResponse = await createStreamingResponse({
+          instructions:
+            "Answer ONLY using the provided memory snippets. Be concise. Every factual claim must cite at least one snippet using [N1], [N2], etc. If uncertain, say what is missing.",
+          input: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Question: ${question}\n\nMemory snippets:\n${context}`,
+                },
+              ],
+            },
+          ],
+          temperature: 0.2,
+        });
+
+        // Parse SSE from OpenAI stream
+        const reader = streamResponse.body;
+        let buffer = "";
+        for await (const chunk of reader) {
+          buffer += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(data);
+              // Handle responses API streaming format
+              if (parsed.type === "response.output_text.delta" && parsed.delta) {
+                res.write(`event: token\ndata: ${JSON.stringify({ token: parsed.delta })}\n\n`);
+              } else if (parsed.type === "response.completed") {
+                // done
+              }
+            } catch { /* skip non-JSON lines */ }
+          }
+        }
+
+        res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+      } catch {
+        // Fallback: send heuristic answer as single token
+        const answer = citations
+          .slice(0, 4)
+          .map((entry, idx) => `- [N${idx + 1}] ${entry.note.summary || ""}`)
+          .join("\n");
+        res.write(`event: token\ndata: ${JSON.stringify({ token: "Based on your saved notes:\n" + answer })}\n\n`);
+        res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+      }
+      return;
+    }
+
     const result = await askMemories({
       question: body.question,
       project: body.project,
       limit: Number(body.limit || 6),
+      actor,
     });
     sendJson(res, 200, result);
     return;
@@ -219,25 +1119,312 @@ async function handleApi(req, res, url) {
       task: body.task,
       project: body.project,
       limit: Number(body.limit || 8),
+      actor,
     });
     sendJson(res, 200, result);
     return;
   }
 
+  // Folder routes
+  if (req.method === "GET" && url.pathname === "/api/folders") {
+    const parentId = url.searchParams.get("parentId") || null;
+    const folders = await folderRepo.listFolders(parentId, actor.workspaceId);
+    sendJson(res, 200, { items: folders, count: folders.length });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/folders") {
+    const body = await readJsonBody(req);
+    try {
+      const folder = await folderRepo.createFolder({
+        name: body.name,
+        description: body.description,
+        color: body.color,
+        symbol: body.symbol,
+        parentId: body.parentId,
+        workspaceId: actor.workspaceId,
+      });
+      sendJson(res, 201, { folder });
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : "Create failed" });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.match(/^\/api\/folders\/[^/]+\/children$/)) {
+    const encodedId = url.pathname.slice("/api/folders/".length, url.pathname.lastIndexOf("/children"));
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing folder id" });
+      return;
+    }
+    const children = await folderRepo.listFolders(id, actor.workspaceId);
+    sendJson(res, 200, { items: children, count: children.length });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/folders/")) {
+    const encodedId = url.pathname.slice("/api/folders/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing folder id" });
+      return;
+    }
+    let folder = await folderRepo.getFolder(id, actor.workspaceId);
+    if (!folder) {
+      folder = await folderRepo.getFolderByName(id, actor.workspaceId);
+    }
+    if (!folder) {
+      sendJson(res, 404, { error: "Folder not found" });
+      return;
+    }
+    sendJson(res, 200, { folder });
+    return;
+  }
+
+  if (req.method === "PUT" && url.pathname.startsWith("/api/folders/")) {
+    const encodedId = url.pathname.slice("/api/folders/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing folder id" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const folder = await folderRepo.updateFolder(
+        id,
+        {
+          name: body.name,
+          description: body.description,
+          color: body.color,
+          symbol: body.symbol,
+          parentId: body.parentId,
+        },
+        actor.workspaceId
+      );
+      sendJson(res, 200, { folder });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Update failed";
+      sendJson(res, msg.includes("not found") ? 404 : 400, { error: msg });
+    }
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/folders/")) {
+    const encodedId = url.pathname.slice("/api/folders/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing folder id" });
+      return;
+    }
+    try {
+      const result = await folderRepo.deleteFolder(id, actor.workspaceId);
+      sendJson(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Delete failed";
+      sendJson(res, msg.includes("not found") ? 404 : 400, { error: msg });
+    }
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/tasks") {
     const status = url.searchParams.get("status") || "open";
-    const tasks = taskRepo.listTasks(status);
+    const tasks = await taskRepo.listTasks(status, actor.workspaceId);
     sendJson(res, 200, { items: tasks, count: tasks.length });
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/api/tasks") {
     const body = await readJsonBody(req);
-    const task = taskRepo.createTask({
+    const task = await taskRepo.createTask({
       title: body.title,
       status: body.status || "open",
+      workspaceId: actor.workspaceId,
     });
     sendJson(res, 201, { task });
+    return;
+  }
+
+  if (req.method === "PUT" && url.pathname.startsWith("/api/tasks/")) {
+    const encodedId = url.pathname.slice("/api/tasks/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing task id" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const task = await taskRepo.updateTask(
+        id,
+        {
+          title: body.title,
+          status: body.status,
+        },
+        actor.workspaceId
+      );
+      sendJson(res, 200, { task });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Update failed";
+      sendJson(res, msg.includes("not found") ? 404 : 400, { error: msg });
+    }
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/tasks/")) {
+    const encodedId = url.pathname.slice("/api/tasks/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing task id" });
+      return;
+    }
+    try {
+      const result = await taskRepo.deleteTask(id, actor.workspaceId);
+      sendJson(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Delete failed";
+      sendJson(res, msg.includes("not found") ? 404 : 400, { error: msg });
+    }
+    return;
+  }
+
+  // PUT /api/notes/:id — update a note
+  if (req.method === "PUT" && url.pathname.startsWith("/api/notes/")) {
+    const encodedId = url.pathname.slice("/api/notes/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const validation = validateNotePayload(body, { requireContent: false });
+    if (!validation.valid) {
+      sendJson(res, 400, { error: validation.errors.join("; ") });
+      return;
+    }
+    try {
+      const note = await updateMemory({
+        id,
+        content: body.content,
+        summary: body.summary,
+        tags: body.tags,
+        project: body.project,
+        actor,
+      });
+      sendJson(res, 200, { note });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Update failed";
+      sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
+    }
+    return;
+  }
+
+  // GET /api/tags — list all tags with counts
+  if (req.method === "GET" && url.pathname === "/api/tags") {
+    const tags = await listTags(actor);
+    sendJson(res, 200, { items: tags, count: tags.length });
+    return;
+  }
+
+  // POST /api/tags/rename — rename a tag across all notes
+  if (req.method === "POST" && url.pathname === "/api/tags/rename") {
+    const body = await readJsonBody(req);
+    if (!body.oldTag || !body.newTag) {
+      sendJson(res, 400, { error: "Missing oldTag or newTag" });
+      return;
+    }
+    if (!isWorkspaceManager(actor)) {
+      sendJson(res, 403, { error: "Forbidden: only workspace owners/admins can rename tags globally" });
+      return;
+    }
+    const updated = await noteRepo.renameTag(body.oldTag, body.newTag, actor.workspaceId);
+    sendJson(res, 200, { updated });
+    return;
+  }
+
+  // DELETE /api/tags/:tag — remove a tag from all notes
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/tags/")) {
+    const encodedTag = url.pathname.slice("/api/tags/".length);
+    const tag = decodeURIComponent(encodedTag || "").trim();
+    if (!tag) {
+      sendJson(res, 400, { error: "Missing tag" });
+      return;
+    }
+    if (!isWorkspaceManager(actor)) {
+      sendJson(res, 403, { error: "Forbidden: only workspace owners/admins can remove tags globally" });
+      return;
+    }
+    const updated = await noteRepo.removeTag(tag, actor.workspaceId);
+    sendJson(res, 200, { updated });
+    return;
+  }
+
+  // GET /api/stats — dashboard statistics
+  if (req.method === "GET" && url.pathname === "/api/stats") {
+    const stats = await getMemoryStats(actor);
+    sendJson(res, 200, stats);
+    return;
+  }
+
+  // POST /api/notes/batch-delete — delete multiple notes
+  if (req.method === "POST" && url.pathname === "/api/notes/batch-delete") {
+    const body = await readJsonBody(req);
+    const bv = validateBatchPayload(body);
+    if (!bv.valid) {
+      sendJson(res, 400, { error: bv.errors.join("; ") });
+      return;
+    }
+    try {
+      const result = await batchDeleteMemories({ ids: body.ids, actor });
+      sendJson(res, 200, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Batch delete failed" });
+    }
+    return;
+  }
+
+  // POST /api/notes/batch-move — move multiple notes to a project
+  if (req.method === "POST" && url.pathname === "/api/notes/batch-move") {
+    const body = await readJsonBody(req);
+    const bv = validateBatchPayload(body);
+    if (!bv.valid) {
+      sendJson(res, 400, { error: bv.errors.join("; ") });
+      return;
+    }
+    try {
+      const moved = await batchMoveMemories({
+        ids: body.ids,
+        project: body.project || "",
+        actor,
+      });
+      sendJson(res, 200, moved);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Batch move failed" });
+    }
+    return;
+  }
+
+  // GET /api/export — export notes as JSON or markdown
+  if (req.method === "GET" && url.pathname === "/api/export") {
+    const project = url.searchParams.get("project") || null;
+    const format = url.searchParams.get("format") || "json";
+    const data = await exportMemories({ project, format, actor });
+    if (format === "markdown") {
+      res.writeHead(200, {
+        "Content-Type": "text/markdown; charset=utf-8",
+        "Content-Disposition": "attachment; filename=notes-export.md",
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(data);
+    } else {
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": "attachment; filename=notes-export.json",
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(data);
+    }
     return;
   }
 
@@ -245,11 +1432,28 @@ async function handleApi(req, res, url) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const reqStart = Date.now();
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
+    // Rate limiting for API routes
+    if (url.pathname.startsWith("/api/") && req.method !== "OPTIONS") {
+      const rate = checkRate(req);
+      if (!rate.allowed) {
+        res.writeHead(429, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Retry-After": String(rate.retryAfter),
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(JSON.stringify({ error: "Too many requests", retryAfter: rate.retryAfter }));
+        requestLogger(req, res, reqStart);
+        return;
+      }
+    }
+
     if (url.pathname.startsWith("/api/")) {
       await handleApi(req, res, url);
+      requestLogger(req, res, reqStart);
       return;
     }
 
@@ -273,19 +1477,37 @@ const server = http.createServer(async (req, res) => {
 
     await serveFile(res, absolutePath);
   } catch (error) {
+    logger.error("request_error", {
+      method: req.method,
+      url: req.url,
+      error: error instanceof Error ? error.message : String(error),
+    });
     sendJson(res, 500, {
       error: error instanceof Error ? error.message : "Internal server error",
     });
   }
 });
 
-server.listen(config.port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`Project Memory server running on http://localhost:${config.port}`);
-  // eslint-disable-next-line no-console
-  console.log(`Using db: ${config.dbPath}`);
-  if (!hasOpenAI()) {
-    // eslint-disable-next-line no-console
-    console.log("OPENAI_API_KEY not set. Running with heuristic enrichment/retrieval fallback.");
-  }
+async function startServer() {
+  const { ensurePostgresReady } = await import("./postgres/runtime.js");
+  await ensurePostgresReady();
+
+  server.listen(config.port, () => {
+    logger.info("server_start", {
+      url: `http://localhost:${config.port}`,
+      dbProvider: providerName,
+      dbBridgeMode: storageBridgeMode,
+      openai: hasOpenAI(),
+    });
+    if (!hasOpenAI()) {
+      logger.warn("openai_missing", { msg: "Running with heuristic enrichment/retrieval fallback" });
+    }
+  });
+}
+
+startServer().catch((error) => {
+  logger.error("server_start_failed", {
+    message: error instanceof Error ? error.message : String(error),
+  });
+  process.exit(1);
 });

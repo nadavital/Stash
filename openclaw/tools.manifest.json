@@ -1,7 +1,7 @@
 {
-  "name": "project-memory-tools",
+  "name": "stash-tools",
   "version": "0.1.0",
-  "description": "OpenClaw command tools backed by local Project Memory database",
+  "description": "OpenClaw command tools backed by local Stash database",
   "command": "node",
   "args": ["openclaw/bridge.js"],
   "tools": [
@@ -11,6 +11,14 @@
       "arguments_schema": {
         "type": "object",
         "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
           "query": { "type": "string" },
           "project": { "type": "string" },
           "includeMarkdown": { "type": "boolean" },
@@ -24,7 +32,16 @@
       "description": "List open tasks",
       "arguments_schema": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          }
+        }
       }
     },
     {
@@ -33,6 +50,14 @@
       "arguments_schema": {
         "type": "object",
         "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
           "maxChars": { "type": "number" }
         }
       }
@@ -43,6 +68,14 @@
       "arguments_schema": {
         "type": "object",
         "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
           "id": { "type": "string" }
         },
         "required": ["id"]
@@ -54,6 +87,14 @@
       "arguments_schema": {
         "type": "object",
         "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
           "id": { "type": "string" }
         },
         "required": ["id"]
@@ -65,6 +106,14 @@
       "arguments_schema": {
         "type": "object",
         "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
           "project": { "type": "string" }
         },
         "required": ["project"]

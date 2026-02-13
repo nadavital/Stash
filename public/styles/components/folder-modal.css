@@ -1,0 +1,195 @@
+/* ---------- Folder / Create Modal ---------- */
+
+.folder-modal {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal-alt);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.folder-modal.hidden {
+  display: none;
+}
+
+.folder-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.folder-modal-panel {
+  position: relative;
+  z-index: 1;
+  width: min(480px, 100%);
+  border-radius: 20px;
+  border: 0;
+  background: var(--surface);
+  box-shadow: var(--shadow-elevated);
+  padding: 24px;
+  animation: modalIn 200ms ease;
+}
+
+.folder-modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--muted);
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-md);
+  line-height: var(--leading-none);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.folder-modal-close:hover {
+  color: var(--accent);
+  background: var(--hover-bg);
+}
+
+.folder-modal-heading {
+  margin: 0 0 20px;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.folder-form {
+  display: grid;
+  gap: 14px;
+}
+
+.folder-kind-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.folder-kind-choice {
+  border: 0;
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--muted);
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: var(--font-size-caption);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.folder-kind-choice.is-selected {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.folder-kind-choice:hover {
+  background: var(--hover-bg);
+}
+
+.folder-kind-choice.is-selected:hover {
+  background: var(--accent);
+}
+
+.folder-form-label {
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  margin-bottom: 4px;
+  display: block;
+}
+
+.folder-input,
+.folder-textarea {
+  margin-top: 0;
+}
+
+.folder-textarea {
+  resize: vertical;
+  min-height: 72px;
+  max-height: 160px;
+}
+
+#folder-style-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.folder-color-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.folder-color-choice {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background: var(--surface);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 150ms ease, transform 100ms ease;
+}
+
+.folder-color-choice:hover {
+  transform: scale(1.1);
+}
+
+.folder-color-choice.is-selected {
+  border-color: var(--ink);
+}
+
+.folder-color-row .folder-color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+}
+
+/* Folder modal color dots */
+.folder-color-dot[data-color="green"] { background: var(--folder-green); }
+.folder-color-dot[data-color="blue"] { background: var(--folder-blue); }
+.folder-color-dot[data-color="purple"] { background: var(--folder-purple); }
+.folder-color-dot[data-color="orange"] { background: var(--folder-orange); }
+.folder-color-dot[data-color="pink"] { background: var(--folder-pink); }
+.folder-color-dot[data-color="red"] { background: var(--folder-red); }
+.folder-color-dot[data-color="yellow"] { background: var(--folder-yellow); }
+
+.folder-form-actions {
+  margin-top: 4px;
+}
+
+.folder-create-btn {
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  min-height: 40px;
+  padding: 0 20px;
+  font-weight: var(--weight-medium);
+  font-size: var(--font-size-body-sm);
+  transition: background 150ms ease, transform 100ms ease;
+}
+
+.folder-create-btn:hover {
+  background: var(--accent-deep);
+}
+
+.folder-create-btn:active {
+  transform: scale(0.96);
+}

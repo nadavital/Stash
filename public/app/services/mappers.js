@@ -221,6 +221,9 @@ export function adaptNotesResponse(payload) {
   return {
     items,
     count: Math.max(0, Math.floor(toFiniteNumber(source.count ?? source.total ?? source.totalCount ?? source.meta?.count, items.length))),
+    offset: Math.max(0, Math.floor(toFiniteNumber(source.offset, 0))),
+    limit: Math.max(0, Math.floor(toFiniteNumber(source.limit, 20))),
+    hasMore: typeof source.hasMore === "boolean" ? source.hasMore : false,
   };
 }
 

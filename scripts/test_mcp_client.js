@@ -6,6 +6,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 const SERVER_PATH = path.join(ROOT, "mcp/server.js");
+const SESSION_TOKEN = String(process.env.STASH_SESSION_TOKEN || "").trim();
+const WORKSPACE_ID = String(process.env.STASH_WORKSPACE_ID || "").trim();
 
 function encodeMessage(payload) {
   const body = JSON.stringify(payload);
@@ -61,6 +63,11 @@ function parseToolPayload(callResponse) {
 }
 
 async function main() {
+  if (!SESSION_TOKEN) {
+    console.error("Missing auth token. Set STASH_SESSION_TOKEN before running this script.");
+    process.exit(1);
+  }
+
   const child = spawn("node", [SERVER_PATH], {
     cwd: ROOT,
     stdio: ["pipe", "pipe", "pipe"],
@@ -143,7 +150,14 @@ async function main() {
     ];
 
     for (const check of checks) {
-      const call = await rpc("tools/call", { name: check.name, arguments: check.args });
+      const call = await rpc("tools/call", {
+        name: check.name,
+        arguments: {
+          sessionToken: SESSION_TOKEN,
+          ...(WORKSPACE_ID ? { workspaceId: WORKSPACE_ID } : {}),
+          ...check.args,
+        },
+      });
       const parsed = parseToolPayload(call);
       if (!parsed.ok) {
         console.error(`${check.name}: ERROR -> ${parsed.error}`);

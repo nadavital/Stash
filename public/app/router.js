@@ -25,6 +25,7 @@ function parseRouteFromHash(hash) {
 
 export function createRouter({ mountNode, pages }) {
   let activeCleanup = null;
+  let started = false;
 
   function navigate(nextHash) {
     const hash = String(nextHash || "#/home");
@@ -35,7 +36,7 @@ export function createRouter({ mountNode, pages }) {
     window.location.hash = hash;
   }
 
-  function render() {
+  async function render() {
     const route = parseRouteFromHash(window.location.hash);
     const page = pages[route.name] || pages.home;
 
@@ -43,6 +44,8 @@ export function createRouter({ mountNode, pages }) {
       activeCleanup();
       activeCleanup = null;
     }
+
+    window.scrollTo(0, 0);
 
     const maybeCleanup = page.mount({
       mountNode,
@@ -52,19 +55,17 @@ export function createRouter({ mountNode, pages }) {
 
     if (typeof maybeCleanup === "function") {
       activeCleanup = maybeCleanup;
-      return;
-    }
-
-    if (maybeCleanup && typeof maybeCleanup.then === "function") {
-      maybeCleanup.then((cleanup) => {
-        if (typeof cleanup === "function") {
-          activeCleanup = cleanup;
-        }
-      });
+    } else if (maybeCleanup && typeof maybeCleanup.then === "function") {
+      const cleanup = await maybeCleanup;
+      if (typeof cleanup === "function") {
+        activeCleanup = cleanup;
+      }
     }
   }
 
   function start() {
+    if (started) return;
+    started = true;
     if (!window.location.hash) {
       window.location.hash = "#/";
     }
@@ -72,8 +73,19 @@ export function createRouter({ mountNode, pages }) {
     render();
   }
 
+  function stop() {
+    if (!started) return;
+    started = false;
+    window.removeEventListener("hashchange", render);
+    if (typeof activeCleanup === "function") {
+      activeCleanup();
+      activeCleanup = null;
+    }
+  }
+
   return {
     start,
+    stop,
     navigate,
   };
 }

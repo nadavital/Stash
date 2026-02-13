@@ -1,0 +1,155 @@
+import { buildNoteTitle } from "../../services/mappers.js";
+import { normalizeCitation } from "../../services/mappers.js";
+
+export function renderChatPanelHTML() {
+  return `
+    <div id="chat-panel" class="chat-panel hidden" aria-label="Chat with your notes">
+      <div class="chat-panel-header">
+        <h4 class="chat-panel-heading">Ask your notes</h4>
+        <button id="chat-panel-close" class="chat-panel-close" type="button" aria-label="Close chat">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>
+        </button>
+      </div>
+      <div id="chat-panel-messages" class="chat-panel-messages"></div>
+      <div class="chat-panel-citations hidden" id="chat-panel-citations"></div>
+      <form id="chat-panel-form" class="chat-panel-form">
+        <input id="chat-panel-input" class="chat-panel-input" type="text" placeholder="Ask a question..." autocomplete="off" />
+        <button id="chat-panel-send" class="chat-panel-send" type="submit" aria-label="Send">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2L7 9M14 2L10 14L7 9L2 6L14 2Z"/>
+          </svg>
+        </button>
+      </form>
+    </div>
+  `;
+}
+
+export function queryChatPanelEls(root) {
+  return {
+    chatPanel: root.querySelector("#chat-panel"),
+    chatPanelClose: root.querySelector("#chat-panel-close"),
+    chatPanelMessages: root.querySelector("#chat-panel-messages"),
+    chatPanelCitations: root.querySelector("#chat-panel-citations"),
+    chatPanelForm: root.querySelector("#chat-panel-form"),
+    chatPanelInput: root.querySelector("#chat-panel-input"),
+    chatPanelSend: root.querySelector("#chat-panel-send"),
+  };
+}
+
+export function initChatPanel(els, { apiClient, toast }) {
+  const handlers = [];
+  let isAsking = false;
+
+  function addHandler(target, event, handler) {
+    if (!target) return;
+    target.addEventListener(event, handler);
+    handlers.push(() => target.removeEventListener(event, handler));
+  }
+
+  function togglePanel(show) {
+    if (!els.chatPanel) return;
+    if (typeof show === "boolean") {
+      els.chatPanel.classList.toggle("hidden", !show);
+    } else {
+      els.chatPanel.classList.toggle("hidden");
+    }
+    if (!els.chatPanel.classList.contains("hidden")) {
+      els.chatPanelInput?.focus();
+    }
+  }
+
+  function addMessage(role, text) {
+    if (!els.chatPanelMessages) return;
+    const msg = document.createElement("div");
+    msg.className = `chat-msg chat-msg--${role}`;
+    msg.textContent = text;
+    els.chatPanelMessages.appendChild(msg);
+    els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
+    return msg;
+  }
+
+  function renderCitations(citations) {
+    if (!els.chatPanelCitations || !citations.length) return;
+    els.chatPanelCitations.classList.remove("hidden");
+    els.chatPanelCitations.innerHTML = "";
+    const heading = document.createElement("p");
+    heading.className = "chat-citations-heading";
+    heading.textContent = "Sources";
+    els.chatPanelCitations.appendChild(heading);
+
+    citations.slice(0, 6).forEach((entry, index) => {
+      const citation = normalizeCitation(entry, index);
+      const item = document.createElement("div");
+      item.className = "chat-citation-item";
+      item.textContent = `[N${index + 1}] ${buildNoteTitle(citation.note)}`;
+      els.chatPanelCitations.appendChild(item);
+    });
+  }
+
+  async function handleSubmit() {
+    if (isAsking) return;
+    const question = (els.chatPanelInput?.value || "").trim();
+    if (!question) return;
+
+    addMessage("user", question);
+    if (els.chatPanelInput) els.chatPanelInput.value = "";
+    if (els.chatPanelCitations) {
+      els.chatPanelCitations.classList.add("hidden");
+      els.chatPanelCitations.innerHTML = "";
+    }
+
+    isAsking = true;
+    const assistantMsg = addMessage("assistant", "");
+
+    try {
+      await apiClient.askStreaming(
+        { question },
+        {
+          onCitations(citations) {
+            renderCitations(citations);
+          },
+          onToken(token) {
+            if (assistantMsg) {
+              assistantMsg.textContent += token;
+              els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
+            }
+          },
+          onDone() {
+            if (assistantMsg && !assistantMsg.textContent.trim()) {
+              assistantMsg.textContent = "No answer generated.";
+            }
+          },
+          onError(error) {
+            // Fallback to non-streaming
+            fallbackAsk(question, assistantMsg);
+          },
+        }
+      );
+    } catch {
+      await fallbackAsk(question, assistantMsg);
+    } finally {
+      isAsking = false;
+    }
+  }
+
+  async function fallbackAsk(question, msgEl) {
+    try {
+      const result = await apiClient.ask({ question });
+      if (msgEl) msgEl.textContent = result.text || "No answer.";
+      if (result.citations) renderCitations(result.citations);
+    } catch (error) {
+      if (msgEl) msgEl.textContent = "Failed to get answer.";
+    }
+  }
+
+  addHandler(els.chatPanelClose, "click", () => togglePanel(false));
+  addHandler(els.chatPanelForm, "submit", (e) => {
+    e.preventDefault();
+    handleSubmit();
+  });
+
+  return {
+    toggle: togglePanel,
+    dispose: () => handlers.forEach((fn) => fn()),
+  };
+}

@@ -1,9 +1,9 @@
 ---
-name: project-memory-openai-ui
-description: Design and implement the Project Memory frontend in a calm OpenAI-inspired style with clear hierarchy, focused capture/search/chat interactions, and polished feedback states. Use when creating or refining layout, visual system, motion, interaction copy, and responsive behavior in public/index.html, public/styles.css, and public/app.js.
+name: stash-openai-ui
+description: Design and implement the Stash frontend in a calm OpenAI-inspired style with clear hierarchy, focused capture/search/chat interactions, and polished feedback states. Use when creating or refining layout, visual system, motion, interaction copy, and responsive behavior in public/index.html, public/styles.css, and public/app.js.
 ---
 
-# Project Memory OpenAI UI
+# Stash OpenAI UI
 
 Use this skill when building or refining the web app UX in `public/`.
 
@@ -75,7 +75,7 @@ Use this skill when building or refining the web app UX in `public/`.
 
 - Keep backend response handling behind an adapter function in frontend code.
 - Do not block UX improvements on backend endpoint completion.
-- Prefer additive, modular CSS/JS changes over broad rewrites during hackathon time.
+- Prefer additive, modular CSS/JS changes over broad rewrites during rapid iteration.
 - Preserve existing fallback behavior for heuristic mode.
 
 ## Done criteria

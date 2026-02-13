@@ -1,0 +1,118 @@
+/* ---------- Batch Select Mode ---------- */
+
+.batch-select-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  z-index: 2;
+  display: none;
+}
+
+.select-mode .batch-select-checkbox {
+  display: block;
+}
+
+.select-mode .recent-item-row,
+.select-mode .folder-file-tile-shell {
+  position: relative;
+}
+
+.select-mode .recent-item {
+  padding-left: 32px;
+}
+
+.select-mode .folder-file-tile {
+  padding-left: 32px;
+}
+
+/* Batch action bar */
+.batch-action-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--shadow-elevated);
+  animation: slideUp 200ms ease;
+}
+
+.batch-action-bar.hidden {
+  display: none;
+}
+
+.batch-action-count {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  margin-right: auto;
+}
+
+.batch-action-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  background: transparent;
+  color: var(--ink);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.batch-action-btn:hover {
+  background: var(--hover-bg);
+}
+
+.batch-action-btn--danger {
+  color: var(--error, #e53e3e);
+  border-color: var(--error, #e53e3e);
+}
+
+.batch-action-btn--danger:hover {
+  background: var(--error, #e53e3e);
+  color: #fff;
+}
+
+.batch-cancel-btn {
+  background: transparent;
+  color: var(--muted);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+/* Select mode toggle in topbar */
+.topbar-select-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.topbar-select-btn:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.topbar-select-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}

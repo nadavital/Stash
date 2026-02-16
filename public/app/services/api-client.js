@@ -485,6 +485,20 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return adaptHealthResponse(payload);
     },
 
+    async fetchNote(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing id");
+      return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}`);
+    },
+
+    async fetchRelatedNotes(id, limit = 5) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing id");
+      const params = new URLSearchParams();
+      if (limit) params.set("limit", String(limit));
+      return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/related?${params.toString()}`);
+    },
+
     async fetchNotes({ query = "", project = "", limit = 80, offset = 0 } = {}) {
       const params = new URLSearchParams();
       if (query) params.set("query", query);
@@ -540,6 +554,9 @@ export function createApiClient({ adapterDebug = false } = {}) {
           throw authError;
         }
 
+        const body = { ...payload };
+        if (body.contextNoteId) body.contextNoteId = body.contextNoteId;
+
         const response = await fetch(API_ENDPOINTS.chat, {
           method: "POST",
           headers: {
@@ -548,7 +565,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
             Authorization: `Bearer ${token}`,
             ...(selectedWorkspaceId ? { "X-Workspace-Id": selectedWorkspaceId } : {}),
           },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(body),
         });
 
         if (!response.ok) {

@@ -8,6 +8,49 @@
   min-height: 0;
 }
 
+/* ── Context chip (above composer) ─────────────────────── */
+
+.chat-context-chip {
+  flex-shrink: 0;
+  margin: 0 var(--space-4) var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface-strong) 70%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: fit-content;
+}
+
+.chat-context-chip.hidden {
+  display: none;
+}
+
+/* ── Context divider ──────────────────────────────────── */
+
+.chat-context-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-2xs);
+  color: var(--muted);
+  padding: var(--space-1) 0;
+}
+
+.chat-context-divider::before,
+.chat-context-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
 /* ── Messages ──────────────────────────────────────────── */
 
 .chat-panel-messages {

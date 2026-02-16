@@ -43,17 +43,30 @@ export function initAppShell(els, { store, apiClient, auth }) {
   });
   disposers.push(chatPanel.dispose);
 
-  // Set chat project scope based on route
+  // Set chat context based on route
   function updateContext(route) {
-    const isHome = !route || route.name === "home";
-    const chatProjectHint = isHome ? "" : (route.folderId || "");
-    store.setState({ chatProjectHint });
+    if (!route || route.name === "home") {
+      store.setState({ chatContext: { type: "home" } });
+    } else if (route.name === "folder") {
+      store.setState({ chatContext: { type: "folder", folderId: route.folderId || "" } });
+    } else if (route.name === "item") {
+      store.setState({ chatContext: { type: "item", itemId: route.itemId || "" } });
+    } else {
+      store.setState({ chatContext: { type: "home" } });
+    }
+  }
+
+  function setItemContext(itemId, itemTitle) {
+    store.setState({
+      chatContext: { type: "item", itemId: itemId || "", itemTitle: itemTitle || "" },
+    });
   }
 
   return {
     els,
     chatPanel,
     updateContext,
+    setItemContext,
     getContentSlot() {
       return els.contentSlot;
     },

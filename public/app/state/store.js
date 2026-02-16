@@ -15,7 +15,7 @@ const DEFAULT_STATE = {
   toastTimer: null,
   chatMessages: [],
   chatCitations: [],
-  chatProjectHint: "",
+  chatContext: { type: "home" },
 };
 
 export function createStore() {

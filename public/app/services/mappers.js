@@ -638,6 +638,44 @@ export function extractStandaloneUrl(text) {
   }
 }
 
+function noteIconType(note) {
+  if (note.sourceType === "image") return "image";
+  if (note.sourceType === "link") return "link";
+  if ((note.sourceType || "").toLowerCase() === "file") return "file";
+  return "text";
+}
+
+export function applySortFilter(items, { sortMode = "newest", filterType = "all" } = {}) {
+  if (!Array.isArray(items)) return [];
+  let filtered = items;
+  if (filterType !== "all") {
+    filtered = items.filter((entry, index) => {
+      const note = normalizeCitation(entry, index).note;
+      return noteIconType(note) === filterType;
+    });
+  }
+  if (sortMode === "oldest") {
+    filtered = [...filtered].sort((a, b) => {
+      const na = normalizeCitation(a, 0).note;
+      const nb = normalizeCitation(b, 0).note;
+      return (na.createdAt || "").localeCompare(nb.createdAt || "");
+    });
+  } else if (sortMode === "az") {
+    filtered = [...filtered].sort((a, b) => {
+      const na = normalizeCitation(a, 0).note;
+      const nb = normalizeCitation(b, 0).note;
+      return buildNoteTitle(na).localeCompare(buildNoteTitle(nb));
+    });
+  } else if (sortMode === "za") {
+    filtered = [...filtered].sort((a, b) => {
+      const na = normalizeCitation(a, 0).note;
+      const nb = normalizeCitation(b, 0).note;
+      return buildNoteTitle(nb).localeCompare(buildNoteTitle(na));
+    });
+  }
+  return filtered;
+}
+
 export function inferCaptureType(content, imageDataUrl) {
   if (imageDataUrl) {
     return { sourceType: "image", sourceUrl: "" };

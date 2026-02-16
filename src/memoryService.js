@@ -1843,13 +1843,66 @@ export function buildCitationBlock(citations) {
     .join("\n\n");
 }
 
-export async function askMemories({ question, project = "", limit = 6, actor = null }) {
+export async function findRelatedMemories({ id, limit = 5, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const boundedLimit = clampInt(limit, 1, 20, 5);
+  const sourceNote = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!sourceNote) throw new Error(`Memory not found: ${normalizedId}`);
+  assertCanReadNote(sourceNote, actorContext);
+
+  const candidates = await listSearchCandidatesForActor(actorContext, "", 500);
+  if (candidates.length <= 1) return [];
+
+  const sourceEmbedding = Array.isArray(sourceNote.embedding)
+    ? sourceNote.embedding
+    : pseudoEmbedding(`${sourceNote.content}\n${sourceNote.summary}`);
+
+  const scored = candidates
+    .filter((note) => note.id !== normalizedId)
+    .map((note) => {
+      const noteEmbedding = Array.isArray(note.embedding)
+        ? note.embedding
+        : pseudoEmbedding(`${note.content}\n${note.summary}`);
+      const score = cosineSimilarity(sourceEmbedding, noteEmbedding);
+      return { note, score };
+    })
+    .filter((entry) => entry.score > 0.05)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, boundedLimit);
+
+  return scored.map((entry, index) => materializeCitation(entry.note, entry.score, index + 1));
+}
+
+export async function askMemories({ question, project = "", limit = 6, contextNoteId = "", actor = null }) {
   const normalizedQuestion = String(question || "").trim();
   if (!normalizedQuestion) {
     throw new Error("Missing question");
   }
 
-  const citations = await searchMemories({ query: normalizedQuestion, project, limit, actor });
+  let citations = await searchMemories({ query: normalizedQuestion, project, limit, actor });
+
+  // If contextNoteId provided, prepend that note as primary citation
+  const normalizedContextId = String(contextNoteId || "").trim();
+  if (normalizedContextId) {
+    const actorContext = resolveActor(actor);
+    try {
+      const contextNote = await noteRepo.getNoteById(normalizedContextId, actorContext.workspaceId);
+      if (contextNote && canReadNote(contextNote, actorContext)) {
+        const contextCitation = materializeCitation(contextNote, 1.0, 0);
+        // Deduplicate if note already in results
+        citations = citations.filter((c) => c.note?.id !== normalizedContextId);
+        citations = [contextCitation, ...citations].slice(0, limit);
+        // Re-number ranks
+        citations = citations.map((c, i) => ({ ...c, rank: i + 1 }));
+      }
+    } catch {
+      // Context note fetch failed, proceed with normal citations
+    }
+  }
+
   if (citations.length === 0) {
     return {
       answer: "No relevant memory found yet. Save a few notes first.",

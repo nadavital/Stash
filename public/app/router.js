@@ -20,6 +20,13 @@ function parseRouteFromHash(hash) {
     };
   }
 
+  if (parts[0] === "item") {
+    return {
+      name: "item",
+      itemId: parts[1] || "",
+    };
+  }
+
   return { name: "home" };
 }
 

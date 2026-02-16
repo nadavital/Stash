@@ -7,6 +7,7 @@ export function renderChatPanelHTML() {
     <div id="chat-panel" class="chat-panel" aria-label="Chat with your notes">
       <div id="chat-panel-messages" class="chat-panel-messages"></div>
       <div class="chat-panel-citations hidden" id="chat-panel-citations"></div>
+      <div id="chat-context-header" class="chat-context-chip hidden"></div>
       <form id="chat-panel-form" class="chat-panel-form">
         <div class="chat-panel-input-wrap">
           <textarea id="chat-panel-input" class="chat-panel-input" rows="2" placeholder="Ask about your notes..." autocomplete="off"></textarea>
@@ -25,6 +26,7 @@ export function renderChatPanelHTML() {
 export function queryChatPanelEls(root) {
   return {
     chatPanel: root.querySelector("#chat-panel"),
+    chatContextHeader: root.querySelector("#chat-context-header"),
     chatPanelMessages: root.querySelector("#chat-panel-messages"),
     chatPanelCitations: root.querySelector("#chat-panel-citations"),
     chatPanelForm: root.querySelector("#chat-panel-form"),
@@ -37,6 +39,43 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
   const handlers = [];
   let isAsking = false;
   let nextProjectHint = "";
+  let lastContextLabel = "";
+
+  function updateContextHeader() {
+    if (!els.chatContextHeader || !store) return;
+    const ctx = store.getState().chatContext || { type: "home" };
+    let label = "";
+    if (ctx.type === "item" && ctx.itemTitle) {
+      label = `Viewing: ${ctx.itemTitle}`;
+    } else if (ctx.type === "folder" && ctx.folderId) {
+      label = `In: ${ctx.folderId}`;
+    }
+
+    // Only show navigation dividers when there are actual chat messages
+    const hasMessages = store && (store.getState().chatMessages || []).length > 0;
+    if (label !== lastContextLabel && lastContextLabel && els.chatPanelMessages && hasMessages) {
+      const divider = document.createElement("div");
+      divider.className = "chat-context-divider";
+      divider.textContent = label || "Home";
+      els.chatPanelMessages.appendChild(divider);
+      els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
+    }
+    lastContextLabel = label;
+
+    if (label) {
+      els.chatContextHeader.textContent = label;
+      els.chatContextHeader.classList.remove("hidden");
+    } else {
+      els.chatContextHeader.classList.add("hidden");
+      els.chatContextHeader.textContent = "";
+    }
+  }
+
+  if (store) {
+    const unsubContext = store.subscribe(() => updateContextHeader());
+    handlers.push(unsubContext);
+    updateContextHeader();
+  }
 
   function addHandler(target, event, handler) {
     if (!target) return;
@@ -185,7 +224,18 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
     if (isAsking) return false;
     const question = String(rawQuestion || "").trim();
     if (!question) return false;
-    const project = String(projectHint || nextProjectHint || "").trim();
+
+    // Read context from store
+    const ctx = store ? (store.getState().chatContext || { type: "home" }) : { type: "home" };
+    let project = String(projectHint || nextProjectHint || "").trim();
+    let contextNoteId = "";
+
+    if (ctx.type === "item" && ctx.itemId) {
+      contextNoteId = ctx.itemId;
+    } else if (ctx.type === "folder" && ctx.folderId && !project) {
+      project = ctx.folderId;
+    }
+
     nextProjectHint = "";
 
     addMessage("user", question);
@@ -217,7 +267,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
 
     try {
       await apiClient.askStreaming(
-        { question, project: project || undefined },
+        { question, project: project || undefined, contextNoteId: contextNoteId || undefined },
         {
           onCitations(citations) {
             renderCitations(citations);

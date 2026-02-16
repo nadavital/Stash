@@ -16,6 +16,7 @@ import {
   deleteMemory,
   deleteProjectMemories,
   exportMemories,
+  findRelatedMemories,
   getMemoryStats,
   listProjects,
   listRecentMemories,
@@ -945,6 +946,48 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // GET /api/notes/:id/related — find semantically related notes
+  if (req.method === "GET" && url.pathname.match(/^\/api\/notes\/[^/]+\/related$/)) {
+    const suffix = "/related";
+    const encodedId = url.pathname.slice("/api/notes/".length, -suffix.length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    const limit = Number(url.searchParams.get("limit") || "5");
+    try {
+      const items = await findRelatedMemories({ id, limit, actor });
+      sendJson(res, 200, { items, count: items.length });
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Related lookup failed" });
+    }
+    return;
+  }
+
+  // GET /api/notes/:id — fetch single note by id
+  if (req.method === "GET" && url.pathname.match(/^\/api\/notes\/[^/]+$/) && !url.pathname.endsWith("/batch-delete") && !url.pathname.endsWith("/batch-move")) {
+    const encodedId = url.pathname.slice("/api/notes/".length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    try {
+      const note = await noteRepo.getNoteById(id, actor.workspaceId);
+      if (!note) {
+        sendJson(res, 404, { error: `Note not found: ${id}` });
+        return;
+      }
+      sendJson(res, 200, { note });
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Fetch failed" });
+    }
+    return;
+  }
+
   if (req.method === "DELETE" && url.pathname.startsWith("/api/notes/")) {
     const encodedId = url.pathname.slice("/api/notes/".length);
     const id = decodeURIComponent(encodedId || "").trim();
@@ -1067,12 +1110,24 @@ async function handleApi(req, res, url) {
         sendJson(res, 400, { error: "Missing question" });
         return;
       }
-      const citations = await searchMemories({
+      let citations = await searchMemories({
         query: question,
         project: body.project || "",
         limit: Number(body.limit || 6),
         actor,
       });
+
+      // If contextNoteId is provided, prepend that note as the primary citation
+      const contextNoteId = String(body.contextNoteId || "").trim();
+      if (contextNoteId) {
+        try {
+          const contextNote = await noteRepo.getNoteById(contextNoteId, actor.workspaceId);
+          if (contextNote) {
+            citations = citations.filter((c) => String(c.note?.id || "") !== contextNoteId);
+            citations.unshift({ rank: 0, score: 1.0, note: contextNote });
+          }
+        } catch { /* ignore — context note fetch is best-effort */ }
+      }
 
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -1152,6 +1207,7 @@ async function handleApi(req, res, url) {
       question: body.question,
       project: body.project,
       limit: Number(body.limit || 6),
+      contextNoteId: body.contextNoteId || "",
       actor,
     });
     sendJson(res, 200, result);

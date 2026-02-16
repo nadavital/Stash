@@ -10,6 +10,7 @@ import {
 } from "./components/app-shell/app-shell.js";
 import { createFolderPage } from "./pages/folder-page.js";
 import { createHomePage } from "./pages/home-page.js";
+import { createItemPage } from "./pages/item-page.js";
 import { createRouter } from "./router.js";
 import { createApiClient } from "./services/api-client.js";
 import { createStore } from "./state/store.js";
@@ -76,6 +77,7 @@ function mountAppShell() {
   const pages = {
     home: createHomePage({ store, apiClient, auth, shell }),
     folder: createFolderPage({ store, apiClient, auth, shell }),
+    item: createItemPage({ store, apiClient, auth, shell }),
   };
 
   router = createRouter({

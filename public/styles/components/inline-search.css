@@ -1,24 +1,27 @@
-/* ---------- Inline Search ---------- */
+/* ---------- Inline Search --------- */
 
 .inline-search {
   margin-bottom: 4px;
+  display: none;
+}
+
+.inline-search.is-visible {
+  display: block;
 }
 
 .inline-search-input {
   width: 100%;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: var(--input-bg);
-  padding: 9px 14px;
+  padding: 10px 16px;
   font-size: var(--font-size-body-sm);
   color: var(--ink);
-  transition: background 150ms, box-shadow 150ms;
+  transition: background 180ms ease;
 }
 
 .inline-search-input:focus {
   outline: none;
-  background: var(--surface);
-  box-shadow: 0 0 0 1px var(--border-strong);
 }
 
 .inline-search-input::placeholder {
@@ -28,7 +31,7 @@
 /* Inline search results */
 .inline-search-results {
   display: grid;
-  gap: 4px;
+  gap: 6px;
   padding-top: 8px;
 }
 
@@ -43,7 +46,7 @@
   width: 100%;
   border: 0;
   background: var(--surface-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   padding: 10px;
   text-align: left;
   display: grid;
@@ -51,18 +54,24 @@
   gap: 10px;
   align-items: center;
   cursor: pointer;
-  transition: background 150ms ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: background 150ms ease, transform 150ms ease;
 }
 
 .inline-search-result:hover {
   background: var(--hover-bg);
+  transform: translateY(-1px);
+}
+
+.inline-search-result:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .inline-search-result-icon {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 6px;
-  background: var(--subtle-bg);
+  background: var(--hover-bg);
   color: var(--muted);
   display: inline-flex;
   align-items: center;

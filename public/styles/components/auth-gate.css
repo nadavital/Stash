@@ -7,11 +7,17 @@
 
 .auth-gate-card {
   width: min(520px, 100%);
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: var(--radius-lg);
-  background: linear-gradient(160deg, var(--surface) 0%, color-mix(in srgb, var(--surface) 92%, var(--accent-soft) 8%) 100%);
-  box-shadow: var(--shadow-elevated);
+  background: var(--surface);
+  box-shadow: 0 24px 80px -12px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.04);
   padding: 28px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .auth-gate-card {
+    box-shadow: 0 24px 80px -12px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.2);
+  }
 }
 
 .auth-gate-kicker {
@@ -95,7 +101,7 @@
 
 .auth-gate-info {
   margin-top: 4px;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border: 0;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
   color: var(--accent-deep);
@@ -105,7 +111,7 @@
 
 .auth-gate-error {
   margin-top: 4px;
-  border: 1px solid var(--danger-border);
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--danger-soft);
   color: var(--danger);
@@ -116,19 +122,21 @@
 .auth-gate-submit {
   margin-top: 8px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--on-accent);
   min-height: 42px;
-  padding: 0 16px;
+  padding: 0 20px;
   font-size: var(--font-size-body-sm);
   font-weight: var(--weight-semibold);
   cursor: pointer;
-  transition: background var(--transition-fast), transform 100ms ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: background var(--transition-fast), transform 100ms ease, box-shadow var(--transition-fast);
 }
 
 .auth-gate-submit:hover {
   background: var(--accent-deep);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .auth-gate-submit:active {
@@ -154,20 +162,26 @@
 }
 
 .auth-gate-mode-toggle {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--surface-subtle);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
   color: var(--ink);
   min-height: 36px;
-  padding: 0 12px;
+  padding: 0 14px;
   font-size: var(--font-size-caption);
   font-weight: var(--weight-semibold);
   cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  transition: background 150ms ease, color 150ms ease;
 }
 
 .auth-gate-mode-toggle:hover {
-  border-color: var(--accent);
+  background: var(--hover-bg);
   color: var(--accent);
+}
+
+.auth-gate-mode-toggle:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 @media (max-width: 760px) {

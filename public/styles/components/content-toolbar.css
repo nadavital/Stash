@@ -1,0 +1,258 @@
+/* ── Content Toolbar — inline controls row ─────────────── */
+
+.content-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-2) 0;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: var(--z-sticky, 10);
+}
+
+.content-toolbar-spacer {
+  flex: 1;
+}
+
+/* ── Brand ────────────────────────────────────────────────── */
+
+.toolbar-brand {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+  text-decoration: none;
+  letter-spacing: -0.03em;
+  margin-right: var(--space-2);
+  white-space: nowrap;
+}
+
+/* ── + New button — solid pill ─────────────────────────── */
+
+.toolbar-new-wrap {
+  position: relative;
+}
+
+.content-toolbar-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  color: var(--bg);
+  min-height: 30px;
+  width: 30px;
+  font-size: 16px;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.content-toolbar-new-btn:hover {
+  opacity: 0.8;
+}
+
+/* ── + New dropdown menu ──────────────────────────────── */
+
+.toolbar-new-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: var(--z-dropdown);
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+  padding: 4px;
+  min-width: 160px;
+  animation: fadeInUp 120ms ease both;
+}
+
+@media (prefers-color-scheme: dark) {
+  .toolbar-new-menu {
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.2);
+  }
+}
+
+.toolbar-new-menu.hidden {
+  display: none;
+}
+
+.toolbar-new-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: var(--font-size-body-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  white-space: nowrap;
+}
+
+.toolbar-new-menu-item:hover {
+  background: var(--hover-bg);
+}
+
+.toolbar-new-menu-item svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* ── Icon buttons (search, sort) ─────────────────────────── */
+
+.toolbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  padding: 0;
+}
+
+.toolbar-icon-btn:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.toolbar-icon-btn:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ── Chat toggle (mobile only) ───────────────────────────── */
+
+.toolbar-chat-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.toolbar-chat-toggle:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+.toolbar-chat-toggle:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+@media (max-width: 980px) {
+  .toolbar-chat-toggle {
+    display: inline-flex;
+  }
+}
+
+/* ── Sign out — ghost text button ────────────────────────── */
+
+.toolbar-signout {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--font-size-2xs);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.toolbar-signout:hover {
+  color: var(--ink);
+}
+
+/* ── Sort/Filter Dropdown — overlaid, keep glass ────────── */
+
+.sort-filter-dropdown {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  z-index: var(--z-dropdown);
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(36px) saturate(1.6);
+  -webkit-backdrop-filter: blur(36px) saturate(1.6);
+  border: 0;
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04);
+  padding: var(--space-4);
+  min-width: 220px;
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .sort-filter-dropdown {
+    background: rgba(28, 28, 28, 0.85);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.2);
+  }
+}
+
+.sort-filter-dropdown.is-open {
+  display: block;
+  animation: fadeInUp 150ms ease both;
+}
+
+.sort-filter-section {
+  margin-bottom: var(--space-3);
+}
+
+.sort-filter-section:last-child {
+  margin-bottom: 0;
+}
+
+.sort-filter-label {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sort-filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.sort-filter-option {
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--hover-bg);
+  color: var(--ink-secondary);
+  font-size: var(--font-size-caption);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.sort-filter-option:hover {
+  background: var(--surface-strong);
+  color: var(--ink);
+}
+
+.sort-filter-option:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.sort-filter-option.is-active {
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: var(--weight-medium);
+}

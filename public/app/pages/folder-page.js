@@ -1,8 +1,8 @@
-import { renderComposer, initComposerAutoResize } from "../components/composer/composer.js";
 import { renderFolderHeroToolbar } from "../components/folder-hero-toolbar/folder-hero-toolbar.js";
 import { renderFolderItemGrid } from "../components/folder-item-grid/folder-item-grid.js";
-import { renderHomeRecentList } from "../components/home-recent-list/home-recent-list.js";
-import { renderTopbar } from "../components/topbar/topbar.js";
+import {
+  renderRecentInlineStripHTML,
+} from "../components/home-recent-list/home-recent-list.js";
 import { showToast } from "../components/toast/toast.js";
 import {
   renderItemModalHTML,
@@ -28,6 +28,13 @@ import {
   initMoveModalHandlers,
 } from "../components/move-modal/move-modal.js";
 import {
+  renderSaveModalHTML,
+  querySaveModalEls,
+  openSaveModal,
+  closeSaveModal,
+  initSaveModalHandlers,
+} from "../components/save-modal/save-modal.js";
+import {
   renderInlineSearchHTML,
   queryInlineSearchEls,
   renderSearchResults,
@@ -39,11 +46,6 @@ import {
   initSortFilter,
   toggleSortFilterDropdown,
 } from "../components/sort-filter/sort-filter.js";
-import {
-  renderChatPanelHTML,
-  queryChatPanelEls,
-  initChatPanel,
-} from "../components/chat-panel/chat-panel.js";
 import { createActionMenu, closeAllActionMenus } from "../components/action-menu/action-menu.js";
 import {
   normalizeFolderColor,
@@ -52,6 +54,10 @@ import {
   normalizeFolderSymbol,
   resolveFolderMeta,
 } from "../services/folder-utils.js";
+import {
+  renderContentToolbarHTML,
+  queryContentToolbarEls,
+} from "../components/content-toolbar/content-toolbar.js";
 import { initKeyboardShortcuts } from "../services/keyboard.js";
 import {
   buildContentPreview,
@@ -65,47 +71,33 @@ import {
 import {
   iconTypeFor,
   getNoteProcessingState,
-  fileToDataUrl,
   noteTypeIconMarkup,
   relativeTime,
 } from "../services/note-utils.js";
 
-function renderFolderPageShell(folderMeta, authSession = null) {
+function renderFolderPageContent(folderMeta) {
   return `
     <section class="page page-folder" style="position:relative;">
-      ${renderTopbar({
-        showSortFilter: true,
-        showViewToggle: true,
-        showSelectToggle: true,
-        showChatToggle: true,
-        auth: authSession,
-        showSignOut: true,
-      })}
-
       ${renderSortFilterHTML()}
 
-      <section class="folder-layout">
-        <div class="folder-explorer-pane">
-          ${renderInlineSearchHTML()}
-          ${renderFolderHeroToolbar({
-            folderName: folderMeta.name,
-            folderDescription: folderMeta.description,
-            folderColor: folderMeta.color,
-            folderSymbol: folderMeta.symbol,
-          })}
-          <div id="subfolders-section" class="subfolders-section hidden">
-            <div class="subfolders-head">
-              <p class="subfolders-title">Folders</p>
-            </div>
-            <div id="subfolders-grid" class="subfolders-grid"></div>
+      <div class="folder-explorer-pane">
+        ${renderContentToolbarHTML()}
+        ${renderInlineSearchHTML()}
+        ${renderRecentInlineStripHTML({ title: "Recent in folder" })}
+        ${renderFolderHeroToolbar({
+          folderName: folderMeta.name,
+          folderDescription: folderMeta.description,
+          folderColor: folderMeta.color,
+          folderSymbol: folderMeta.symbol,
+        })}
+        <div id="subfolders-section" class="subfolders-section hidden">
+          <div class="subfolders-head">
+            <p class="subfolders-title">Folders</p>
           </div>
-          ${renderFolderItemGrid()}
+          <div id="subfolders-grid" class="subfolders-grid"></div>
         </div>
-
-        ${renderHomeRecentList()}
-      </section>
-
-      ${renderComposer({ mode: "folder" })}
+        ${renderFolderItemGrid()}
+      </div>
     </section>
 
     <div id="batch-action-bar" class="batch-action-bar hidden">
@@ -121,41 +113,28 @@ function renderFolderPageShell(folderMeta, authSession = null) {
 
     ${renderMoveModalHTML()}
 
-    ${renderChatPanelHTML()}
+    ${renderSaveModalHTML()}
   `;
 }
 
-function queryElements(mountNode) {
+function queryPageElements(mountNode) {
   const itemModalEls = queryItemModalEls(mountNode);
   const folderModalEls = queryFolderModalEls(mountNode);
   const moveModalEls = queryMoveModalEls(mountNode);
+  const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
-  const chatPanelEls = queryChatPanelEls(mountNode);
+  const toolbarEls = queryContentToolbarEls(mountNode);
 
   return {
     ...itemModalEls,
     ...folderModalEls,
     ...moveModalEls,
+    ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
-    ...chatPanelEls,
-    topbarSortBtn: mountNode.querySelector("#topbar-sort-btn"),
-    viewGridBtn: mountNode.querySelector("#view-grid-btn"),
-    viewListBtn: mountNode.querySelector("#view-list-btn"),
-    captureForm: mountNode.querySelector("#capture-form"),
-    contentInput: mountNode.querySelector("#content-input"),
-    projectInput: mountNode.querySelector("#project-input"),
-    projectSelect: mountNode.querySelector("#project-select"),
-    captureHint: mountNode.querySelector("#capture-hint"),
-    attachmentToggle: mountNode.querySelector("#attachment-toggle"),
-    fileInput: mountNode.querySelector("#file-input"),
-    selectedFilePill: mountNode.querySelector("#selected-file-pill"),
-    selectedFileName: mountNode.querySelector("#selected-file-name"),
-    clearFileBtn: mountNode.querySelector("#clear-file-btn"),
-    saveBtn: mountNode.querySelector("#save-btn"),
+    ...toolbarEls,
     recentNotesList: mountNode.querySelector("#recent-notes-list"),
-    recentTasksList: mountNode.querySelector("#recent-tasks-list"),
     refreshBtn: mountNode.querySelector("#refresh-btn"),
     deleteFolderBtn: mountNode.querySelector("#delete-folder-btn"),
     renameFolderBtn: mountNode.querySelector("#rename-folder-btn"),
@@ -163,9 +142,6 @@ function queryElements(mountNode) {
     subfoldersSection: mountNode.querySelector("#subfolders-section"),
     subfoldersGrid: mountNode.querySelector("#subfolders-grid"),
     folderItemsGrid: mountNode.querySelector("#folder-items-grid"),
-    selectBtn: mountNode.querySelector("#topbar-select-btn"),
-    chatBtn: mountNode.querySelector("#topbar-chat-btn"),
-    signOutBtn: mountNode.querySelector("#topbar-signout-btn"),
     batchActionBar: mountNode.querySelector("#batch-action-bar"),
     batchActionCount: mountNode.querySelector("#batch-action-count"),
     batchDeleteBtn: mountNode.querySelector("#batch-delete-btn"),
@@ -175,19 +151,20 @@ function queryElements(mountNode) {
   };
 }
 
-export function createFolderPage({ store, apiClient, auth = null }) {
+export function createFolderPage({ store, apiClient, auth = null, shell }) {
   return {
     async mount({ mountNode, route, navigate }) {
       const folderName = route.folderId || "general";
       let folderMeta = resolveFolderMeta(folderName, store.getState().draftFolders);
       const authSession = auth?.getSession?.() || null;
 
-      mountNode.innerHTML = renderFolderPageShell(folderMeta, authSession);
-      const els = queryElements(mountNode);
+      mountNode.innerHTML = renderFolderPageContent(folderMeta);
+      const pageEls = queryPageElements(mountNode);
+      const els = { ...shell.els, ...pageEls };
+
       const disposers = [];
       let isMounted = true;
       let searchTimer = null;
-      let openTasks = [];
       let recentNotes = [];
       let searchResults = [];
       let sortMode = "newest";
@@ -200,12 +177,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       const PAGE_SIZE = 20;
       let dbFolderMeta = null;
       let moveModalResolver = null;
-      let attachment = {
-        name: "",
-        fileDataUrl: null,
-        fileMimeType: "",
-        isImage: false,
-      };
 
       function normalizeRuntimeFolderMeta(candidate, fallbackName = folderMeta.name) {
         const normalizedName = String(candidate?.name || fallbackName || "").trim() || "General";
@@ -227,14 +198,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         if (colorDot) {
           colorDot.dataset.color = normalized.color;
         }
-        if (els.projectInput) {
-          els.projectInput.value = normalized.name;
-        }
-        if (els.projectSelect) {
-          els.projectSelect.innerHTML = `<option value="${normalized.name}">${normalized.name}</option>`;
-          els.projectSelect.value = normalized.name;
-        }
-
         const heroToolbar = root.querySelector(".folder-hero-toolbar");
         if (heroToolbar) {
           let descriptionEl = root.querySelector(".folder-current-desc");
@@ -261,6 +224,7 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
       on(document, "click", () => {
         closeAllActionMenus(mountNode);
+        els.toolbarNewMenu?.classList.add("hidden");
       });
 
       function getState() {
@@ -269,6 +233,24 @@ export function createFolderPage({ store, apiClient, auth = null }) {
 
       function setState(patch) {
         return store.setState(patch);
+      }
+
+      function listAllFolderNames() {
+        const names = new Set([folderMeta.name]);
+        normalizeFolderDrafts(getState().draftFolders).forEach((f) => {
+          const n = String(f?.name || "").trim();
+          if (n) names.add(n);
+        });
+        subFolders.forEach((f) => {
+          const n = String(f?.name || "").trim();
+          if (n) names.add(n);
+        });
+        recentNotes.forEach((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          const n = String(note?.project || "").trim();
+          if (n) names.add(n);
+        });
+        return [...names].sort((a, b) => a.localeCompare(b));
       }
 
       function resolveMoveDialog(value) {
@@ -362,35 +344,61 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         setState({ draftFolders: nextDrafts });
       }
 
-      function setCaptureHint(text, tone = "neutral") {
-        if (!els.captureHint) return;
-        els.captureHint.textContent = text;
-        els.captureHint.classList.toggle("warn", tone === "warn");
-      }
-
-      function setSubmitting(active) {
-        const isActive = Boolean(active);
-        if (els.saveBtn) {
-          els.saveBtn.disabled = isActive;
-          els.saveBtn.classList.toggle("is-loading", isActive);
-        }
-        if (els.contentInput) {
-          els.contentInput.disabled = isActive;
-        }
-        if (els.projectSelect) {
-          els.projectSelect.disabled = isActive;
-        }
-        if (els.attachmentToggle) {
-          els.attachmentToggle.disabled = isActive;
-        }
-        if (els.clearFileBtn) {
-          els.clearFileBtn.disabled = isActive;
-        }
-      }
-
       function toast(message, tone = "success") {
         showToast(message, tone, store);
       }
+
+      // Register shell callbacks
+      shell.setToast(toast);
+      shell.setOnOpenCitation((note) => {
+        if (!note) return;
+        openItemModal(els, note);
+        markAccessed(note.id);
+        renderView();
+      });
+      // + menu toggle
+      on(els.toolbarNewBtn, "click", (e) => {
+        e.stopPropagation();
+        els.toolbarNewMenu?.classList.toggle("hidden");
+      });
+      on(els.toolbarNewItemBtn, "click", () => {
+        els.toolbarNewMenu?.classList.add("hidden");
+        openSaveModal(els, { folders: listAllFolderNames(), preselectedFolder: folderMeta.name });
+      });
+      on(els.toolbarNewFolderBtn, "click", () => {
+        els.toolbarNewMenu?.classList.add("hidden");
+        openFolderModal(els);
+      });
+      on(els.toolbarNewTaskBtn, "click", () => {
+        els.toolbarNewMenu?.classList.add("hidden");
+        // Use apiClient.createTask directly for tasks
+        const title = prompt("Task title:");
+        if (!title?.trim()) return;
+        apiClient.createTask({ title: title.trim(), status: "open" })
+          .then(() => { toast("Task created"); refreshNotes(); })
+          .catch(() => { toast("Task save failed", "error"); });
+      });
+
+      // Search toggle
+      on(els.toolbarSearchToggle, "click", () => {
+        const searchWrap = mountNode.querySelector(".inline-search");
+        if (searchWrap) {
+          searchWrap.classList.toggle("is-visible");
+          if (searchWrap.classList.contains("is-visible")) {
+            els.inlineSearchInput?.focus();
+          }
+        }
+      });
+
+      // Sign out
+      on(els.toolbarSignOutBtn, "click", () => {
+        auth?.onSignOut?.();
+      });
+
+      // Chat toggle (mobile)
+      on(els.toolbarChatToggle, "click", () => {
+        shell.toggleChat();
+      });
 
       function clearInlineSearch() {
         if (els.inlineSearchInput) {
@@ -802,7 +810,11 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             });
 
             footer.append(actionMenu);
-            card.append(nameEl, footer);
+
+            const inner = document.createElement("div");
+            inner.className = "folder-pill-inner";
+            inner.append(nameEl, footer);
+            card.append(inner);
             card.addEventListener("click", (event) => {
               if (event.target.closest(".action-menu")) return;
               navigate(`#/folder/${encodeURIComponent(folder.name)}`);
@@ -847,9 +859,9 @@ export function createFolderPage({ store, apiClient, auth = null }) {
           const isLink = noteType === "link";
           const ogImage = note.metadata?.ogImage || "";
 
-          const shell = document.createElement("div");
-          shell.className = "folder-file-tile-shell";
-          shell.style.cssText = `animation: fadeInUp 200ms ease both;`;
+          const tileShell = document.createElement("div");
+          tileShell.className = "folder-file-tile-shell";
+          tileShell.style.cssText = `animation: fadeInUp 200ms ease both;`;
 
           const tile = document.createElement("article");
           tile.className = "folder-file-tile";
@@ -871,12 +883,15 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             titleEl.textContent = buildNoteTitle(note);
             body.appendChild(titleEl);
 
-            if (isLink && note.sourceUrl) {
-              const domainEl = document.createElement("p");
-              domainEl.className = "folder-file-domain";
-              domainEl.textContent = extractDomain(note.sourceUrl);
-              body.appendChild(domainEl);
-            } else {
+            {
+              const domain = isLink && note.sourceUrl ? extractDomain(note.sourceUrl) : "";
+              const titleText = buildNoteTitle(note);
+              if (domain && !titleText.startsWith(domain)) {
+                const domainEl = document.createElement("p");
+                domainEl.className = "folder-file-domain";
+                domainEl.textContent = domain;
+                body.appendChild(domainEl);
+              }
               const previewText = buildContentPreview(note) || "";
               if (previewText) {
                 const previewEl = document.createElement("p");
@@ -928,20 +943,9 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             actions.append(actionMenu);
             tile.appendChild(actions);
           } else {
-            const topRow = document.createElement("div");
-            topRow.className = "folder-file-top-row";
+            const heroSrc = note.imagePath || (isLink && ogImage ? ogImage : "");
 
-            const typeIcon = document.createElement("span");
-            typeIcon.className = "folder-file-kind-icon";
-            typeIcon.innerHTML = noteTypeIconMarkup(noteType);
-
-            const typeBadge = document.createElement("span");
-            typeBadge.className = "folder-file-type";
-            typeBadge.textContent = note.sourceType || "text";
-
-            const spacer = document.createElement("span");
-            spacer.className = "folder-file-spacer";
-
+            // Action menu — shared between both layouts
             const actionRow = document.createElement("div");
             actionRow.className = "folder-file-actions";
 
@@ -976,61 +980,110 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             });
 
             actionRow.append(actionMenu);
-            topRow.append(typeIcon, typeBadge, spacer, actionRow);
-            tile.appendChild(topRow);
 
-            const heroSrc = note.imagePath || (isLink && ogImage ? ogImage : "");
             if (heroSrc) {
-              const thumb = document.createElement("img");
-              thumb.className = "folder-file-thumb";
-              thumb.src = heroSrc;
-              thumb.alt = buildNoteTitle(note);
-              thumb.loading = "lazy";
-              thumb.onerror = () => { thumb.style.display = "none"; };
-              tile.appendChild(thumb);
-            }
+              // ── Image tile: full-bleed hero with gradient overlay ──
+              tile.classList.add("has-hero");
 
-            const body = document.createElement("div");
-            body.className = "folder-file-body";
+              const heroImg = document.createElement("img");
+              heroImg.className = "folder-file-hero-bg";
+              heroImg.src = heroSrc;
+              heroImg.alt = buildNoteTitle(note);
+              heroImg.loading = "lazy";
+              heroImg.onerror = () => {
+                tile.classList.remove("has-hero");
+                heroImg.remove();
+                // Rebuild as a plain tile — add icon + body
+                const fallbackIcon = document.createElement("span");
+                fallbackIcon.className = "folder-file-glass-icon";
+                fallbackIcon.innerHTML = noteTypeIconMarkup(noteType);
+                tile.insertBefore(fallbackIcon, glass);
+                glass.className = "folder-file-body";
+                glass.style.background = "none";
+              };
+              tile.appendChild(heroImg);
 
-            const titleEl = document.createElement("p");
-            titleEl.className = "folder-file-title";
-            titleEl.textContent = buildNoteTitle(note);
-            body.appendChild(titleEl);
+              // Gradient overlay at bottom of image
+              const glass = document.createElement("div");
+              glass.className = "folder-file-glass";
 
-            if (isLink && note.sourceUrl) {
-              const domainEl = document.createElement("p");
-              domainEl.className = "folder-file-domain";
-              domainEl.textContent = extractDomain(note.sourceUrl);
-              body.appendChild(domainEl);
-            } else {
-              const previewText = buildContentPreview(note) || "";
-              if (previewText) {
-                const previewEl = document.createElement("p");
-                previewEl.className = "folder-file-preview";
-                previewEl.textContent = previewText;
-                body.appendChild(previewEl);
+              const titleEl = document.createElement("p");
+              titleEl.className = "folder-file-title";
+              titleEl.textContent = buildNoteTitle(note);
+              glass.appendChild(titleEl);
+
+              {
+                const domain = isLink && note.sourceUrl ? extractDomain(note.sourceUrl) : "";
+                const titleText = buildNoteTitle(note);
+                if (domain && !titleText.startsWith(domain)) {
+                  const domainEl = document.createElement("p");
+                  domainEl.className = "folder-file-domain";
+                  domainEl.textContent = domain;
+                  glass.appendChild(domainEl);
+                }
               }
+
+              const footer = document.createElement("div");
+              footer.className = "folder-file-footer";
+              const timeEl = document.createElement("span");
+              timeEl.className = "folder-file-time";
+              timeEl.textContent = relativeTime(note.createdAt);
+              footer.appendChild(timeEl);
+              footer.appendChild(actionRow);
+              glass.appendChild(footer);
+
+              tile.appendChild(glass);
+            } else {
+              // ── Non-image tile: glass card with type icon ──
+              const glassIcon = document.createElement("span");
+              glassIcon.className = "folder-file-glass-icon";
+              glassIcon.innerHTML = noteTypeIconMarkup(noteType);
+              tile.appendChild(glassIcon);
+
+              const body = document.createElement("div");
+              body.className = "folder-file-body";
+
+              const titleEl = document.createElement("p");
+              titleEl.className = "folder-file-title";
+              titleEl.textContent = buildNoteTitle(note);
+              body.appendChild(titleEl);
+
+              {
+                const domain = isLink && note.sourceUrl ? extractDomain(note.sourceUrl) : "";
+                const titleText = buildNoteTitle(note);
+                if (domain && !titleText.startsWith(domain)) {
+                  const domainEl = document.createElement("p");
+                  domainEl.className = "folder-file-domain";
+                  domainEl.textContent = domain;
+                  body.appendChild(domainEl);
+                }
+                const previewText = buildContentPreview(note) || "";
+                if (previewText) {
+                  const previewEl = document.createElement("p");
+                  previewEl.className = "folder-file-preview";
+                  previewEl.textContent = previewText;
+                  body.appendChild(previewEl);
+                }
+              }
+              tile.appendChild(body);
+
+              const footer = document.createElement("div");
+              footer.className = "folder-file-footer";
+              const timeEl = document.createElement("span");
+              timeEl.className = "folder-file-time";
+              timeEl.textContent = relativeTime(note.createdAt);
+              footer.appendChild(timeEl);
+              footer.appendChild(actionRow);
+              tile.appendChild(footer);
             }
-            tile.appendChild(body);
-
-            const footer = document.createElement("div");
-            footer.className = "folder-file-footer";
-
-            const timeEl = document.createElement("span");
-            timeEl.className = "folder-file-time";
-            timeEl.textContent = relativeTime(note.createdAt);
-            footer.appendChild(timeEl);
-
-            tile.appendChild(footer);
           }
 
           tile.addEventListener("click", (e) => {
             if (e.target.closest(".folder-file-actions") || e.target.closest(".list-view-actions")) return;
             if (selectMode) {
               toggleNoteSelection(note.id);
-              shell.classList.toggle("is-selected", selectedIds.has(String(note.id)));
-              const cb = shell.querySelector(".batch-select-checkbox");
+              tileShell.classList.toggle("is-selected", selectedIds.has(String(note.id)));
+              const cb = tileShell.querySelector(".batch-select-checkbox");
               if (cb) cb.checked = selectedIds.has(String(note.id));
               return;
             }
@@ -1052,13 +1105,13 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             checkbox.style.display = "block";
             checkbox.addEventListener("change", () => {
               toggleNoteSelection(note.id);
-              shell.classList.toggle("is-selected", selectedIds.has(String(note.id)));
+              tileShell.classList.toggle("is-selected", selectedIds.has(String(note.id)));
             });
-            shell.prepend(checkbox);
+            tileShell.prepend(checkbox);
           }
 
-          shell.appendChild(tile);
-          els.folderItemsGrid.appendChild(shell);
+          tileShell.appendChild(tile);
+          els.folderItemsGrid.appendChild(tileShell);
         });
 
         // Load more button
@@ -1088,12 +1141,10 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       }
 
       function renderRecent() {
-        if (!els.recentNotesList || !els.recentTasksList) return;
+        if (!els.recentNotesList) return;
         els.recentNotesList.innerHTML = "";
-        els.recentTasksList.innerHTML = "";
 
-        const noteItems = Array.isArray(recentNotes) ? recentNotes.slice(0, 15) : [];
-        const taskItems = Array.isArray(openTasks) ? openTasks.slice(0, 15) : [];
+        const noteItems = Array.isArray(recentNotes) ? recentNotes.slice(0, 12) : [];
 
         if (!noteItems.length) {
           const emptyNotes = document.createElement("p");
@@ -1103,13 +1154,13 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         } else {
           noteItems.forEach((entry, index) => {
             const note = normalizeCitation(entry, index).note;
-            const row = document.createElement("div");
-            row.className = "recent-item-row";
-
             const item = document.createElement("button");
             item.type = "button";
-            item.className = "recent-item";
+            item.className = "recent-inline-card";
             item.title = buildNoteTitle(note);
+
+            const head = document.createElement("span");
+            head.className = "recent-inline-card-head";
 
             const icon = document.createElement("span");
             icon.className = "recent-item-icon";
@@ -1117,27 +1168,28 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             icon.dataset.type = noteType;
             icon.title = `${noteType} note`;
 
+            const timeEl = document.createElement("span");
+            timeEl.className = "recent-inline-card-time";
+            timeEl.textContent = relativeTime(note.createdAt);
+            head.append(icon, timeEl);
+
             const label = document.createElement("span");
-            label.className = "recent-item-label";
+            label.className = "recent-inline-card-title";
             label.textContent = buildNoteTitle(note);
 
-            const timeEl = document.createElement("span");
-            timeEl.className = "recent-item-time";
-            timeEl.textContent = relativeTime(note.createdAt);
-
-            const states = document.createElement("span");
-            states.className = "recent-item-states";
+            const meta = document.createElement("span");
+            meta.className = "recent-inline-card-meta";
             const processingState = getNoteProcessingState(note);
 
             if (processingState.showLabel) {
               const statusText = document.createElement("span");
-              statusText.className = `recent-item-status ${processingState.dotClass}`;
+              statusText.className = `recent-inline-status ${processingState.dotClass}`;
               statusText.textContent = processingState.label;
-              states.append(statusText);
+              meta.append(statusText);
             } else {
-              states.classList.add("hidden");
+              meta.textContent = noteType;
             }
-            item.append(icon, label, timeEl, states);
+            item.append(head, label, meta);
 
             item.addEventListener("click", () => {
               openItemModal(els, note);
@@ -1145,160 +1197,8 @@ export function createFolderPage({ store, apiClient, auth = null }) {
               renderView();
             });
 
-            const actionMenu = createActionMenu({
-              ariaLabel: `Actions for item ${buildNoteTitle(note)}`,
-              actions: [
-                {
-                  label: "Delete item",
-                  tone: "danger",
-                  onSelect: async () => {
-                    await deleteNoteById(note.id);
-                  },
-                },
-              ],
-            });
-
-            row.append(item, actionMenu);
-            els.recentNotesList.appendChild(row);
+            els.recentNotesList.appendChild(item);
           });
-        }
-
-        if (!taskItems.length) {
-          const emptyTasks = document.createElement("p");
-          emptyTasks.className = "ui-empty";
-          emptyTasks.textContent = "No open tasks.";
-          els.recentTasksList.appendChild(emptyTasks);
-          return;
-        }
-
-        taskItems.forEach((task) => {
-          const row = document.createElement("div");
-          row.className = "recent-task-row";
-
-          const item = document.createElement("div");
-          item.className = "recent-task-item";
-          item.title = task.title || "";
-
-          const dot = document.createElement("span");
-          dot.className = "recent-task-dot";
-
-          const label = document.createElement("span");
-          label.className = "recent-task-label";
-          label.textContent = String(task.title || "").trim() || "(untitled task)";
-
-          item.append(dot, label);
-
-          const startInlineEdit = () => {
-            label.classList.add("hidden");
-            const input = document.createElement("input");
-            input.type = "text";
-            input.className = "task-inline-edit";
-            input.value = String(task.title || "").trim();
-            item.insertBefore(input, label);
-            input.focus();
-            input.select();
-            const save = async () => {
-              const newTitle = input.value.trim();
-              if (newTitle && newTitle !== task.title) {
-                try {
-                  await apiClient.updateTask(task.id, { title: newTitle });
-                  toast("Task updated");
-                  await refreshNotes();
-                } catch { toast("Update failed", "error"); }
-              } else {
-                input.remove();
-                label.classList.remove("hidden");
-              }
-            };
-            input.addEventListener("keydown", (e) => {
-              if (e.key === "Enter") { e.preventDefault(); save(); }
-              if (e.key === "Escape") { input.remove(); label.classList.remove("hidden"); }
-            });
-            input.addEventListener("blur", save);
-          };
-
-          const actionMenu = createActionMenu({
-            ariaLabel: `Actions for task ${String(task.title || "").trim() || "(untitled task)"}`,
-            actions: [
-              {
-                label: "Edit task",
-                onSelect: async () => {
-                  startInlineEdit();
-                },
-              },
-              {
-                label: "Mark complete",
-                onSelect: async () => {
-                  try {
-                    await apiClient.updateTask(task.id, { status: "closed" });
-                    toast("Task completed");
-                    await refreshNotes();
-                  } catch {
-                    toast("Complete failed", "error");
-                  }
-                },
-              },
-              {
-                label: "Delete task",
-                tone: "danger",
-                onSelect: async () => {
-                  if (!window.confirm("Delete this task?")) return;
-                  try {
-                    await apiClient.deleteTask(task.id);
-                    toast("Task deleted");
-                    await refreshNotes();
-                  } catch {
-                    toast("Delete failed", "error");
-                  }
-                },
-              },
-            ],
-          });
-
-          row.append(item, actionMenu);
-          els.recentTasksList.appendChild(row);
-        });
-      }
-
-      function renderProjectOptions() {
-        if (!els.projectSelect) return;
-
-        const state = getState();
-        const folderNames = new Set([folderMeta.name]);
-
-        normalizeFolderDrafts(state.draftFolders).forEach((folder) => {
-          folderNames.add(folder.name);
-        });
-
-        recentNotes.forEach((entry, index) => {
-          const note = normalizeCitation(entry, index).note;
-          const projectName = String(note.project || "").trim();
-          if (projectName) {
-            folderNames.add(projectName);
-          }
-        });
-
-        const options = [...folderNames].sort((a, b) => a.localeCompare(b));
-        const currentValue = String(els.projectSelect.value || folderMeta.name).trim();
-
-        els.projectSelect.innerHTML = '<option value="">Folder</option>';
-        options.forEach((name) => {
-          const option = document.createElement("option");
-          option.value = name;
-          option.textContent = name;
-          els.projectSelect.append(option);
-        });
-
-        if (currentValue && options.includes(currentValue)) {
-          els.projectSelect.value = currentValue;
-        } else if (folderMeta.name && options.includes(folderMeta.name)) {
-          els.projectSelect.value = folderMeta.name;
-        } else {
-          els.projectSelect.value = "";
-        }
-
-        if (els.projectInput) {
-          els.projectInput.value = String(els.projectSelect.value || folderMeta.name || "").trim();
         }
       }
 
@@ -1325,14 +1225,12 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         if (query) {
           renderInlineSearchResults();
           renderRecent();
-          renderProjectOptions();
           return;
         }
 
         renderSubfolders();
         renderFolderItems(applySortFilter(recentNotes));
         renderRecent();
-        renderProjectOptions();
       }
 
       async function refreshNotes() {
@@ -1356,14 +1254,12 @@ export function createFolderPage({ store, apiClient, auth = null }) {
               })
             );
           }
-          requests.push(apiClient.fetchTasks({ status: "open" }));
           requests.push(apiClient.getFolder(folderMeta.name).catch(() => null));
 
           const results = await Promise.allSettled(requests);
           const recentResult = results[0];
           const searchResult = includeSearch ? results[1] : null;
-          const tasksResult = includeSearch ? results[2] : results[1];
-          const folderMetaResult = includeSearch ? results[3] : results[2];
+          const folderMetaResult = includeSearch ? results[2] : results[1];
           if (recentResult.status !== "fulfilled") throw recentResult.reason;
 
           if (!isMounted) return;
@@ -1374,10 +1270,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
               ? searchResult.value.items
               : [];
           setState({ notes: recentNotes });
-          openTasks =
-            tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value?.items)
-              ? tasksResult.value.items
-              : [];
 
           if (folderMetaResult?.status === "fulfilled" && folderMetaResult.value?.folder) {
             dbFolderMeta = folderMetaResult.value.folder;
@@ -1408,7 +1300,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
               })
             : [];
           setState({ notes: recentNotes });
-          openTasks = [];
           renderView();
           apiClient.adapterLog("folder_notes_fallback", message);
         }
@@ -1431,49 +1322,14 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         }, 220);
       }
 
-      function clearAttachment() {
-        attachment = {
-          name: "",
-          fileDataUrl: null,
-          fileMimeType: "",
-          isImage: false,
-        };
-
-        if (els.fileInput) {
-          els.fileInput.value = "";
-        }
-
-        if (els.selectedFileName) {
-          els.selectedFileName.textContent = "";
-        }
-
-        els.selectedFilePill?.classList.add("hidden");
-      }
-
-      function setAttachment(fileName, fileDataUrl = null, fileMimeType = "") {
-        const normalizedMime = String(fileMimeType || "").toLowerCase();
-        attachment = {
-          name: fileName,
-          fileDataUrl,
-          fileMimeType: normalizedMime,
-          isImage: normalizedMime.startsWith("image/"),
-        };
-
-        if (els.selectedFileName) {
-          els.selectedFileName.textContent = fileName;
-        }
-
-        els.selectedFilePill?.classList.remove("hidden");
-      }
-
       // Batch select mode
       function toggleSelectMode(active) {
         selectMode = typeof active === "boolean" ? active : !selectMode;
         selectedIds.clear();
         const page = mountNode.querySelector(".page-folder");
         if (page) page.classList.toggle("select-mode", selectMode);
-        if (els.selectBtn) els.selectBtn.classList.toggle("is-active", selectMode);
-        if (els.selectBtn) els.selectBtn.textContent = selectMode ? "Done" : "Select";
+        if (els.toolbarSelectBtn) els.toolbarSelectBtn.classList.toggle("is-active", selectMode);
+        if (els.toolbarSelectBtn) els.toolbarSelectBtn.textContent = selectMode ? "Done" : "Select";
         updateBatchBar();
         renderView();
       }
@@ -1500,7 +1356,7 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         updateBatchBar();
       }
 
-      on(els.selectBtn, "click", () => {
+      on(els.toolbarSelectBtn, "click", () => {
         toggleSelectMode();
       });
 
@@ -1546,32 +1402,32 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       // View toggle handlers
       const viewMode = getState().viewMode || "grid";
       if (viewMode === "list") {
-        els.viewGridBtn?.classList.remove("is-active");
-        els.viewListBtn?.classList.add("is-active");
+        els.toolbarViewGridBtn?.classList.remove("is-active");
+        els.toolbarViewListBtn?.classList.add("is-active");
         els.folderItemsGrid?.classList.add("view-list");
         els.subfoldersGrid?.classList.add("view-list");
       }
 
-      on(els.viewGridBtn, "click", () => {
+      on(els.toolbarViewGridBtn, "click", () => {
         setState({ viewMode: "grid" });
-        els.viewGridBtn?.classList.add("is-active");
-        els.viewListBtn?.classList.remove("is-active");
+        els.toolbarViewGridBtn?.classList.add("is-active");
+        els.toolbarViewListBtn?.classList.remove("is-active");
         els.folderItemsGrid?.classList.remove("view-list");
         els.subfoldersGrid?.classList.remove("view-list");
         renderView();
       });
 
-      on(els.viewListBtn, "click", () => {
+      on(els.toolbarViewListBtn, "click", () => {
         setState({ viewMode: "list" });
-        els.viewListBtn?.classList.add("is-active");
-        els.viewGridBtn?.classList.remove("is-active");
+        els.toolbarViewListBtn?.classList.add("is-active");
+        els.toolbarViewGridBtn?.classList.remove("is-active");
         els.folderItemsGrid?.classList.add("view-list");
         els.subfoldersGrid?.classList.add("view-list");
         renderView();
       });
 
       // Sort/filter via extracted component
-      on(els.topbarSortBtn, "click", (event) => {
+      on(els.toolbarSortBtn, "click", (event) => {
         event.stopPropagation();
         toggleSortFilterDropdown(els);
       });
@@ -1604,184 +1460,81 @@ export function createFolderPage({ store, apiClient, auth = null }) {
       });
       disposers.push(cleanupInlineSearch);
 
-      on(els.attachmentToggle, "click", () => {
-        els.fileInput?.click();
-      });
-
-      on(els.fileInput, "change", async () => {
-        const file = els.fileInput?.files?.[0];
-        if (!file) return;
-
-        try {
-          const fileDataUrl = await fileToDataUrl(file);
-          setAttachment(file.name || "file", fileDataUrl, file.type || "");
-        } catch (error) {
-          setCaptureHint(conciseTechnicalError(error, "File read failed"), "warn");
-          toast("File read failed", "error");
-        }
-      });
-
-      on(els.clearFileBtn, "click", () => {
-        clearAttachment();
-      });
-
-      const composerShell = mountNode.querySelector('.composer-shell');
-      if (composerShell) {
-        on(composerShell, 'dragover', (e) => {
-          e.preventDefault();
-          composerShell.classList.add('drag-active');
-        });
-        on(composerShell, 'dragleave', (e) => {
-          if (!composerShell.contains(e.relatedTarget)) {
-            composerShell.classList.remove('drag-active');
+      // Save modal handlers
+      const cleanupSaveModal = initSaveModalHandlers(els, {
+        onClose() {
+          closeSaveModal(els);
+        },
+        async onSubmit({ content, project, attachment: att }) {
+          if (getState().loading) return;
+          const rawContent = String(content || "").trim();
+          if (!rawContent && !att?.fileDataUrl) {
+            toast("Add content first", "error");
+            return;
           }
-        });
-        on(composerShell, 'drop', async (e) => {
-          e.preventDefault();
-          composerShell.classList.remove('drag-active');
-          const file = e.dataTransfer?.files?.[0];
-          if (!file) return;
+          const selectedProject = String(project || folderMeta.name || "").trim();
+          const inferred = att?.fileDataUrl
+            ? { sourceType: att.isImage ? "image" : "file", sourceUrl: "" }
+            : inferCaptureType(rawContent, null);
+          const payload = {
+            sourceType: inferred.sourceType,
+            content: rawContent,
+            sourceUrl: inferred.sourceUrl,
+            project: selectedProject || folderMeta.name,
+            imageDataUrl: att?.isImage ? att.fileDataUrl : null,
+            fileDataUrl: att?.fileDataUrl || null,
+            fileName: att?.name || "",
+            fileMimeType: att?.fileMimeType || "",
+          };
+          setState({ loading: true });
+          closeSaveModal(els);
           try {
-            const dataUrl = await fileToDataUrl(file);
-            setAttachment(file.name || 'file', dataUrl, file.type || '');
-          } catch (err) {
-            toast('File read failed', 'error');
-          }
-        });
-      }
-
-      // Full-page drop zone
-      const pageEl = mountNode.querySelector('.page-folder');
-      if (pageEl) {
-        on(pageEl, 'dragover', (e) => {
-          e.preventDefault();
-          pageEl.classList.add('page-drag-active');
-        });
-        on(pageEl, 'dragleave', (e) => {
-          if (!pageEl.contains(e.relatedTarget)) {
-            pageEl.classList.remove('page-drag-active');
-          }
-        });
-        on(pageEl, 'drop', async (e) => {
-          e.preventDefault();
-          pageEl.classList.remove('page-drag-active');
-          const file = e.dataTransfer?.files?.[0];
-          if (!file) return;
-          try {
-            const dataUrl = await fileToDataUrl(file);
-            setAttachment(file.name || 'file', dataUrl, file.type || '');
-            els.contentInput?.focus();
-          } catch {
-            toast('File read failed', 'error');
-          }
-        });
-      }
-
-      on(els.projectSelect, "change", () => {
-        if (!els.projectInput) return;
-        els.projectInput.value = String(els.projectSelect?.value || "").trim();
-      });
-
-      on(els.captureForm, "submit", async (event) => {
-        event.preventDefault();
-        if (getState().loading) return;
-
-        const rawContent = (els.contentInput?.value || "").trim();
-        const content = rawContent;
-        const selectedProject = String(els.projectSelect?.value || folderMeta.name || "").trim();
-
-        if (!content && !attachment.fileDataUrl) {
-          setCaptureHint("Add text, link, image, or file.", "warn");
-          toast("Add content first", "error");
-          els.contentInput?.focus();
-          return;
-        }
-
-        const inferred = attachment.fileDataUrl
-          ? { sourceType: attachment.isImage ? "image" : "file", sourceUrl: "" }
-          : inferCaptureType(content, null);
-        const payload = {
-          sourceType: inferred.sourceType,
-          content,
-          sourceUrl: inferred.sourceUrl,
-          project: selectedProject || folderMeta.name,
-          imageDataUrl: attachment.isImage ? attachment.fileDataUrl : null,
-          fileDataUrl: attachment.fileDataUrl,
-          fileName: attachment.name || "",
-          fileMimeType: attachment.fileMimeType || "",
-        };
-        const pendingContent = rawContent;
-        const pendingAttachment = { ...attachment };
-
-        setState({ loading: true });
-        setSubmitting(true);
-        setCaptureHint("Processing item...");
-        if (els.contentInput) {
-          els.contentInput.value = "";
-        }
-        clearAttachment();
-
-        try {
-          const saveResult = await apiClient.saveNote(payload);
-          if (!isMounted) return;
-
-          if (saveResult?.note) {
-            const savedEntry = normalizeCitation(saveResult.note, 0);
-            const savedId = String(savedEntry?.note?.id || "");
-            const savedProject = String(savedEntry?.note?.project || "");
-            if (savedId && savedProject === folderMeta.name) {
-              const deduped = recentNotes.filter((entry) => String((entry?.note || entry)?.id || "") !== savedId);
-              recentNotes = [savedEntry, ...deduped].slice(0, 120);
-              setState({ notes: recentNotes });
+            const saveResult = await apiClient.saveNote(payload);
+            if (!isMounted) return;
+            if (saveResult?.note) {
+              const savedEntry = normalizeCitation(saveResult.note, 0);
+              const savedId = String(savedEntry?.note?.id || "");
+              const savedProject = String(savedEntry?.note?.project || "");
+              if (savedId && savedProject === folderMeta.name) {
+                const deduped = recentNotes.filter((entry) => String((entry?.note || entry)?.id || "") !== savedId);
+                recentNotes = [savedEntry, ...deduped].slice(0, 120);
+                setState({ notes: recentNotes });
+                renderView();
+              }
+            }
+            toast("Item saved");
+            refreshNotes().catch(() => {});
+          } catch (error) {
+            if (!isMounted) return;
+            const message = conciseTechnicalError(error, "Save endpoint unavailable");
+            const validationLike = /missing content|invalid image|invalid file|invalid json|request failed \(4\d\d\)/i.test(message);
+            if (validationLike) {
+              toast("Save failed", "error");
+            } else {
+              const nextMock = [buildLocalFallbackNote(payload), ...getState().mockNotes];
+              const activeQuery = (els.inlineSearchInput?.value || "").trim();
+              recentNotes = filterAndRankMockNotes(nextMock, {
+                project: folderMeta.name,
+                limit: 120,
+              });
+              searchResults = activeQuery
+                ? filterAndRankMockNotes(nextMock, {
+                    query: activeQuery,
+                    project: folderMeta.name,
+                    limit: 120,
+                  })
+                : [];
+              setState({ mockNotes: nextMock, notes: recentNotes });
+              toast("Saved locally");
               renderView();
+              apiClient.adapterLog("folder_save_fallback", message);
             }
+          } finally {
+            if (isMounted) setState({ loading: false });
           }
-
-          setCaptureHint("Saved. Enriching in background...");
-          toast("Item saved");
-          refreshNotes().catch(() => {});
-        } catch (error) {
-          if (!isMounted) return;
-
-          const message = conciseTechnicalError(error, "Save endpoint unavailable");
-          const validationLike = /missing content|invalid image|invalid file|invalid json|request failed \(4\d\d\)/i.test(message);
-
-          if (validationLike) {
-            if (els.contentInput) {
-              els.contentInput.value = pendingContent;
-            }
-            if (pendingAttachment.fileDataUrl) {
-              setAttachment(pendingAttachment.name || "file", pendingAttachment.fileDataUrl, pendingAttachment.fileMimeType || "");
-            }
-            setCaptureHint(message, "warn");
-            toast("Save failed", "error");
-          } else {
-            const nextMock = [buildLocalFallbackNote(payload), ...getState().mockNotes];
-            const activeQuery = (els.inlineSearchInput?.value || "").trim();
-            recentNotes = filterAndRankMockNotes(nextMock, {
-              project: folderMeta.name,
-              limit: 120,
-            });
-            searchResults = activeQuery
-              ? filterAndRankMockNotes(nextMock, {
-                  query: activeQuery,
-                  project: folderMeta.name,
-                  limit: 120,
-                })
-              : [];
-            setState({ mockNotes: nextMock, notes: recentNotes });
-
-            setCaptureHint("Saved locally.", "warn");
-            toast("Saved locally");
-            renderView();
-            apiClient.adapterLog("folder_save_fallback", message);
-          }
-        } finally {
-          if (!isMounted) return;
-          setState({ loading: false });
-          setSubmitting(false);
-        }
+        },
       });
+      disposers.push(cleanupSaveModal);
 
       on(els.refreshBtn, "click", async () => {
         await refreshNotes();
@@ -1857,8 +1610,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         }
       });
 
-      let chatPanel = null;
-
       // Item modal handlers via extracted component
       const cleanupItemModal = initItemModalHandlers(els, {
         onClose() {
@@ -1907,48 +1658,26 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         },
         onChatAbout(note) {
           closeItemModal(els);
-          chatPanel?.startFromNote?.(note);
+          shell.chatPanel?.startFromNote?.(note);
         },
       });
       disposers.push(cleanupItemModal);
 
-      // Chat panel
-      chatPanel = initChatPanel(els, {
-        apiClient,
-        toast,
-        onOpenCitation(note) {
-          if (!note) return;
-          openItemModal(els, note);
-          markAccessed(note.id);
-          renderView();
-        },
-      });
-      disposers.push(chatPanel.dispose);
-
-      on(els.chatBtn, "click", () => {
-        chatPanel.toggle();
-      });
-
-      on(els.signOutBtn, "click", async () => {
-        try {
-          await auth?.onSignOut?.();
-        } catch {
-          // no-op
-        }
-      });
-
       const cleanupKeyboard = initKeyboardShortcuts({
         onSearch() {
+          const searchWrap = mountNode.querySelector(".inline-search");
+          if (searchWrap) searchWrap.classList.add("is-visible");
           els.inlineSearchInput?.focus();
         },
         onComposer() {
-          els.contentInput?.focus();
+          els.chatPanelInput?.focus();
         },
         onEscape() {
           if ((els.inlineSearchInput?.value || "").trim()) {
             clearInlineSearch();
           }
           closeAllActionMenus(mountNode);
+          els.toolbarNewMenu?.classList.add("hidden");
           closeItemModal(els);
           closeFolderModal(els);
           closeMoveModal(els);
@@ -1956,16 +1685,10 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         },
       });
 
-      clearAttachment();
-      setCaptureHint("");
-
-      const cleanupAutoResize = initComposerAutoResize(mountNode);
-      disposers.push(cleanupAutoResize);
-
       function showSkeletons() {
         if (els.recentNotesList) {
           els.recentNotesList.innerHTML = Array.from({ length: 5 }, () =>
-            `<div class="skeleton-row"><div class="skeleton-dot skeleton-pulse"></div><div class="skeleton-line skeleton-pulse w-80" style="flex:1"></div></div>`
+            `<div class="recent-inline-skeleton skeleton-pulse" aria-hidden="true"></div>`
           ).join('');
         }
         if (els.folderItemsGrid) {
@@ -2022,7 +1745,6 @@ export function createFolderPage({ store, apiClient, auth = null }) {
             },
           }));
           if (!changed) return;
-          setCaptureHint("An item failed to enrich. You can still open it.", "warn");
           setState({ notes: recentNotes });
           renderView();
           return;
@@ -2060,6 +1782,9 @@ export function createFolderPage({ store, apiClient, auth = null }) {
         closeMoveModal(els);
         resolveMoveDialog(null);
         document.body.classList.remove("batch-mode-active");
+        // Clear shell callbacks
+        shell.setToast(null);
+        shell.setOnOpenCitation(null);
         disposers.forEach((dispose) => {
           dispose();
         });

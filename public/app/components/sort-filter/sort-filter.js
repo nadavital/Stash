@@ -69,7 +69,7 @@ export function initSortFilter(els, { onSortChange, onFilterChange, onToggle }) 
     const target = event.target;
     if (!(target instanceof Node)) return;
     if (els.sortFilterDropdown?.contains(target)) return;
-    if (els.topbarSortBtn?.contains(target)) return;
+    if (els.toolbarSortBtn?.contains(target)) return;
     els.sortFilterDropdown?.classList.remove("is-open");
   }
 

@@ -39,8 +39,7 @@
 }
 
 .action-menu-trigger:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 1px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .action-menu[open] .action-menu-trigger {
@@ -53,14 +52,23 @@
   top: calc(100% + 6px);
   right: 0;
   min-width: 148px;
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: 10px;
-  background: var(--surface);
-  box-shadow: var(--shadow-elevated);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(32px) saturate(1.5);
+  -webkit-backdrop-filter: blur(32px) saturate(1.5);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1), 0 1px 4px rgba(0, 0, 0, 0.04);
   padding: 4px;
   z-index: var(--z-dropdown);
   transform-origin: top right;
   animation: actionMenuIn var(--transition-base);
+}
+
+@media (prefers-color-scheme: dark) {
+  .action-menu-panel {
+    background: rgba(30, 30, 30, 0.82);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.2);
+  }
 }
 
 .action-menu.is-align-left .action-menu-panel {
@@ -118,8 +126,7 @@
 }
 
 .action-menu-item:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 1px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .action-menu-item.is-danger {

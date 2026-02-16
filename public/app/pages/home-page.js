@@ -1,7 +1,7 @@
-import { renderComposer, initComposerAutoResize } from "../components/composer/composer.js";
 import { renderHomeFolderGrid } from "../components/home-folder-grid/home-folder-grid.js";
-import { renderHomeRecentList } from "../components/home-recent-list/home-recent-list.js";
-import { renderTopbar } from "../components/topbar/topbar.js";
+import {
+  renderRecentInlineStripHTML,
+} from "../components/home-recent-list/home-recent-list.js";
 import { showToast } from "../components/toast/toast.js";
 import {
   renderItemModalHTML,
@@ -27,6 +27,13 @@ import {
   initMoveModalHandlers,
 } from "../components/move-modal/move-modal.js";
 import {
+  renderSaveModalHTML,
+  querySaveModalEls,
+  openSaveModal,
+  closeSaveModal,
+  initSaveModalHandlers,
+} from "../components/save-modal/save-modal.js";
+import {
   renderInlineSearchHTML,
   queryInlineSearchEls,
   renderSearchResults,
@@ -38,17 +45,16 @@ import {
   initSortFilter,
   toggleSortFilterDropdown,
 } from "../components/sort-filter/sort-filter.js";
-import {
-  renderChatPanelHTML,
-  queryChatPanelEls,
-  initChatPanel,
-} from "../components/chat-panel/chat-panel.js";
 import { createActionMenu, closeAllActionMenus } from "../components/action-menu/action-menu.js";
 import {
   normalizeFolderColor,
   fallbackColorForFolder,
   normalizeFolderDrafts,
 } from "../services/folder-utils.js";
+import {
+  renderContentToolbarHTML,
+  queryContentToolbarEls,
+} from "../components/content-toolbar/content-toolbar.js";
 import { initKeyboardShortcuts } from "../services/keyboard.js";
 import {
   buildContentPreview,
@@ -62,36 +68,135 @@ import {
 import {
   iconTypeFor,
   getNoteProcessingState,
-  fileToDataUrl,
   relativeTime,
 } from "../services/note-utils.js";
 
 
-function renderHomePageShell(authSession = null) {
+/* ── Paper card helpers for folder tissue-box ─────────── */
+
+const PAPER_TYPE_ICONS = {
+  text: "📝",
+  link: "🔗",
+  image: "🖼️",
+  file: "📄",
+};
+
+/** Extract best available HTTP image URL from a note object */
+function getNoteImageUrl(note) {
+  if (!note) return "";
+  const candidates = [
+    note.imagePath,
+    note.metadata?.ogImage,
+    note.metadata?.imageUrl,
+  ];
+  for (const url of candidates) {
+    if (url && typeof url === "string" && url.startsWith("http")) return url;
+  }
+  return "";
+}
+
+/** Create a paper DOM element with content from a note */
+function createPaperElement(layout, note) {
+  const paper = document.createElement("div");
+  paper.className = "folder-paper";
+  paper.style.setProperty("--pw", layout.w);
+  paper.style.setProperty("--ph", layout.h + "px");
+  paper.style.setProperty("--pl", layout.l || "auto");
+  paper.style.setProperty("--pr", layout.r || "auto");
+  paper.style.setProperty("--prot", layout.rot + "deg");
+
+  if (!note) return paper;
+
+  // Try image first — use <img> for lazy loading + error handling
+  const imageUrl = getNoteImageUrl(note);
+  if (imageUrl) {
+    const img = document.createElement("img");
+    img.className = "folder-paper-img";
+    img.src = imageUrl;
+    img.alt = "";
+    img.loading = "lazy";
+    img.draggable = false;
+    // On error, remove img and show icon+text fallback instead
+    img.onerror = () => {
+      img.remove();
+      paper.appendChild(buildPaperFallbackContent(note));
+    };
+    paper.appendChild(img);
+    return paper;
+  }
+
+  // Fallback: icon + text snippet
+  paper.appendChild(buildPaperFallbackContent(note));
+  return paper;
+}
+
+/** Build icon + text content for a paper without an image */
+function buildPaperFallbackContent(note) {
+  const content = document.createElement("div");
+  content.className = "folder-paper-content";
+
+  const noteType = iconTypeFor(note);
+  const icon = document.createElement("span");
+  icon.className = "folder-paper-icon";
+  icon.textContent = PAPER_TYPE_ICONS[noteType] || "📌";
+  content.appendChild(icon);
+
+  const title = buildNoteTitle(note);
+  if (title) {
+    const text = document.createElement("span");
+    text.className = "folder-paper-text";
+    text.textContent = title.length > 40 ? title.slice(0, 40) + "…" : title;
+    content.appendChild(text);
+  }
+
+  return content;
+}
+
+/**
+ * Paper layout configs for 1–4 papers in a folder card.
+ * More papers = each one is narrower/shorter to fit side-by-side.
+ * Properties: w (width), h (height px), l (left), r (right), rot (degrees)
+ */
+function getPaperLayouts(count) {
+  switch (count) {
+    case 1:
+      return [
+        { w: "52%", h: 160, l: "24%", r: null, rot: -3 },
+      ];
+    case 2:
+      return [
+        { w: "48%", h: 165, l: "8%",  r: null, rot: -5 },
+        { w: "46%", h: 155, l: null,   r: "8%", rot: 4 },
+      ];
+    case 3:
+      return [
+        { w: "40%", h: 158, l: "3%",  r: null, rot: -7 },
+        { w: "36%", h: 150, l: "32%", r: null, rot: 1 },
+        { w: "40%", h: 154, l: null,  r: "3%", rot: 6 },
+      ];
+    case 4:
+      return [
+        { w: "34%", h: 152, l: "1%",  r: null, rot: -8 },
+        { w: "30%", h: 144, l: "20%", r: null, rot: -2 },
+        { w: "30%", h: 148, l: null,  r: "18%", rot: 3 },
+        { w: "34%", h: 140, l: null,  r: "1%", rot: 7 },
+      ];
+    default:
+      return [];
+  }
+}
+
+function renderHomePageContent() {
   return `
     <section class="page page-home" style="position:relative;">
-      ${renderTopbar({
-        showNewFolder: true,
-        showSortFilter: true,
-        showViewToggle: true,
-        showSelectToggle: true,
-        showChatToggle: true,
-        auth: authSession,
-        showSignOut: true,
-      })}
-
       ${renderSortFilterHTML()}
 
-      <section class="home-layout">
-        <div class="home-explorer-pane">
-          ${renderInlineSearchHTML()}
-          ${renderHomeFolderGrid()}
-        </div>
-
-        ${renderHomeRecentList()}
-      </section>
-
-      ${renderComposer({ mode: "home" })}
+      <div class="home-explorer-pane">
+        ${renderContentToolbarHTML()}
+        ${renderInlineSearchHTML()}
+        ${renderRecentInlineStripHTML({ title: "Recent" })}
+        ${renderHomeFolderGrid()}
+      </div>
     </section>
 
     <div id="batch-action-bar" class="batch-action-bar hidden">
@@ -107,49 +212,32 @@ function renderHomePageShell(authSession = null) {
 
     ${renderMoveModalHTML()}
 
-    ${renderChatPanelHTML()}
+    ${renderSaveModalHTML()}
   `;
 }
 
-function queryElements(mountNode) {
+function queryPageElements(mountNode) {
   const itemModalEls = queryItemModalEls(mountNode);
   const folderModalEls = queryFolderModalEls(mountNode);
   const moveModalEls = queryMoveModalEls(mountNode);
+  const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
-  const chatPanelEls = queryChatPanelEls(mountNode);
+  const toolbarEls = queryContentToolbarEls(mountNode);
 
   return {
     ...itemModalEls,
     ...folderModalEls,
     ...moveModalEls,
+    ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
-    ...chatPanelEls,
-    topbarSortBtn: mountNode.querySelector("#topbar-sort-btn"),
-    captureForm: mountNode.querySelector("#capture-form"),
-    contentInput: mountNode.querySelector("#content-input"),
-    projectInput: mountNode.querySelector("#project-input"),
-    projectSelect: mountNode.querySelector("#project-select"),
-    captureHint: mountNode.querySelector("#capture-hint"),
-    attachmentToggle: mountNode.querySelector("#attachment-toggle"),
-    fileInput: mountNode.querySelector("#file-input"),
-    selectedFilePill: mountNode.querySelector("#selected-file-pill"),
-    selectedFileName: mountNode.querySelector("#selected-file-name"),
-    clearFileBtn: mountNode.querySelector("#clear-file-btn"),
-    saveBtn: mountNode.querySelector("#save-btn"),
+    ...toolbarEls,
     recentNotesList: mountNode.querySelector("#recent-notes-list"),
-    recentTasksList: mountNode.querySelector("#recent-tasks-list"),
     refreshBtn: mountNode.querySelector("#refresh-btn"),
     foldersList: mountNode.querySelector("#home-folders-list"),
     foldersEmpty: mountNode.querySelector("#home-folders-empty"),
     foldersError: mountNode.querySelector("#home-folders-error"),
-    viewGridBtn: mountNode.querySelector("#view-grid-btn"),
-    viewListBtn: mountNode.querySelector("#view-list-btn"),
-    newFolderBtn: mountNode.querySelector("#topbar-new-folder-btn"),
-    selectBtn: mountNode.querySelector("#topbar-select-btn"),
-    chatBtn: mountNode.querySelector("#topbar-chat-btn"),
-    signOutBtn: mountNode.querySelector("#topbar-signout-btn"),
     batchActionBar: mountNode.querySelector("#batch-action-bar"),
     batchActionCount: mountNode.querySelector("#batch-action-count"),
     batchDeleteBtn: mountNode.querySelector("#batch-delete-btn"),
@@ -159,23 +247,17 @@ function queryElements(mountNode) {
   };
 }
 
-export function createHomePage({ store, apiClient, auth = null }) {
+export function createHomePage({ store, apiClient, auth = null, shell }) {
   return {
     async mount({ mountNode, navigate }) {
-      const authSession = auth?.getSession?.() || null;
-      mountNode.innerHTML = renderHomePageShell(authSession);
-      const els = queryElements(mountNode);
+      mountNode.innerHTML = renderHomePageContent();
+      const pageEls = queryPageElements(mountNode);
+      const els = { ...shell.els, ...pageEls };
+
       const disposers = [];
       let isMounted = true;
       let searchTimer = null;
-      let attachment = {
-        name: "",
-        fileDataUrl: null,
-        fileMimeType: "",
-        isImage: false,
-      };
       let modalCreateKind = "folder";
-      let openTasks = [];
       let recentNotes = [];
       let searchResults = [];
       let sortMode = "newest";
@@ -196,6 +278,7 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
       on(document, "click", () => {
         closeAllActionMenus(mountNode);
+        els.toolbarNewMenu?.classList.add("hidden");
       });
 
       function getState() {
@@ -204,6 +287,24 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
       function setState(patch) {
         return store.setState(patch);
+      }
+
+      function listAllFolderNames() {
+        const names = new Set();
+        dbFolders.forEach((f) => {
+          const n = String(f?.name || "").trim();
+          if (n) names.add(n);
+        });
+        normalizeFolderDrafts(getState().draftFolders).forEach((f) => {
+          const n = String(f?.name || "").trim();
+          if (n) names.add(n);
+        });
+        recentNotes.forEach((entry, index) => {
+          const note = normalizeCitation(entry, index).note;
+          const n = String(note?.project || "").trim();
+          if (n) names.add(n);
+        });
+        return [...names].sort((a, b) => a.localeCompare(b));
       }
 
       function resolveMoveDialog(value) {
@@ -297,35 +398,58 @@ export function createHomePage({ store, apiClient, auth = null }) {
         setState({ draftFolders: nextDrafts });
       }
 
-      function setCaptureHint(text, tone = "neutral") {
-        if (!els.captureHint) return;
-        els.captureHint.textContent = text;
-        els.captureHint.classList.toggle("warn", tone === "warn");
-      }
-
-      function setSubmitting(active) {
-        const isActive = Boolean(active);
-        if (els.saveBtn) {
-          els.saveBtn.disabled = isActive;
-          els.saveBtn.classList.toggle("is-loading", isActive);
-        }
-        if (els.contentInput) {
-          els.contentInput.disabled = isActive;
-        }
-        if (els.projectSelect) {
-          els.projectSelect.disabled = isActive;
-        }
-        if (els.attachmentToggle) {
-          els.attachmentToggle.disabled = isActive;
-        }
-        if (els.clearFileBtn) {
-          els.clearFileBtn.disabled = isActive;
-        }
-      }
-
       function toast(message, tone = "success") {
         showToast(message, tone, store);
       }
+
+      // Register shell callbacks
+      shell.setToast(toast);
+      shell.setOnOpenCitation((note) => {
+        if (!note) return;
+        openItemModal(els, note);
+        markAccessed(note.id);
+        renderView();
+      });
+      // + menu toggle
+      on(els.toolbarNewBtn, "click", (e) => {
+        e.stopPropagation();
+        els.toolbarNewMenu?.classList.toggle("hidden");
+      });
+      on(els.toolbarNewItemBtn, "click", () => {
+        els.toolbarNewMenu?.classList.add("hidden");
+        openSaveModal(els, { folders: listAllFolderNames() });
+      });
+      on(els.toolbarNewFolderBtn, "click", () => {
+        els.toolbarNewMenu?.classList.add("hidden");
+        openFolderModal(els, { color: "green", kind: "folder" });
+        setFolderModalKind("folder");
+      });
+      on(els.toolbarNewTaskBtn, "click", () => {
+        els.toolbarNewMenu?.classList.add("hidden");
+        openFolderModal(els, { color: "green", kind: "task" });
+        setFolderModalKind("task");
+      });
+
+      // Search toggle
+      on(els.toolbarSearchToggle, "click", () => {
+        const searchWrap = mountNode.querySelector(".inline-search");
+        if (searchWrap) {
+          searchWrap.classList.toggle("is-visible");
+          if (searchWrap.classList.contains("is-visible")) {
+            els.inlineSearchInput?.focus();
+          }
+        }
+      });
+
+      // Sign out
+      on(els.toolbarSignOutBtn, "click", () => {
+        auth?.onSignOut?.();
+      });
+
+      // Chat toggle (mobile)
+      on(els.toolbarChatToggle, "click", () => {
+        shell.toggleChat();
+      });
 
       function setSearchQuery(value) {
         const nextValue = String(value ?? "");
@@ -593,7 +717,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
         const state = getState();
         const folderMap = new Map();
 
-        // Merge DB folders first
         dbFolders.forEach((folder) => {
           folderMap.set(folder.name.toLowerCase(), {
             ...folder,
@@ -611,6 +734,9 @@ export function createHomePage({ store, apiClient, auth = null }) {
             });
           }
         });
+
+        // Collect notes per folder for paper content (images, icons, text)
+        const folderNotesMap = new Map();
 
         recentNotes.forEach((entry, index) => {
           const note = normalizeCitation(entry, index).note;
@@ -630,6 +756,11 @@ export function createHomePage({ store, apiClient, auth = null }) {
           const current = folderMap.get(key);
           current.count += 1;
           folderMap.set(key, current);
+
+          // Store up to 4 notes per folder for paper display
+          if (!folderNotesMap.has(key)) folderNotesMap.set(key, []);
+          const notes = folderNotesMap.get(key);
+          if (notes.length < 4) notes.push(note);
         });
 
         const folders = [...folderMap.values()].sort((a, b) => {
@@ -654,7 +785,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
         folders.slice(0, 40).forEach((folder, folderIndex) => {
           if (isListView) {
-            // List view: compact row
             const row = document.createElement("div");
             row.className = "folder-pill-row";
             row.tabIndex = 0;
@@ -705,13 +835,21 @@ export function createHomePage({ store, apiClient, auth = null }) {
 
             els.foldersList.appendChild(row);
           } else {
-            // Grid view: existing card
             const card = document.createElement("article");
             card.className = "folder-pill";
             card.style.cssText = `animation: fadeInUp 200ms ease both;`;
             card.tabIndex = 0;
             card.setAttribute("role", "link");
             card.dataset.color = folder.color;
+
+            // Dynamic paper cards with content from actual notes (max 4)
+            const folderKey = folder.name.toLowerCase();
+            const folderNotes = folderNotesMap.get(folderKey) || [];
+            const paperCount = Math.min(Math.max(folder.count, 0), 4);
+            const paperLayouts = getPaperLayouts(paperCount);
+            paperLayouts.forEach((p, i) => {
+              card.appendChild(createPaperElement(p, folderNotes[i] || null));
+            });
 
             const nameEl = document.createElement("span");
             nameEl.className = "folder-pill-name";
@@ -744,9 +882,14 @@ export function createHomePage({ store, apiClient, auth = null }) {
             });
 
             footer.append(countEl, actionMenu);
-            card.append(nameEl, footer);
 
-            card.addEventListener("click", () => {
+            const inner = document.createElement("div");
+            inner.className = "folder-pill-inner";
+            inner.append(nameEl, footer);
+            card.append(inner);
+
+            card.addEventListener("click", (e) => {
+              if (e.target.closest(".action-menu")) return;
               navigate(`#/folder/${encodeURIComponent(folder.name)}`);
             });
             card.addEventListener("keydown", (event) => {
@@ -761,12 +904,10 @@ export function createHomePage({ store, apiClient, auth = null }) {
       }
 
       function renderRecent() {
-        if (!els.recentNotesList || !els.recentTasksList) return;
+        if (!els.recentNotesList) return;
         els.recentNotesList.innerHTML = "";
-        els.recentTasksList.innerHTML = "";
 
-        const noteItems = applySortFilter(Array.isArray(recentNotes) ? recentNotes : []).slice(0, 16);
-        const taskItems = Array.isArray(openTasks) ? openTasks.slice(0, 16) : [];
+        const noteItems = applySortFilter(Array.isArray(recentNotes) ? recentNotes : []).slice(0, 12);
 
         if (!noteItems.length) {
           const emptyNotes = document.createElement("p");
@@ -776,13 +917,13 @@ export function createHomePage({ store, apiClient, auth = null }) {
         } else {
           noteItems.forEach((entry, index) => {
             const note = normalizeCitation(entry, index).note;
-            const row = document.createElement("div");
-            row.className = "recent-item-row";
-
             const item = document.createElement("button");
             item.type = "button";
-            item.className = "recent-item";
+            item.className = "recent-inline-card";
             item.title = buildNoteTitle(note);
+
+            const head = document.createElement("span");
+            head.className = "recent-inline-card-head";
 
             const icon = document.createElement("span");
             icon.className = "recent-item-icon";
@@ -790,193 +931,39 @@ export function createHomePage({ store, apiClient, auth = null }) {
             icon.dataset.type = noteType;
             icon.title = `${noteType} note`;
 
-            const label = document.createElement("span");
-            label.className = "recent-item-label";
-            label.textContent = buildNoteTitle(note);
-
             const timeEl = document.createElement("span");
-            timeEl.className = "recent-item-time";
+            timeEl.className = "recent-inline-card-time";
             timeEl.textContent = relativeTime(note.createdAt);
 
-            const states = document.createElement("span");
-            states.className = "recent-item-states";
+            head.append(icon, timeEl);
+
+            const label = document.createElement("span");
+            label.className = "recent-inline-card-title";
+            label.textContent = buildNoteTitle(note);
+
+            const meta = document.createElement("span");
+            meta.className = "recent-inline-card-meta";
             const processingState = getNoteProcessingState(note);
 
             if (processingState.showLabel) {
               const statusText = document.createElement("span");
-              statusText.className = `recent-item-status ${processingState.dotClass}`;
+              statusText.className = `recent-inline-status ${processingState.dotClass}`;
               statusText.textContent = processingState.label;
-              states.append(statusText);
+              meta.append(statusText);
             } else {
-              states.classList.add("hidden");
+              meta.textContent = noteType;
             }
-            item.append(icon, label, timeEl, states);
+            item.append(head, label, meta);
 
             item.addEventListener("click", () => {
-              if (selectMode) {
-                toggleNoteSelection(note.id);
-                row.classList.toggle("is-selected", selectedIds.has(String(note.id)));
-                const cb = row.querySelector(".batch-select-checkbox");
-                if (cb) cb.checked = selectedIds.has(String(note.id));
-                return;
-              }
               openItemModal(els, note);
               markAccessed(note.id);
               renderRecent();
             });
 
-            const actionMenu = createActionMenu({
-              ariaLabel: `Actions for item ${buildNoteTitle(note)}`,
-              actions: [
-                {
-                  label: "Delete item",
-                  tone: "danger",
-                  onSelect: async () => {
-                    await deleteNoteById(note.id);
-                  },
-                },
-              ],
-            });
-
-            // Batch select checkbox
-            if (selectMode) {
-              const checkbox = document.createElement("input");
-              checkbox.type = "checkbox";
-              checkbox.className = "batch-select-checkbox";
-              checkbox.checked = selectedIds.has(String(note.id));
-              checkbox.addEventListener("change", () => {
-                toggleNoteSelection(note.id);
-                row.classList.toggle("is-selected", selectedIds.has(String(note.id)));
-              });
-              row.style.position = "relative";
-              row.prepend(checkbox);
-            }
-
-            row.append(item, actionMenu);
-            els.recentNotesList.appendChild(row);
+            els.recentNotesList.appendChild(item);
           });
         }
-
-        // Load more button
-        if (hasMoreNotes && noteItems.length > 0) {
-          const loadMoreBtn = document.createElement("button");
-          loadMoreBtn.type = "button";
-          loadMoreBtn.className = "batch-action-btn";
-          loadMoreBtn.style.cssText = "width: 100%; margin-top: 8px;";
-          loadMoreBtn.textContent = "Load more";
-          loadMoreBtn.addEventListener("click", async () => {
-            currentOffset += PAGE_SIZE;
-            try {
-              const moreResult = await apiClient.fetchNotes({ limit: PAGE_SIZE, offset: currentOffset });
-              if (!isMounted) return;
-              const moreItems = Array.isArray(moreResult.items) ? moreResult.items : [];
-              recentNotes = [...recentNotes, ...moreItems];
-              hasMoreNotes = moreResult.hasMore;
-              setState({ notes: recentNotes });
-              renderView();
-            } catch {
-              if (!isMounted) return;
-              toast("Failed to load more", "error");
-            }
-          });
-          els.recentNotesList.appendChild(loadMoreBtn);
-        }
-
-        if (!taskItems.length) {
-          const emptyTasks = document.createElement("p");
-          emptyTasks.className = "ui-empty";
-          emptyTasks.textContent = "No open tasks.";
-          els.recentTasksList.appendChild(emptyTasks);
-          return;
-        }
-
-        taskItems.forEach((task) => {
-          const row = document.createElement("div");
-          row.className = "recent-task-row";
-
-          const item = document.createElement("div");
-          item.className = "recent-task-item";
-          item.title = task.title || "";
-
-          const dot = document.createElement("span");
-          dot.className = "recent-task-dot";
-
-          const label = document.createElement("span");
-          label.className = "recent-task-label";
-          label.textContent = String(task.title || "").trim() || "(untitled task)";
-
-          item.append(dot, label);
-
-          const startInlineEdit = () => {
-            label.classList.add("hidden");
-            const input = document.createElement("input");
-            input.type = "text";
-            input.className = "task-inline-edit";
-            input.value = String(task.title || "").trim();
-            item.insertBefore(input, label);
-            input.focus();
-            input.select();
-            const save = async () => {
-              const newTitle = input.value.trim();
-              if (newTitle && newTitle !== task.title) {
-                try {
-                  await apiClient.updateTask(task.id, { title: newTitle });
-                  toast("Task updated");
-                  await refreshNotes();
-                } catch { toast("Update failed", "error"); }
-              } else {
-                input.remove();
-                label.classList.remove("hidden");
-              }
-            };
-            input.addEventListener("keydown", (e) => {
-              if (e.key === "Enter") { e.preventDefault(); save(); }
-              if (e.key === "Escape") { input.remove(); label.classList.remove("hidden"); }
-            });
-            input.addEventListener("blur", save);
-          };
-
-          const actionMenu = createActionMenu({
-            ariaLabel: `Actions for task ${String(task.title || "").trim() || "(untitled task)"}`,
-            actions: [
-              {
-                label: "Edit task",
-                onSelect: async () => {
-                  startInlineEdit();
-                },
-              },
-              {
-                label: "Mark complete",
-                onSelect: async () => {
-                  try {
-                    await apiClient.updateTask(task.id, { status: "closed" });
-                    toast("Task completed");
-                    await refreshNotes();
-                  } catch {
-                    toast("Complete failed", "error");
-                  }
-                },
-              },
-              {
-                label: "Delete task",
-                tone: "danger",
-                onSelect: async () => {
-                  if (!window.confirm("Delete this task?")) return;
-                  try {
-                    await apiClient.deleteTask(task.id);
-                    toast("Task deleted");
-                    await refreshNotes();
-                  } catch {
-                    toast("Delete failed", "error");
-                  }
-                },
-              },
-            ],
-          });
-
-          row.append(item, actionMenu);
-          els.recentTasksList.appendChild(row);
-        });
       }
 
       function renderInlineSearchResults() {
@@ -1001,52 +988,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
         scheduleSearchRefresh({ immediate: true });
       }
 
-      function renderProjectOptions() {
-        if (!els.projectSelect) return;
-
-        const state = getState();
-        const folderNames = new Set();
-
-        normalizeFolderDrafts(state.draftFolders).forEach((folder) => {
-          folderNames.add(folder.name);
-        });
-
-        recentNotes.forEach((entry, index) => {
-          const note = normalizeCitation(entry, index).note;
-          const projectName = String(note.project || "").trim();
-          if (projectName) {
-            folderNames.add(projectName);
-          }
-        });
-
-        const options = [...folderNames].sort((a, b) => a.localeCompare(b));
-        const currentValue = String(els.projectSelect.value || els.projectInput?.value || "").trim();
-
-        els.projectSelect.innerHTML = '<option value="">Folder</option>';
-        options.forEach((name) => {
-          const option = document.createElement("option");
-          option.value = name;
-          option.textContent = name;
-          els.projectSelect.append(option);
-        });
-
-        if (currentValue && options.includes(currentValue)) {
-          els.projectSelect.value = currentValue;
-        } else if (currentValue) {
-          const option = document.createElement("option");
-          option.value = currentValue;
-          option.textContent = currentValue;
-          els.projectSelect.append(option);
-          els.projectSelect.value = currentValue;
-        } else {
-          els.projectSelect.value = "";
-        }
-
-        if (els.projectInput) {
-          els.projectInput.value = String(els.projectSelect.value || "").trim();
-        }
-      }
-
       function renderView() {
         const query = String(els.inlineSearchInput?.value || "").trim();
 
@@ -1054,13 +995,11 @@ export function createHomePage({ store, apiClient, auth = null }) {
           if (els.foldersEmpty) els.foldersEmpty.classList.add("hidden");
           renderInlineSearchResults();
           renderRecent();
-          renderProjectOptions();
           return;
         }
 
         renderFolders();
         renderRecent();
-        renderProjectOptions();
       }
 
       async function refreshNotes() {
@@ -1073,14 +1012,12 @@ export function createHomePage({ store, apiClient, auth = null }) {
           if (includeSearch) {
             requests.push(apiClient.fetchNotes({ query, limit: 120 }));
           }
-          requests.push(apiClient.fetchTasks({ status: "open" }));
           requests.push(apiClient.fetchFolders());
 
           const results = await Promise.allSettled(requests);
           const recentResult = results[0];
           const searchResult = includeSearch ? results[1] : null;
-          const tasksResult = includeSearch ? results[2] : results[1];
-          const foldersResult = includeSearch ? results[3] : results[2];
+          const foldersResult = includeSearch ? results[2] : results[1];
 
           if (recentResult.status !== "fulfilled") throw recentResult.reason;
 
@@ -1092,10 +1029,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
               ? searchResult.value.items
               : [];
           setState({ notes: recentNotes });
-          openTasks =
-            tasksResult.status === "fulfilled" && Array.isArray(tasksResult.value?.items)
-              ? tasksResult.value.items
-              : [];
           dbFolders =
             foldersResult?.status === "fulfilled" && Array.isArray(foldersResult.value?.items)
               ? foldersResult.value.items.filter((f) => !f.parentId)
@@ -1108,7 +1041,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
           recentNotes = filterAndRankMockNotes(getState().mockNotes, { limit: 120 });
           searchResults = includeSearch ? filterAndRankMockNotes(getState().mockNotes, { query, limit: 120 }) : [];
           setState({ notes: recentNotes });
-          openTasks = [];
           setFallbackHint(true);
           renderView();
           apiClient.adapterLog("notes_fallback", message);
@@ -1131,42 +1063,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
           refreshNotes();
         }, 220);
       }
-
-      function clearAttachment() {
-        attachment = {
-          name: "",
-          fileDataUrl: null,
-          fileMimeType: "",
-          isImage: false,
-        };
-
-        if (els.fileInput) {
-          els.fileInput.value = "";
-        }
-
-        if (els.selectedFileName) {
-          els.selectedFileName.textContent = "";
-        }
-
-        els.selectedFilePill?.classList.add("hidden");
-      }
-
-      function setAttachment(fileName, fileDataUrl = null, fileMimeType = "") {
-        const normalizedMime = String(fileMimeType || "").toLowerCase();
-        attachment = {
-          name: fileName,
-          fileDataUrl,
-          fileMimeType: normalizedMime,
-          isImage: normalizedMime.startsWith("image/"),
-        };
-
-        if (els.selectedFileName) {
-          els.selectedFileName.textContent = fileName;
-        }
-
-        els.selectedFilePill?.classList.remove("hidden");
-      }
-
 
       function setFolderModalKind(kind) {
         modalCreateKind = kind === "task" ? "task" : "folder";
@@ -1209,8 +1105,8 @@ export function createHomePage({ store, apiClient, auth = null }) {
         selectedIds.clear();
         const page = mountNode.querySelector(".page-home");
         if (page) page.classList.toggle("select-mode", selectMode);
-        if (els.selectBtn) els.selectBtn.classList.toggle("is-active", selectMode);
-        if (els.selectBtn) els.selectBtn.textContent = selectMode ? "Done" : "Select";
+        if (els.toolbarSelectBtn) els.toolbarSelectBtn.classList.toggle("is-active", selectMode);
+        if (els.toolbarSelectBtn) els.toolbarSelectBtn.textContent = selectMode ? "Done" : "Select";
         updateBatchBar();
         renderView();
       }
@@ -1237,7 +1133,7 @@ export function createHomePage({ store, apiClient, auth = null }) {
         updateBatchBar();
       }
 
-      on(els.selectBtn, "click", () => {
+      on(els.toolbarSelectBtn, "click", () => {
         toggleSelectMode();
       });
 
@@ -1283,29 +1179,29 @@ export function createHomePage({ store, apiClient, auth = null }) {
       // View toggle handlers
       const viewMode = getState().viewMode || "grid";
       if (viewMode === "list") {
-        els.viewGridBtn?.classList.remove("is-active");
-        els.viewListBtn?.classList.add("is-active");
+        els.toolbarViewGridBtn?.classList.remove("is-active");
+        els.toolbarViewListBtn?.classList.add("is-active");
         els.foldersList?.classList.add("view-list");
       }
 
-      on(els.viewGridBtn, "click", () => {
+      on(els.toolbarViewGridBtn, "click", () => {
         setState({ viewMode: "grid" });
-        els.viewGridBtn?.classList.add("is-active");
-        els.viewListBtn?.classList.remove("is-active");
+        els.toolbarViewGridBtn?.classList.add("is-active");
+        els.toolbarViewListBtn?.classList.remove("is-active");
         els.foldersList?.classList.remove("view-list");
         renderView();
       });
 
-      on(els.viewListBtn, "click", () => {
+      on(els.toolbarViewListBtn, "click", () => {
         setState({ viewMode: "list" });
-        els.viewListBtn?.classList.add("is-active");
-        els.viewGridBtn?.classList.remove("is-active");
+        els.toolbarViewListBtn?.classList.add("is-active");
+        els.toolbarViewGridBtn?.classList.remove("is-active");
         els.foldersList?.classList.add("view-list");
         renderView();
       });
 
       // Sort/filter via extracted component
-      on(els.topbarSortBtn, "click", (event) => {
+      on(els.toolbarSortBtn, "click", (event) => {
         event.stopPropagation();
         toggleSortFilterDropdown(els);
       });
@@ -1338,181 +1234,76 @@ export function createHomePage({ store, apiClient, auth = null }) {
       });
       disposers.push(cleanupInlineSearch);
 
-      on(els.attachmentToggle, "click", () => {
-        els.fileInput?.click();
-      });
+      // Save modal handlers
+      const cleanupSaveModal = initSaveModalHandlers(els, {
+        onClose() {
+          closeSaveModal(els);
+        },
+        async onSubmit({ content, project, attachment }) {
+          if (getState().loading) return;
 
-      on(els.fileInput, "change", async () => {
-        const file = els.fileInput?.files?.[0];
-        if (!file) return;
+          const inferred = attachment.fileDataUrl
+            ? { sourceType: attachment.isImage ? "image" : "file", sourceUrl: "" }
+            : inferCaptureType(content, null);
+          const payload = {
+            sourceType: inferred.sourceType,
+            content,
+            sourceUrl: inferred.sourceUrl,
+            project,
+            imageDataUrl: attachment.isImage ? attachment.fileDataUrl : null,
+            fileDataUrl: attachment.fileDataUrl,
+            fileName: attachment.name || "",
+            fileMimeType: attachment.fileMimeType || "",
+          };
 
-        try {
-          const fileDataUrl = await fileToDataUrl(file);
-          setAttachment(file.name || "file", fileDataUrl, file.type || "");
-        } catch (error) {
-          setCaptureHint(conciseTechnicalError(error, "File read failed"), "warn");
-          toast("File read failed", "error");
-        }
-      });
+          closeSaveModal(els);
+          setState({ loading: true });
 
-      on(els.clearFileBtn, "click", () => {
-        clearAttachment();
-      });
-
-      const composerShell = mountNode.querySelector('.composer-shell');
-      if (composerShell) {
-        on(composerShell, 'dragover', (e) => {
-          e.preventDefault();
-          composerShell.classList.add('drag-active');
-        });
-        on(composerShell, 'dragleave', (e) => {
-          if (!composerShell.contains(e.relatedTarget)) {
-            composerShell.classList.remove('drag-active');
-          }
-        });
-        on(composerShell, 'drop', async (e) => {
-          e.preventDefault();
-          composerShell.classList.remove('drag-active');
-          const file = e.dataTransfer?.files?.[0];
-          if (!file) return;
           try {
-            const dataUrl = await fileToDataUrl(file);
-            setAttachment(file.name || 'file', dataUrl, file.type || '');
-          } catch (err) {
-            toast('File read failed', 'error');
-          }
-        });
-      }
+            const saveResult = await apiClient.saveNote(payload);
+            if (!isMounted) return;
 
-      // Full-page drop zone
-      const pageEl = mountNode.querySelector('.page-home');
-      if (pageEl) {
-        on(pageEl, 'dragover', (e) => {
-          e.preventDefault();
-          pageEl.classList.add('page-drag-active');
-        });
-        on(pageEl, 'dragleave', (e) => {
-          if (!pageEl.contains(e.relatedTarget)) {
-            pageEl.classList.remove('page-drag-active');
-          }
-        });
-        on(pageEl, 'drop', async (e) => {
-          e.preventDefault();
-          pageEl.classList.remove('page-drag-active');
-          const file = e.dataTransfer?.files?.[0];
-          if (!file) return;
-          try {
-            const dataUrl = await fileToDataUrl(file);
-            setAttachment(file.name || 'file', dataUrl, file.type || '');
-            els.contentInput?.focus();
-          } catch {
-            toast('File read failed', 'error');
-          }
-        });
-      }
-
-      on(els.projectSelect, "change", () => {
-        if (!els.projectInput) return;
-        els.projectInput.value = String(els.projectSelect?.value || "").trim();
-      });
-
-      on(els.captureForm, "submit", async (event) => {
-        event.preventDefault();
-        if (getState().loading) return;
-
-        const rawContent = (els.contentInput?.value || "").trim();
-        const project = String(els.projectSelect?.value || els.projectInput?.value || "").trim();
-        const content = rawContent;
-
-        if (!content && !attachment.fileDataUrl) {
-          setCaptureHint("Add text, link, image, or file.", "warn");
-          toast("Add content first", "error");
-          els.contentInput?.focus();
-          return;
-        }
-
-        const inferred = attachment.fileDataUrl
-          ? { sourceType: attachment.isImage ? "image" : "file", sourceUrl: "" }
-          : inferCaptureType(content, null);
-        const payload = {
-          sourceType: inferred.sourceType,
-          content,
-          sourceUrl: inferred.sourceUrl,
-          project,
-          imageDataUrl: attachment.isImage ? attachment.fileDataUrl : null,
-          fileDataUrl: attachment.fileDataUrl,
-          fileName: attachment.name || "",
-          fileMimeType: attachment.fileMimeType || "",
-        };
-        const pendingContent = rawContent;
-        const pendingAttachment = { ...attachment };
-
-        setState({ loading: true });
-        setSubmitting(true);
-        setCaptureHint("Processing item...");
-        if (els.contentInput) {
-          els.contentInput.value = "";
-        }
-        clearAttachment();
-
-        try {
-          const saveResult = await apiClient.saveNote(payload);
-          if (!isMounted) return;
-
-          if (saveResult?.note) {
-            const savedEntry = normalizeCitation(saveResult.note, 0);
-            const savedId = String(savedEntry?.note?.id || "");
-            const deduped = recentNotes.filter((entry) => String((entry?.note || entry)?.id || "") !== savedId);
-            recentNotes = [savedEntry, ...deduped].slice(0, 120);
-            setState({ notes: recentNotes });
-            renderView();
-          }
-
-          setCaptureHint("Saved. Enriching in background...");
-          toast("Item saved");
-          refreshNotes().catch(() => {});
-        } catch (error) {
-          if (!isMounted) return;
-
-          const message = conciseTechnicalError(error, "Save endpoint unavailable");
-          const validationLike = /missing content|invalid image|invalid file|invalid json|request failed \(4\d\d\)/i.test(message);
-
-          if (validationLike) {
-            if (els.contentInput) {
-              els.contentInput.value = pendingContent;
+            if (saveResult?.note) {
+              const savedEntry = normalizeCitation(saveResult.note, 0);
+              const savedId = String(savedEntry?.note?.id || "");
+              const deduped = recentNotes.filter((entry) => String((entry?.note || entry)?.id || "") !== savedId);
+              recentNotes = [savedEntry, ...deduped].slice(0, 120);
+              setState({ notes: recentNotes });
+              renderView();
             }
-            if (pendingAttachment.fileDataUrl) {
-              setAttachment(pendingAttachment.name || "file", pendingAttachment.fileDataUrl, pendingAttachment.fileMimeType || "");
-            }
-            setCaptureHint(message, "warn");
-            toast("Save failed", "error");
-          } else {
-            const nextMock = [buildLocalFallbackNote(payload), ...getState().mockNotes];
-            const activeQuery = (els.inlineSearchInput?.value || "").trim();
-            recentNotes = filterAndRankMockNotes(nextMock, { limit: 120 });
-            searchResults = activeQuery ? filterAndRankMockNotes(nextMock, { query: activeQuery, limit: 120 }) : [];
-            setState({ mockNotes: nextMock, notes: recentNotes });
 
-            setCaptureHint("Saved locally.", "warn");
-            toast("Saved locally");
-            setFallbackHint(true);
-            renderView();
-            apiClient.adapterLog("save_fallback", message);
+            toast("Item saved");
+            refreshNotes().catch(() => {});
+          } catch (error) {
+            if (!isMounted) return;
+
+            const message = conciseTechnicalError(error, "Save endpoint unavailable");
+            const validationLike = /missing content|invalid image|invalid file|invalid json|request failed \(4\d\d\)/i.test(message);
+
+            if (validationLike) {
+              toast("Save failed", "error");
+            } else {
+              const nextMock = [buildLocalFallbackNote(payload), ...getState().mockNotes];
+              const activeQuery = (els.inlineSearchInput?.value || "").trim();
+              recentNotes = filterAndRankMockNotes(nextMock, { limit: 120 });
+              searchResults = activeQuery ? filterAndRankMockNotes(nextMock, { query: activeQuery, limit: 120 }) : [];
+              setState({ mockNotes: nextMock, notes: recentNotes });
+
+              toast("Saved locally");
+              setFallbackHint(true);
+              renderView();
+              apiClient.adapterLog("save_fallback", message);
+            }
+          } finally {
+            if (!isMounted) return;
+            setState({ loading: false });
           }
-        } finally {
-          if (!isMounted) return;
-          setState({ loading: false });
-          setSubmitting(false);
-        }
+        },
       });
+      disposers.push(cleanupSaveModal);
 
       on(els.refreshBtn, "click", async () => {
         await refreshNotes();
-      });
-
-      on(els.newFolderBtn, "click", () => {
-        openFolderModal(els, { color: "green", kind: "folder" });
-        setFolderModalKind("folder");
       });
 
       on(els.folderKindRow, "click", (event) => {
@@ -1554,8 +1345,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
         },
       });
       disposers.push(cleanupMoveModal);
-
-      let chatPanel = null;
 
       // Item modal handlers via extracted component
       const cleanupItemModal = initItemModalHandlers(els, {
@@ -1605,35 +1394,10 @@ export function createHomePage({ store, apiClient, auth = null }) {
         },
         onChatAbout(note) {
           closeItemModal(els);
-          chatPanel?.startFromNote?.(note);
+          shell.chatPanel?.startFromNote?.(note);
         },
       });
       disposers.push(cleanupItemModal);
-
-      // Chat panel
-      chatPanel = initChatPanel(els, {
-        apiClient,
-        toast,
-        onOpenCitation(note) {
-          if (!note) return;
-          openItemModal(els, note);
-          markAccessed(note.id);
-          renderView();
-        },
-      });
-      disposers.push(chatPanel.dispose);
-
-      on(els.chatBtn, "click", () => {
-        chatPanel.toggle();
-      });
-
-      on(els.signOutBtn, "click", async () => {
-        try {
-          await auth?.onSignOut?.();
-        } catch {
-          // no-op
-        }
-      });
 
       on(els.folderForm, "submit", async (event) => {
         event.preventDefault();
@@ -1654,7 +1418,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
             toast("Task created");
             await refreshNotes();
           } catch (error) {
-            setCaptureHint(conciseTechnicalError(error, "Task save failed"), "warn");
             toast("Task save failed", "error");
           }
           return;
@@ -1666,7 +1429,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
         try {
           await apiClient.createFolder({ name, description, color });
         } catch {
-          // Fallback to draft folder if API fails
           upsertDraftFolder({ name, description, color });
         }
         closeFolderModal(els);
@@ -1674,16 +1436,11 @@ export function createHomePage({ store, apiClient, auth = null }) {
       });
 
       setFolderModalKind("folder");
-      clearAttachment();
-      setCaptureHint("");
-
-      const cleanupAutoResize = initComposerAutoResize(mountNode);
-      disposers.push(cleanupAutoResize);
 
       function showSkeletons() {
         if (els.recentNotesList) {
           els.recentNotesList.innerHTML = Array.from({ length: 5 }, () =>
-            `<div class="skeleton-row"><div class="skeleton-dot skeleton-pulse"></div><div class="skeleton-line skeleton-pulse w-80" style="flex:1"></div></div>`
+            `<div class="recent-inline-skeleton skeleton-pulse" aria-hidden="true"></div>`
           ).join('');
         }
       }
@@ -1694,16 +1451,19 @@ export function createHomePage({ store, apiClient, auth = null }) {
       // Global keyboard shortcuts
       const cleanupKeyboard = initKeyboardShortcuts({
         onSearch: () => {
+          const searchWrap = mountNode.querySelector(".inline-search");
+          if (searchWrap) searchWrap.classList.add("is-visible");
           els.inlineSearchInput?.focus();
         },
         onComposer: () => {
-          els.contentInput?.focus();
+          els.chatPanelInput?.focus();
         },
         onEscape: () => {
           if ((els.inlineSearchInput?.value || "").trim()) {
             clearInlineSearch();
           }
           closeAllActionMenus(mountNode);
+          els.toolbarNewMenu?.classList.add("hidden");
           closeItemModal(els);
           closeFolderModal(els);
           closeMoveModal(els);
@@ -1754,7 +1514,6 @@ export function createHomePage({ store, apiClient, auth = null }) {
             },
           }));
           if (!changed) return;
-          setCaptureHint("An item failed to enrich. You can still open it.", "warn");
           setState({ notes: recentNotes });
           renderView();
           return;
@@ -1791,6 +1550,9 @@ export function createHomePage({ store, apiClient, auth = null }) {
         closeMoveModal(els);
         resolveMoveDialog(null);
         document.body.classList.remove("batch-mode-active");
+        // Clear shell callbacks
+        shell.setToast(null);
+        shell.setOnOpenCitation(null);
         disposers.forEach((dispose) => {
           dispose();
         });

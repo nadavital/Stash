@@ -1,23 +1,22 @@
 import { buildNoteTitle, buildContentPreview, normalizeCitation } from "../../services/mappers.js";
 
+const MAX_MESSAGES = 100;
+
 export function renderChatPanelHTML() {
   return `
-    <div id="chat-panel" class="chat-panel hidden" aria-label="Chat with your notes">
-      <div class="chat-panel-header">
-        <h4 class="chat-panel-heading">Ask your notes</h4>
-        <button id="chat-panel-close" class="chat-panel-close" type="button" aria-label="Close chat">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>
-        </button>
-      </div>
+    <div id="chat-panel" class="chat-panel" aria-label="Chat with your notes">
       <div id="chat-panel-messages" class="chat-panel-messages"></div>
       <div class="chat-panel-citations hidden" id="chat-panel-citations"></div>
       <form id="chat-panel-form" class="chat-panel-form">
-        <input id="chat-panel-input" class="chat-panel-input" type="text" placeholder="Ask a question..." autocomplete="off" />
-        <button id="chat-panel-send" class="chat-panel-send" type="submit" aria-label="Send">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2L7 9M14 2L10 14L7 9L2 6L14 2Z"/>
-          </svg>
-        </button>
+        <div class="chat-panel-input-wrap">
+          <textarea id="chat-panel-input" class="chat-panel-input" rows="2" placeholder="Ask about your notes..." autocomplete="off"></textarea>
+          <button id="chat-panel-send" class="chat-panel-send" type="submit" aria-label="Send">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="8" y1="14" x2="8" y2="3"/>
+              <polyline points="3 7 8 2 13 7"/>
+            </svg>
+          </button>
+        </div>
       </form>
     </div>
   `;
@@ -26,7 +25,6 @@ export function renderChatPanelHTML() {
 export function queryChatPanelEls(root) {
   return {
     chatPanel: root.querySelector("#chat-panel"),
-    chatPanelClose: root.querySelector("#chat-panel-close"),
     chatPanelMessages: root.querySelector("#chat-panel-messages"),
     chatPanelCitations: root.querySelector("#chat-panel-citations"),
     chatPanelForm: root.querySelector("#chat-panel-form"),
@@ -35,7 +33,7 @@ export function queryChatPanelEls(root) {
   };
 }
 
-export function initChatPanel(els, { apiClient, toast, onOpenCitation } = {}) {
+export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } = {}) {
   const handlers = [];
   let isAsking = false;
   let nextProjectHint = "";
@@ -46,16 +44,33 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation } = {}) {
     handlers.push(() => target.removeEventListener(event, handler));
   }
 
-  function togglePanel(show) {
-    if (!els.chatPanel) return;
-    if (typeof show === "boolean") {
-      els.chatPanel.classList.toggle("hidden", !show);
-    } else {
-      els.chatPanel.classList.toggle("hidden");
+  function pushToStore(role, text) {
+    if (!store) return;
+    const state = store.getState();
+    const messages = [...(state.chatMessages || [])];
+    messages.push({ role, text, id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+    if (messages.length > MAX_MESSAGES) {
+      messages.splice(0, messages.length - MAX_MESSAGES);
     }
-    if (!els.chatPanel.classList.contains("hidden")) {
-      els.chatPanelInput?.focus();
+    store.setState({ chatMessages: messages });
+  }
+
+  function updateLastAssistantInStore(text) {
+    if (!store) return;
+    const state = store.getState();
+    const messages = [...(state.chatMessages || [])];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") {
+        messages[i] = { ...messages[i], text };
+        break;
+      }
     }
+    store.setState({ chatMessages: messages });
+  }
+
+  function saveCitationsToStore(citations) {
+    if (!store) return;
+    store.setState({ chatCitations: citations || [] });
   }
 
   function addMessage(role, text) {
@@ -66,6 +81,27 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation } = {}) {
     els.chatPanelMessages.appendChild(msg);
     els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
     return msg;
+  }
+
+  function rebuildFromStore() {
+    if (!store || !els.chatPanelMessages) return;
+    const state = store.getState();
+    const messages = state.chatMessages || [];
+    if (!messages.length) return;
+
+    els.chatPanelMessages.innerHTML = "";
+    messages.forEach((msg) => {
+      const el = document.createElement("div");
+      el.className = `chat-msg chat-msg--${msg.role}`;
+      el.textContent = msg.text;
+      els.chatPanelMessages.appendChild(el);
+    });
+    els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
+
+    const citations = state.chatCitations || [];
+    if (citations.length) {
+      renderCitations(citations);
+    }
   }
 
   function renderCitations(citations = []) {
@@ -145,22 +181,39 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation } = {}) {
     return lines.filter(Boolean).join("\n");
   }
 
-  async function handleSubmit() {
-    if (isAsking) return;
-    const question = (els.chatPanelInput?.value || "").trim();
-    if (!question) return;
-    const project = nextProjectHint;
+  async function askQuestion(rawQuestion, { projectHint = "" } = {}) {
+    if (isAsking) return false;
+    const question = String(rawQuestion || "").trim();
+    if (!question) return false;
+    const project = String(projectHint || nextProjectHint || "").trim();
     nextProjectHint = "";
 
     addMessage("user", question);
-    if (els.chatPanelInput) els.chatPanelInput.value = "";
+    pushToStore("user", question);
+    if (els.chatPanelInput) {
+      els.chatPanelInput.value = "";
+      els.chatPanelInput.style.height = "";
+    }
     if (els.chatPanelCitations) {
       els.chatPanelCitations.classList.add("hidden");
       els.chatPanelCitations.innerHTML = "";
     }
 
     isAsking = true;
+
+    const typingEl = document.createElement("div");
+    typingEl.className = "chat-typing-indicator";
+    typingEl.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    els.chatPanelMessages?.appendChild(typingEl);
+    els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
+
+    let typingRemoved = false;
+    function removeTyping() {
+      if (!typingRemoved) { typingEl.remove(); typingRemoved = true; }
+    }
+
     const assistantMsg = addMessage("assistant", "");
+    pushToStore("assistant", "");
 
     try {
       await apiClient.askStreaming(
@@ -168,56 +221,94 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation } = {}) {
         {
           onCitations(citations) {
             renderCitations(citations);
+            saveCitationsToStore(citations);
           },
           onToken(token) {
+            removeTyping();
             if (assistantMsg) {
               assistantMsg.textContent += token;
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
             }
           },
           onDone() {
+            removeTyping();
             if (assistantMsg && !assistantMsg.textContent.trim()) {
               assistantMsg.textContent = "No answer generated.";
             }
+            updateLastAssistantInStore(assistantMsg?.textContent || "");
           },
-          onError(error) {
-            // Fallback to non-streaming
-            fallbackAsk(question, assistantMsg);
+          onError() {
+            removeTyping();
+            fallbackAsk(question, assistantMsg, project);
           },
         }
       );
+      return true;
     } catch {
-      await fallbackAsk(question, assistantMsg);
+      removeTyping();
+      await fallbackAsk(question, assistantMsg, project);
+      return true;
     } finally {
       isAsking = false;
     }
   }
 
-  async function fallbackAsk(question, msgEl) {
+  async function handleSubmit() {
+    const question = (els.chatPanelInput?.value || "").trim();
+    if (!question) return;
+    await askQuestion(question);
+  }
+
+  async function fallbackAsk(question, msgEl, projectHint = "") {
     try {
-      const result = await apiClient.ask({ question });
+      const result = await apiClient.ask({ question, project: projectHint || undefined });
       if (msgEl) msgEl.textContent = result.text || "No answer.";
-      if (result.citations) renderCitations(result.citations);
+      updateLastAssistantInStore(msgEl?.textContent || "");
+      if (result.citations) {
+        renderCitations(result.citations);
+        saveCitationsToStore(result.citations);
+      }
     } catch (error) {
       if (msgEl) msgEl.textContent = "Failed to get answer.";
+      updateLastAssistantInStore("Failed to get answer.");
     }
   }
 
-  addHandler(els.chatPanelClose, "click", () => togglePanel(false));
+  // Textarea auto-resize
+  addHandler(els.chatPanelInput, "input", () => {
+    const ta = els.chatPanelInput;
+    if (!ta) return;
+    ta.style.height = "";
+    ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+  });
+
+  // Enter submits, Shift+Enter inserts newline
+  addHandler(els.chatPanelInput, "keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  });
+
   addHandler(els.chatPanelForm, "submit", (e) => {
     e.preventDefault();
     handleSubmit();
   });
 
+  rebuildFromStore();
+
   return {
-    toggle: togglePanel,
+    askQuestion,
+    isAsking: () => isAsking,
     startFromNote(note, { autoSubmit = true } = {}) {
       if (!note || !els.chatPanelInput) return;
       nextProjectHint = String(note.project || "").trim();
-      togglePanel(true);
       els.chatPanelInput.value = buildItemContextQuestion(note);
+      // Trigger auto-resize
+      els.chatPanelInput.style.height = "";
+      els.chatPanelInput.style.height = Math.min(els.chatPanelInput.scrollHeight, 160) + "px";
       if (autoSubmit) {
-        handleSubmit();
+        askQuestion(els.chatPanelInput.value, { projectHint: nextProjectHint });
       }
     },
     dispose: () => handlers.forEach((fn) => fn()),

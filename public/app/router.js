@@ -23,7 +23,7 @@ function parseRouteFromHash(hash) {
   return { name: "home" };
 }
 
-export function createRouter({ mountNode, pages }) {
+export function createRouter({ mountNode, pages, onRouteChange }) {
   let activeCleanup = null;
   let started = false;
 
@@ -46,6 +46,10 @@ export function createRouter({ mountNode, pages }) {
     }
 
     window.scrollTo(0, 0);
+
+    if (typeof onRouteChange === "function") {
+      onRouteChange(route);
+    }
 
     const maybeCleanup = page.mount({
       mountNode,

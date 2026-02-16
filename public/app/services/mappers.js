@@ -479,7 +479,13 @@ export function buildNoteTitle(note) {
   const isFilePlaceholder = isGenericFilePlaceholder(content);
   const maxTitleLength = 84;
 
-  if (explicitTitle) return truncateText(explicitTitle, maxTitleLength);
+  // If the "title" is actually a URL, compact it instead of showing raw
+  if (explicitTitle) {
+    if (/^https?:\/\//i.test(explicitTitle)) {
+      return compactUrl(explicitTitle, maxTitleLength) || explicitTitle;
+    }
+    return truncateText(explicitTitle, maxTitleLength);
+  }
 
   if (!content && note.sourceType === "image") return "Image memory";
   if ((!content || isFilePlaceholder) && fallbackContent) {
@@ -491,12 +497,7 @@ export function buildNoteTitle(note) {
   if (!content) return "Untitled memory";
   if (note.sourceType === "link") {
     const fallbackUrl = note.sourceUrl || content;
-    try {
-      const parsed = new URL(fallbackUrl);
-      return truncateText(parsed.hostname.replace(/^www\./, ""), maxTitleLength);
-    } catch {
-      return "Saved link";
-    }
+    return compactUrl(fallbackUrl, maxTitleLength) || "Saved link";
   }
 
   const sentenceMatch = content.match(/^(.{10,130}?[.!?])(\s|$)/);
@@ -509,15 +510,26 @@ export function buildContentPreview(note) {
   const summary = normalizeText(note.summary);
   const extracted = normalizeText(note.markdownContent || note.rawContent || "");
   const isFilePlaceholder = isGenericFilePlaceholder(content);
+  const contentIsUrl = /^https?:\/\//i.test(content);
+  const title = buildNoteTitle(note);
 
-  if (content && !isFilePlaceholder) return truncateText(content, 220);
-  if (summary && summary.toLowerCase() !== "(no summary)") return truncateText(summary, 220);
-  if (extracted) return truncateText(extracted, 220);
-  if (content) return truncateText(content, 220);
-  if (note.sourceUrl) return truncateText(note.sourceUrl, 220);
+  function dedup(text) {
+    // Don't return preview text that just repeats the title
+    if (!text) return "";
+    const t = normalizeText(text);
+    if (t.toLowerCase() === title.toLowerCase()) return "";
+    if (t.toLowerCase().startsWith(title.toLowerCase()) && t.length < title.length + 10) return "";
+    return truncateText(t, 220);
+  }
+
+  // For links: prefer summary/extracted over showing raw URL as "preview"
+  if (content && !isFilePlaceholder && !contentIsUrl) { const r = dedup(content); if (r) return r; }
+  if (summary && summary.toLowerCase() !== "(no summary)" && !/^https?:\/\//i.test(summary)) { const r = dedup(summary); if (r) return r; }
+  if (extracted) { const r = dedup(extracted); if (r) return r; }
+  if (content && !contentIsUrl) { const r = dedup(content); if (r) return r; }
   if (note.fileName) return `File: ${truncateText(note.fileName, 180)}`;
   if (note.sourceType === "image") return "Image capture with no text description.";
-  return "No content preview available.";
+  return "";
 }
 
 export function buildNoteDescription(note) {

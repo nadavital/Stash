@@ -1,0 +1,82 @@
+/* ── App Shell — workspace left + chat right ── */
+
+.app-shell {
+  min-height: 100dvh;
+  margin-left: calc(-50vw + 50%);
+  margin-right: calc(-50vw + 50%);
+}
+
+.app-shell-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 38vw, 520px);
+  height: 100dvh;
+}
+
+/* ── Chat panel (right) ────────────────────────── */
+
+.app-shell-chat-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100dvh;
+  overflow: hidden;
+  background: var(--surface);
+  border-left: 1px solid var(--border-subtle, var(--border));
+}
+
+/* ── Workspace (left) ──────────────────────────── */
+
+.app-shell-workspace {
+  overflow-y: auto;
+  padding: 0 var(--space-6);
+  min-height: 0;
+}
+
+/* ── Mobile (<980px): chat slides in from right ── */
+
+@media (max-width: 980px) {
+  .app-shell-body {
+    grid-template-columns: 1fr;
+    height: 100dvh;
+  }
+
+  .app-shell-chat-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(360px, 85vw);
+    max-height: none;
+    z-index: var(--z-modal);
+    transform: translateX(100%);
+    transition: transform 250ms ease;
+    border-left: 1px solid var(--border-subtle, var(--border));
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .app-shell-chat-panel {
+      box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  .app-shell-chat-panel.is-open {
+    transform: translateX(0);
+  }
+
+  .app-shell-workspace {
+    padding: 0 var(--space-4);
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell-workspace {
+    padding: 0 var(--space-3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-chat-panel {
+    transition: none;
+  }
+}

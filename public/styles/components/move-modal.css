@@ -16,8 +16,8 @@
   position: absolute;
   inset: 0;
   background: var(--overlay);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
 }
 
 .move-modal-panel {
@@ -27,11 +27,20 @@
   max-height: min(620px, calc(100vh - 32px));
   overflow-y: auto;
   border-radius: var(--radius-lg);
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-elevated);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(40px) saturate(1.5);
+  -webkit-backdrop-filter: blur(40px) saturate(1.5);
+  border: 0;
+  box-shadow: 0 24px 80px -12px rgba(0, 0, 0, 0.15);
   padding: 24px;
   animation: modalIn var(--transition-base);
+}
+
+@media (prefers-color-scheme: dark) {
+  .move-modal-panel {
+    background: rgba(30, 30, 30, 0.85);
+    box-shadow: 0 24px 80px -12px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .move-modal-close {
@@ -41,8 +50,8 @@
   width: var(--tap-target);
   height: var(--tap-target);
   border: 0;
-  border-radius: 8px;
-  background: var(--input-bg);
+  border-radius: var(--radius-pill);
+  background: transparent;
   color: var(--muted);
   display: inline-flex;
   align-items: center;
@@ -57,8 +66,7 @@
 }
 
 .move-modal-close:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 1px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .move-modal-heading {
@@ -83,6 +91,12 @@
 .move-modal-input {
   min-height: var(--tap-target);
   font-size: var(--font-size-body-sm);
+  background: var(--input-bg);
+  border: 0;
+}
+
+.move-modal-input:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .move-modal-hint {
@@ -100,30 +114,28 @@
 }
 
 .move-modal-suggestion {
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: var(--radius-pill);
-  background: var(--surface-subtle);
+  background: var(--hover-bg);
   color: var(--ink-secondary);
   min-height: 36px;
   padding: 0 12px;
   font-size: var(--font-size-caption);
   cursor: pointer;
-  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .move-modal-suggestion:hover {
-  border-color: var(--border-strong);
+  background: var(--surface-strong);
   color: var(--ink);
 }
 
 .move-modal-suggestion:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 1px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .move-modal-suggestion.is-selected {
   background: var(--accent-soft);
-  border-color: var(--accent);
   color: var(--accent-deep);
 }
 

@@ -5,11 +5,14 @@
   left: 50%;
   bottom: var(--toast-bottom-offset);
   transform: translate(-50%, 10px);
-  background: var(--ink);
-  color: var(--bg);
-  border-radius: 12px;
+  background: rgba(13, 13, 13, 0.78);
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  color: #ececec;
+  border: 0;
+  border-radius: var(--radius-sm);
   padding: 10px 18px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
   font-size: var(--font-size-body-sm);
   font-weight: var(--weight-medium);
   opacity: 0;
@@ -27,5 +30,5 @@ body.batch-mode-active .toast {
 }
 
 .toast.error {
-  background: var(--danger);
+  background: rgba(180, 35, 24, 0.85);
 }

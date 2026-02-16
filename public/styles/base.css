@@ -4,6 +4,7 @@
 
 html {
   overflow-y: scroll;
+  overflow-x: clip;
 }
 
 html,
@@ -11,6 +12,11 @@ body {
   margin: 0;
   min-height: 100%;
   background: var(--bg);
+}
+
+body {
+  background: var(--glass-page-bg, var(--bg));
+  background-attachment: fixed;
 }
 
 body {
@@ -28,13 +34,13 @@ body.modal-open {
 .shell {
   width: min(1320px, calc(100% - 56px));
   margin: 0 auto;
-  padding: 24px 0 30px;
+  padding: 0;
   min-height: 100vh;
 }
 
 .page {
   display: grid;
-  gap: 18px;
+  gap: var(--space-6);
 }
 
 h1,
@@ -55,21 +61,19 @@ input,
 select,
 textarea {
   width: 100%;
-  border: 1px solid transparent;
-  border-radius: 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
   background: var(--input-bg);
   color: var(--ink);
   padding: 10px 14px;
-  transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  transition: background var(--transition-base), box-shadow var(--transition-base);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-  background: var(--surface);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-focus);
   outline: none;
+  box-shadow: none;
 }
 
 input::placeholder,
@@ -107,56 +111,49 @@ a {
   font-size: var(--font-size-base);
 }
 
-/* ---------- Focus Visible ---------- */
+/* ---------- Focus — no visible rings anywhere ---------- */
 
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  outline-offset: 2px;
+*:focus,
+*:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 /* ---------- Buttons ---------- */
 
 .minimal-action {
   border: 0;
-  border-radius: 10px;
-  background: var(--input-bg);
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   color: var(--ink);
-  min-height: 36px;
-  padding: 0 16px;
+  min-height: var(--btn-md);
+  padding: 0 var(--space-4);
   font-size: var(--font-size-body-sm);
   font-weight: var(--weight-medium);
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, transform 100ms ease;
+  transition: background var(--transition-fast);
 }
 
 .minimal-action:hover {
   background: var(--hover-bg);
 }
 
-.minimal-action:active {
-  transform: scale(0.96);
-}
-
 .btn-primary {
   border: 0;
-  border-radius: 10px;
-  background: var(--accent);
-  color: var(--on-accent);
-  min-height: 40px;
-  padding: 0 20px;
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  color: var(--bg);
+  min-height: var(--btn-lg);
+  padding: 0 var(--space-5);
   font-size: var(--font-size-body-sm);
   font-weight: var(--weight-medium);
   cursor: pointer;
-  transition: background 150ms ease, transform 100ms ease;
+  transition: opacity var(--transition-fast);
 }
 
 .btn-primary:hover {
-  background: var(--accent-deep);
-}
-
-.btn-primary:active {
-  transform: scale(0.96);
+  opacity: 0.85;
 }
 
 /* ---------- Animations ---------- */
@@ -164,27 +161,40 @@ a:focus-visible {
 @keyframes fadeInUp {
   from {
     opacity: 0;
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 
 @keyframes modalIn {
   from {
     opacity: 0;
-    transform: scale(0.95);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
-    transform: scale(1);
+    transform: translateY(0);
   }
 }
 
 /* ---------- Custom Scrollbars ---------- */
 
 .recent-pane-list::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 
 .recent-pane-list::-webkit-scrollbar-thumb {
@@ -211,6 +221,6 @@ a:focus-visible {
 @media (max-width: 760px) {
   .shell {
     width: calc(100% - 26px);
-    padding: 16px 0 24px;
+    padding: 0;
   }
 }

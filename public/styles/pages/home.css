@@ -1,48 +1,17 @@
 .page-home {
-  gap: 18px;
-  padding-bottom: var(--page-bottom-space);
+  gap: var(--space-5);
+  padding-bottom: var(--space-2);
 }
 
 .page-home.page-drag-active {
-  outline: 2px dashed var(--accent);
-  outline-offset: -4px;
-  border-radius: 12px;
-}
-
-.home-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
-  gap: 26px;
-  align-items: start;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: var(--radius-sm);
 }
 
 .home-explorer-pane {
   min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: var(--space-3);
   animation: fadeInUp 180ms ease both;
-}
-
-.page-home .composer-shell {
-  position: fixed;
-  left: 50%;
-  bottom: calc(var(--composer-offset) + var(--safe-bottom));
-  transform: translateX(-50%);
-  width: min(980px, calc(100vw - 56px));
-  z-index: var(--z-sticky);
-}
-
-body.batch-mode-active .page-home .composer-shell {
-  bottom: calc(var(--composer-offset) + var(--batch-bar-height) + var(--safe-bottom));
-}
-
-@media (max-width: 980px) {
-  .home-layout {
-    grid-template-columns: 1fr;
-    gap: 18px;
-  }
-}
-
-@media (max-width: 760px) {
-  .page-home .composer-shell {
-    width: calc(100vw - 26px);
-  }
 }

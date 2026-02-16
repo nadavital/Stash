@@ -1,128 +1,267 @@
+/* ── Folder grid ───────────────────────────────────────── */
+
 .home-folder-grid {
   min-height: 0;
 }
 
 .home-folders-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
-  gap: 20px 14px;
-  padding-top: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--space-3);
+  padding-top: var(--space-2);
   align-content: start;
 }
+
+/* ══════════════════════════════════════════════════════════
+   Folder card — Liquid Glass tissue-box
+   3 layers: papers (z:auto) → glass (z:1) → text (z:2)
+   Glass kept here per design preference
+   ══════════════════════════════════════════════════════════ */
 
 .folder-tile,
 .home-folders-list .folder-pill {
   position: relative;
-  min-height: 88px;
-  border-radius: 2px 10px 10px 10px;
+  min-height: 210px;
+  border-radius: var(--radius-lg);
   border: 0;
-  background: var(--folder-accent-soft, var(--surface-strong));
+  background: transparent;
   text-decoration: none;
-  padding: 12px;
+  padding: 0;
   color: var(--ink);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  gap: 8px;
-  transition: background 150ms ease;
+  justify-content: flex-end;
   overflow: visible;
-  border: 1px solid color-mix(in srgb, var(--folder-accent, var(--border-subtle)) 24%, transparent);
-}
-
-/* Folder tab */
-.home-folders-list .folder-pill::before {
-  content: '';
-  position: absolute;
-  bottom: calc(100% - 1px);
-  left: 0;
-  width: 40px;
-  height: 12px;
-  background: var(--folder-accent-soft, var(--surface-subtle));
-  border: 0;
-  border-radius: 6px 6px 0 0;
-}
-
-/* Color variants — ChatGPT palette */
-.home-folders-list .folder-pill[data-color="green"] {
-  --folder-accent: var(--folder-green);
-  --folder-accent-soft: rgba(4, 184, 76, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="blue"] {
-  --folder-accent: var(--folder-blue);
-  --folder-accent-soft: rgba(2, 133, 255, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="purple"] {
-  --folder-accent: var(--folder-purple);
-  --folder-accent-soft: rgba(146, 79, 247, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="orange"] {
-  --folder-accent: var(--folder-orange);
-  --folder-accent-soft: rgba(251, 106, 34, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="pink"] {
-  --folder-accent: var(--folder-pink);
-  --folder-accent-soft: rgba(255, 102, 173, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="red"] {
-  --folder-accent: var(--folder-red);
-  --folder-accent-soft: rgba(250, 66, 62, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="yellow"] {
-  --folder-accent: var(--folder-yellow);
-  --folder-accent-soft: rgba(255, 195, 0, 0.12);
-}
-
-/* Backward-compat: map old color names */
-.home-folders-list .folder-pill[data-color="sky"] {
-  --folder-accent: var(--folder-blue);
-  --folder-accent-soft: rgba(2, 133, 255, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="mint"] {
-  --folder-accent: var(--folder-green);
-  --folder-accent-soft: rgba(4, 184, 76, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="sand"] {
-  --folder-accent: var(--folder-orange);
-  --folder-accent-soft: rgba(251, 106, 34, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="rose"] {
-  --folder-accent: var(--folder-pink);
-  --folder-accent-soft: rgba(255, 102, 173, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="violet"] {
-  --folder-accent: var(--folder-purple);
-  --folder-accent-soft: rgba(146, 79, 247, 0.12);
-}
-
-.home-folders-list .folder-pill[data-color="slate"] {
-  --folder-accent: var(--folder-blue);
-  --folder-accent-soft: rgba(2, 133, 255, 0.12);
+  isolation: isolate;
+  transition: transform 200ms ease;
 }
 
 .home-folders-list .folder-pill:hover {
-  background: var(--folder-accent-soft, var(--hover-bg));
-  filter: brightness(0.96);
+  transform: translateY(-2px);
+}
+
+/* ── Paper cards — real DOM elements, count reflects items ── */
+
+.folder-paper {
+  position: absolute;
+  width: var(--pw);
+  height: var(--ph);
+  bottom: 20px;
+  left: var(--pl, auto);
+  right: var(--pr, auto);
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+  transform: rotate(var(--prot));
+  transform-origin: bottom center;
+  border: 1px solid color-mix(in srgb, var(--folder-accent, var(--muted)) 22%, transparent);
+  transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Gradient variants — each paper gets a slightly different tone */
+.folder-paper:nth-child(1) {
+  background: linear-gradient(150deg,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 72%, var(--surface)) 0%,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 42%, var(--surface)) 100%);
+}
+.folder-paper:nth-child(2) {
+  background: linear-gradient(210deg,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 60%, var(--surface)) 0%,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 34%, var(--surface)) 100%);
+}
+.folder-paper:nth-child(3) {
+  background: linear-gradient(170deg,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 66%, var(--surface)) 0%,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 38%, var(--surface)) 100%);
+}
+.folder-paper:nth-child(4) {
+  background: linear-gradient(190deg,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 54%, var(--surface)) 0%,
+    color-mix(in srgb, var(--folder-accent, var(--muted)) 28%, var(--surface)) 100%);
+}
+
+/* Papers fan out on hover */
+.folder-pill:hover .folder-paper {
+  transform: rotate(calc(var(--prot) * 1.6)) translateY(-5px);
+}
+
+/* ── Paper content types ──────────────────────────────── */
+
+/* Image thumbnail paper — uses <img> for lazy loading + error handling */
+.folder-paper-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* Icon + text content paper */
+.folder-paper-content {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 14px;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.folder-paper-icon {
+  font-size: 22px;
+  line-height: 1;
+  filter: saturate(0.85);
+}
+
+.folder-paper-text {
+  font-size: 8px;
+  line-height: 1.25;
+  color: var(--ink);
+  opacity: 0.5;
+  text-align: center;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  max-width: 90%;
+  word-break: break-word;
+  padding: 0 4px;
+}
+
+/* ── Liquid Glass body — kept per design preference ──── */
+
+.folder-pill-inner {
+  position: relative;
+  z-index: 1;
+  background: rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(40px) saturate(1.8) brightness(1.08);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8) brightness(1.08);
+  border: 0;
+  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  min-height: 68px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-1);
+  box-shadow:
+    0 2px 8px -2px rgba(0, 0, 0, 0.08),
+    0 0 0 0.5px rgba(255, 255, 255, 0.15);
+}
+
+/* Glossy sheen — curved glass reflection highlight */
+.folder-pill-inner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    175deg,
+    rgba(255, 255, 255, 0.3) 0%,
+    rgba(255, 255, 255, 0.08) 35%,
+    transparent 55%,
+    rgba(255, 255, 255, 0.03) 100%
+  );
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ── Dark mode glass adjustments ──────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  .folder-pill-inner {
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(40px) saturate(1.6) brightness(1.15);
+    -webkit-backdrop-filter: blur(40px) saturate(1.6) brightness(1.15);
+    box-shadow:
+      0 2px 12px -2px rgba(0, 0, 0, 0.4),
+      0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  }
+
+  .folder-pill-inner::before {
+    background: linear-gradient(
+      175deg,
+      rgba(255, 255, 255, 0.12) 0%,
+      rgba(255, 255, 255, 0.04) 30%,
+      transparent 55%,
+      rgba(255, 255, 255, 0.02) 100%
+    );
+  }
+
+  /* Papers more vivid in dark mode */
+  .folder-paper:nth-child(1) {
+    background: linear-gradient(150deg,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 82%, var(--surface)) 0%,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 52%, var(--surface)) 100%);
+  }
+  .folder-paper:nth-child(2) {
+    background: linear-gradient(210deg,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 70%, var(--surface)) 0%,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 44%, var(--surface)) 100%);
+  }
+  .folder-paper:nth-child(3) {
+    background: linear-gradient(170deg,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 76%, var(--surface)) 0%,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 48%, var(--surface)) 100%);
+  }
+  .folder-paper:nth-child(4) {
+    background: linear-gradient(190deg,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 64%, var(--surface)) 0%,
+      color-mix(in srgb, var(--folder-accent, var(--muted)) 38%, var(--surface)) 100%);
+  }
+}
+
+/* ── Glass hover — slightly more opaque ───────────────── */
+
+.home-folders-list .folder-pill:hover .folder-pill-inner {
+  background: rgba(255, 255, 255, 0.38);
+  box-shadow:
+    0 4px 16px -4px rgba(0, 0, 0, 0.1),
+    0 0 0 0.5px rgba(255, 255, 255, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  .home-folders-list .folder-pill:hover .folder-pill-inner {
+    background: rgba(255, 255, 255, 0.12);
+    box-shadow:
+      0 4px 16px -4px rgba(0, 0, 0, 0.5),
+      0 0 0 0.5px rgba(255, 255, 255, 0.1);
+  }
 }
 
 .home-folders-list .folder-pill:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
+/* ── Color variants ────────────────────────────────────── */
+
+.home-folders-list .folder-pill[data-color="green"]  { --folder-accent: var(--folder-green); }
+.home-folders-list .folder-pill[data-color="blue"]   { --folder-accent: var(--folder-blue); }
+.home-folders-list .folder-pill[data-color="purple"] { --folder-accent: var(--folder-purple); }
+.home-folders-list .folder-pill[data-color="orange"] { --folder-accent: var(--folder-orange); }
+.home-folders-list .folder-pill[data-color="pink"]   { --folder-accent: var(--folder-pink); }
+.home-folders-list .folder-pill[data-color="red"]    { --folder-accent: var(--folder-red); }
+.home-folders-list .folder-pill[data-color="yellow"] { --folder-accent: var(--folder-yellow); }
+
+/* Backward-compat: map old color names */
+.home-folders-list .folder-pill[data-color="sky"]    { --folder-accent: var(--folder-blue); }
+.home-folders-list .folder-pill[data-color="mint"]   { --folder-accent: var(--folder-green); }
+.home-folders-list .folder-pill[data-color="sand"]   { --folder-accent: var(--folder-orange); }
+.home-folders-list .folder-pill[data-color="rose"]   { --folder-accent: var(--folder-pink); }
+.home-folders-list .folder-pill[data-color="violet"] { --folder-accent: var(--folder-purple); }
+.home-folders-list .folder-pill[data-color="slate"]  { --folder-accent: var(--folder-blue); }
+
+/* ── Card content ──────────────────────────────────────── */
+
 .home-folders-list .folder-pill-name {
+  position: relative;
+  z-index: 1;
   font-size: var(--font-size-base);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   line-height: var(--leading-tight);
   color: var(--ink);
   display: -webkit-box;
@@ -132,6 +271,8 @@
 }
 
 .folder-pill-footer {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -143,37 +284,34 @@
 
 .home-folders-list .folder-pill-count {
   font-size: var(--font-size-caption);
-  color: var(--ink-secondary);
+  color: var(--muted);
   font-family: var(--font-mono);
 }
 
-/* Skeleton */
+/* ── Skeleton ──────────────────────────────────────────── */
+
 .folder-tile-skeleton {
   border: 0;
-  border-radius: 2px 10px 10px 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface-strong);
-  min-height: 88px;
+  min-height: 210px;
   animation: folderPulse 1.2s ease-in-out infinite;
 }
 
 @keyframes folderPulse {
-  0%,
-  100% {
-    opacity: 0.65;
-  }
-  50% {
-    opacity: 1;
-  }
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
 }
 
-/* Empty state */
+/* ── Empty state ───────────────────────────────────────── */
+
 .home-folders-empty-state {
   grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: var(--space-8) var(--space-6);
   text-align: center;
   color: var(--muted);
 }
@@ -182,14 +320,14 @@
   width: 48px;
   height: 48px;
   fill: var(--border-strong);
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .home-folders-empty-heading {
   font-size: var(--font-size-md);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   color: var(--ink-secondary);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 
 .home-folders-empty-sub {
@@ -197,11 +335,12 @@
   color: var(--muted);
 }
 
-/* List view mode */
+/* ── List view mode ────────────────────────────────────── */
+
 .home-folders-list.view-list {
   grid-template-columns: 1fr;
-  gap: 2px;
-  padding-top: 8px;
+  gap: 0;
+  padding-top: var(--space-1);
 }
 
 .home-folders-list.view-list .folder-pill {
@@ -210,17 +349,18 @@
 
 .folder-pill-row {
   display: grid;
-  grid-template-columns: 12px 1fr auto auto;
-  gap: 10px;
+  grid-template-columns: 10px 1fr auto auto;
+  gap: var(--space-2);
   align-items: center;
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: var(--space-2) var(--space-3);
+  min-height: 42px;
+  border-radius: var(--radius-xs);
   background: transparent;
   cursor: pointer;
   border: 0;
   width: 100%;
   text-align: left;
-  transition: background 120ms ease;
+  transition: background var(--transition-fast);
 }
 
 .folder-pill-row:hover {
@@ -228,42 +368,45 @@
 }
 
 .folder-pill-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .folder-row-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
 }
 
-.folder-row-dot[data-color="green"] { background: var(--folder-green); }
-.folder-row-dot[data-color="blue"] { background: var(--folder-blue); }
+.folder-row-dot[data-color="green"]  { background: var(--folder-green); }
+.folder-row-dot[data-color="blue"]   { background: var(--folder-blue); }
 .folder-row-dot[data-color="purple"] { background: var(--folder-purple); }
 .folder-row-dot[data-color="orange"] { background: var(--folder-orange); }
-.folder-row-dot[data-color="pink"] { background: var(--folder-pink); }
-.folder-row-dot[data-color="red"] { background: var(--folder-red); }
+.folder-row-dot[data-color="pink"]   { background: var(--folder-pink); }
+.folder-row-dot[data-color="red"]    { background: var(--folder-red); }
 .folder-row-dot[data-color="yellow"] { background: var(--folder-yellow); }
-.folder-row-dot[data-color="sky"] { background: var(--folder-blue); }
-.folder-row-dot[data-color="mint"] { background: var(--folder-green); }
-.folder-row-dot[data-color="sand"] { background: var(--folder-orange); }
-.folder-row-dot[data-color="rose"] { background: var(--folder-pink); }
+.folder-row-dot[data-color="sky"]    { background: var(--folder-blue); }
+.folder-row-dot[data-color="mint"]   { background: var(--folder-green); }
+.folder-row-dot[data-color="sand"]   { background: var(--folder-orange); }
+.folder-row-dot[data-color="rose"]   { background: var(--folder-pink); }
 .folder-row-dot[data-color="violet"] { background: var(--folder-purple); }
-.folder-row-dot[data-color="slate"] { background: var(--folder-blue); }
+.folder-row-dot[data-color="slate"]  { background: var(--folder-blue); }
 
 .folder-row-name {
   font-size: var(--font-size-base);
   font-weight: var(--weight-medium);
   color: var(--ink);
+  display: -webkit-box;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  line-height: var(--leading-tight);
+  min-height: auto;
 }
 
 .folder-row-count {
   font-size: var(--font-size-caption);
-  color: var(--ink-secondary);
+  color: var(--muted);
   font-family: var(--font-mono);
   white-space: nowrap;
 }
@@ -274,6 +417,6 @@
 
 @media (max-width: 680px) {
   .home-folders-list {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   }
 }

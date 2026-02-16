@@ -44,9 +44,11 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: var(--input-bg);
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
+  border: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .folder-color-dot {
@@ -90,51 +92,49 @@
 }
 
 .folder-delete-btn {
-  border: 1px solid var(--danger-border);
-  border-radius: 8px;
-  background: var(--danger-surface);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--danger-soft);
   color: var(--danger);
   min-height: 30px;
-  padding: 0 10px;
+  padding: 0 12px;
   font-size: var(--font-size-caption);
   font-weight: var(--weight-medium);
   cursor: pointer;
   white-space: nowrap;
+  transition: background 150ms ease;
 }
 
 .folder-delete-btn:hover {
-  background: var(--danger-soft);
-  border-color: var(--danger);
+  background: rgba(180, 35, 24, 0.12);
 }
 
 .folder-delete-btn:focus-visible {
-  outline: 2px solid rgba(180, 35, 24, 0.2);
-  outline-offset: 1px;
+  box-shadow: 0 0 0 2px rgba(180, 35, 24, 0.2);
 }
 
 .folder-subfolder-btn {
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
   color: var(--ink-secondary);
   min-height: 30px;
-  padding: 0 10px;
+  padding: 0 12px;
   font-size: var(--font-size-caption);
   font-weight: var(--weight-medium);
   cursor: pointer;
   white-space: nowrap;
-  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  transition: background 150ms ease, color 150ms ease;
 }
 
 .folder-subfolder-btn:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: var(--hover-bg);
   color: var(--accent);
 }
 
 .folder-subfolder-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 1px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 @media (max-width: 700px) {

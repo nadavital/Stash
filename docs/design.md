@@ -196,6 +196,7 @@ All component JS files live under `public/app/components/`. All component CSS fi
 |-----------|---------|----------|-------------|
 | Topbar | `components/topbar/topbar.js` | `components/topbar.css` | `.topbar-*` |
 | Auth Gate | `components/auth-gate/auth-gate.js` | `components/auth-gate.css` | `.auth-gate-*` |
+| Assistant Shell | `components/assistant-shell/assistant-shell.js` | `components/assistant-shell.css` | `.assistant-*` |
 | Composer | `components/composer/composer.js` | `components/composer.css` | `.composer-*` |
 | Home Folder Grid | `components/home-folder-grid/home-folder-grid.js` | `components/home-folder-grid.css` | `.folder-pill-*` |
 | Home Recent List | `components/home-recent-list/home-recent-list.js` | `components/home-recent-list.css` | `.recent-*` |
@@ -249,6 +250,22 @@ export function initAuthGate(els, { onSubmit, onForgotPassword, onResendVerifica
 
 ---
 
+#### Assistant Shell
+
+Shared interaction rail mounted in the right sidebar and reused across Home and Folder views.
+
+```js
+export function renderAssistantShellHTML({ captureMode = "home", mode = "save", contextLabel = "All notes" } = {})
+export function queryAssistantShellEls(root)
+export function initAssistantShell(els, { initialMode, initialContextLabel, onModeChange })
+```
+
+- `renderAssistantShellHTML()` composes the mode switch (`Save`/`Ask`), context chip, and persistent unified composer bar.
+- `queryAssistantShellEls(root)` returns the shell controls and pane refs.
+- `initAssistantShell(...)` manages mode state and emits `onModeChange(mode)` when users switch modes; page controllers can route composer submit behavior based on active mode.
+
+---
+
 #### Composer
 
 The note-capture input area. Supports a `home` mode and a `folder` mode.
@@ -277,13 +294,15 @@ Returns HTML string. Folder pills are rendered dynamically by the home page afte
 
 #### Home Recent List
 
-Renders the recent-notes list on the home page.
+Provides both the compact inline recents strip (in the main pane) and the dedicated right chat rail (in the sidebar).
 
 ```js
+export function renderRecentInlineStripHTML({ title = "Recent" } = {})
 export function renderHomeRecentList()
 ```
 
-Returns HTML string. Note cards are populated dynamically.
+- `renderRecentInlineStripHTML(...)` renders the horizontal recents row with refresh control.
+- `renderHomeRecentList()` renders the full-height right sidebar chat container; the unified `Save/Ask` assistant shell is mounted under it by page controllers.
 
 ---
 

@@ -1,53 +1,59 @@
+/* ── Topbar — Full-bleed Liquid Glass bar ──────────── */
+
 .topbar-shell {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  min-height: 42px;
+  min-height: 36px;
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  padding-left: max(28px, calc(50% - 660px));
+  padding-right: max(28px, calc(50% - 660px));
+  background: var(--bg);
 }
+
+/* ── Brand ─────────────────────────────────────────────── */
 
 .topbar-brand {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   text-decoration: none;
   color: var(--ink);
-  transition: opacity 150ms ease;
+  transition: opacity var(--transition-fast);
+  position: relative;
 }
 
 .topbar-brand:hover {
-  opacity: 0.8;
-}
-
-.topbar-brand-icon {
-  width: 22px;
-  height: 22px;
-  fill: var(--accent);
-  flex-shrink: 0;
+  opacity: 0.7;
 }
 
 .topbar-brand-name {
-  font-size: var(--font-size-base);
+  font-size: var(--font-size-md);
   font-weight: var(--weight-semibold);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.03em;
 }
+
+/* ── Actions group ─────────────────────────────────────── */
 
 .topbar-actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
+  position: relative;
 }
+
+/* ── Auth section ──────────────────────────────────────── */
 
 .topbar-auth {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin-left: 6px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border-subtle);
+  gap: var(--space-2);
 }
 
 .topbar-auth-label {
-  max-width: 240px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -58,32 +64,30 @@
 
 .topbar-signout-btn {
   border: 0;
-  border-radius: 10px;
-  background: var(--input-bg);
-  color: var(--ink-secondary);
-  min-height: 32px;
-  padding: 0 10px;
-  font-size: var(--font-size-caption);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font-size: var(--font-size-2xs);
   font-weight: var(--weight-medium);
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease, transform 100ms ease;
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .topbar-signout-btn:hover {
-  background: var(--hover-bg);
   color: var(--ink);
+  background: var(--hover-bg);
 }
 
-.topbar-signout-btn:active {
-  transform: scale(0.96);
-}
+/* ── Icon buttons — glass pill hover (used by content-toolbar) ── */
 
 .topbar-folder-btn,
 .topbar-sort-btn {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--muted);
   display: inline-flex;
@@ -91,18 +95,14 @@
   justify-content: center;
   cursor: pointer;
   flex: 0 0 auto;
-  transition: background 150ms ease, color 150ms ease, transform 100ms ease;
+  position: relative;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .topbar-folder-btn:hover,
 .topbar-sort-btn:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.topbar-folder-btn:active,
-.topbar-sort-btn:active {
-  transform: scale(0.94);
+  color: var(--ink);
+  background: var(--hover-bg);
 }
 
 .topbar-folder-icon {
@@ -118,100 +118,49 @@
 
 .topbar-folder-btn:focus-visible,
 .topbar-sort-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-.topbar-visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
+/* ── Select button — glass pill (used by content-toolbar) ── */
+
+.topbar-select-btn {
   border: 0;
-}
-
-/* Sort/Filter Dropdown */
-.sort-filter-dropdown {
-  position: absolute;
-  top: 48px;
-  right: 0;
-  z-index: var(--z-dropdown);
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.12);
-  padding: 12px;
-  min-width: 200px;
-  display: none;
-}
-
-.sort-filter-dropdown.is-open {
-  display: block;
-}
-
-.sort-filter-section {
-  margin-bottom: 10px;
-}
-
-.sort-filter-section:last-child {
-  margin-bottom: 0;
-}
-
-.sort-filter-label {
-  margin: 0 0 6px;
-  font-size: var(--font-size-xs);
-  font-weight: var(--weight-semibold);
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.sort-filter-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.sort-filter-option {
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   background: transparent;
-  color: var(--ink-secondary);
+  color: var(--muted);
+  min-height: 34px;
+  padding: 0 12px;
   font-size: var(--font-size-caption);
-  padding: 5px 10px;
+  font-weight: var(--weight-medium);
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.sort-filter-option:hover {
+.topbar-select-btn:hover {
+  color: var(--ink);
   background: var(--hover-bg);
 }
 
-.sort-filter-option.is-active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: var(--weight-medium);
+.topbar-select-btn.is-active {
+  background: var(--ink);
+  color: var(--bg);
 }
 
-/* View toggle (grid/list) */
+/* ── View toggle — glass segmented control (used by content-toolbar) ── */
+
 .topbar-view-toggle {
   display: inline-flex;
   gap: 2px;
-  border-radius: 8px;
-  background: var(--input-bg);
-  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--hover-bg);
+  padding: 3px;
 }
 
 .topbar-view-btn {
   width: 28px;
   height: 28px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--muted);
   display: inline-flex;
@@ -219,12 +168,20 @@
   justify-content: center;
   cursor: pointer;
   flex: 0 0 auto;
-  transition: background 150ms ease, color 150ms ease;
+  transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .topbar-view-btn.is-active {
   background: var(--surface);
   color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  .topbar-view-btn.is-active {
+    background: var(--surface-strong);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  }
 }
 
 .topbar-view-btn:hover:not(.is-active) {
@@ -232,20 +189,52 @@
 }
 
 .topbar-view-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ── Chat toggle — mobile only ────────────────────────── */
+
+.topbar-chat-toggle {
+  display: none;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.topbar-chat-toggle:hover {
+  color: var(--ink);
+  background: var(--hover-bg);
+}
+
+@media (max-width: 980px) {
+  .topbar-chat-toggle {
+    display: inline-flex;
+  }
+}
+
+/* ── Mobile ────────────────────────────────────────────── */
+
+@media (max-width: 760px) {
+  .topbar-shell {
+    padding-left: 13px;
+    padding-right: 13px;
+  }
 }
 
 @media (max-width: 700px) {
   .topbar-shell {
-    justify-content: space-between;
-  }
-
-  .topbar-brand-name {
-    display: none;
+    min-height: 36px;
   }
 
   .topbar-auth-label {
-    max-width: 120px;
+    max-width: 100px;
   }
 }

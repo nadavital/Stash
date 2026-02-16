@@ -1,45 +1,81 @@
+/* ── Composer — transparent wrapper, input-shell IS the capsule ── */
+
 .composer-shell {
   position: relative;
 }
 
 .composer-form {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
+  position: relative;
 }
+
+/* ── Input shell — sculpted glass capsule ──────────────── */
 
 .composer-input-shell {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: end;
-  gap: 4px;
-  min-height: 52px;
-  border-radius: 26px;
-  background: color-mix(in srgb, var(--surface-strong) 75%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 0;
+  gap: var(--space-1);
+  min-height: 54px;
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(28px) saturate(1.8);
+  -webkit-backdrop-filter: blur(28px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.5);
   padding: 8px 8px 8px 14px;
-  box-shadow: 0 0 0 1px var(--border-subtle);
-  transition: box-shadow 200ms ease, background 200ms ease;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.5),
+    0 4px 24px rgba(0, 0, 0, 0.08),
+    0 1px 4px rgba(0, 0, 0, 0.04);
+  transition: border-color var(--transition-base), background var(--transition-base), box-shadow var(--transition-base);
+}
+
+@media (prefers-color-scheme: dark) {
+  .composer-input-shell {
+    background: rgba(13, 13, 13, 0.6);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.08),
+      0 4px 24px rgba(0, 0, 0, 0.25),
+      0 1px 4px rgba(0, 0, 0, 0.12);
+  }
 }
 
 .composer-input-shell:focus-within {
-  background: color-mix(in srgb, var(--surface) 85%, transparent);
-  box-shadow: 0 0 0 1px var(--border-strong), 0 0 0 4px rgba(16, 163, 127, 0.08);
+  background: rgba(255, 255, 255, 0.65);
+  border-color: rgba(255, 255, 255, 0.6);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.6),
+    0 0 0 3px rgba(0, 0, 0, 0.06),
+    0 4px 24px rgba(0, 0, 0, 0.1);
 }
+
+@media (prefers-color-scheme: dark) {
+  .composer-input-shell:focus-within {
+    background: rgba(13, 13, 13, 0.75);
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.12),
+      0 0 0 3px rgba(255, 255, 255, 0.08),
+      0 4px 24px rgba(0, 0, 0, 0.35);
+  }
+}
+
+/* ── Plus (attach) button ──────────────────────────────── */
 
 .composer-plus,
 .composer-send {
-  width: 36px;
-  height: 36px;
+  width: var(--btn-md);
+  height: var(--btn-md);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex: 0 0 auto;
-  transition: background 150ms ease, color 150ms ease, transform 100ms ease;
+  transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .composer-plus {
@@ -50,12 +86,16 @@
 }
 
 .composer-plus:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
-.composer-plus:active {
-  transform: scale(0.94);
+@media (prefers-color-scheme: dark) {
+  .composer-plus:hover {
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
 }
 
 .composer-plus svg {
@@ -63,39 +103,70 @@
   height: 18px;
 }
 
+/* ── Project/folder select ─────────────────────────────── */
+
 .composer-project-select {
   width: 110px;
   min-width: 0;
   margin: 0;
-  min-height: 32px;
-  border-radius: 999px;
-  border: 0;
-  background: var(--hover-bg);
+  min-height: var(--btn-sm);
+  border-radius: var(--radius-pill);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.3);
   color: var(--muted);
   padding: 0 24px 0 10px;
   font-size: var(--font-size-caption);
   cursor: pointer;
-  transition: background 150ms ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2398a2b3' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
 }
 
+@media (prefers-color-scheme: dark) {
+  .composer-project-select {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+}
+
 .composer-project-select:hover {
-  background: var(--hover-bg);
+  background-color: rgba(255, 255, 255, 0.42);
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  .composer-project-select:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
 }
 
 .composer-input-shell:focus-within .composer-project-select {
-  background: var(--input-bg);
+  background-color: rgba(255, 255, 255, 0.25);
 }
+
+@media (prefers-color-scheme: dark) {
+  .composer-input-shell:focus-within .composer-project-select {
+    background-color: rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* ── Text input ────────────────────────────────────────── */
 
 .composer-input-shell #content-input {
   border: 0;
   background: transparent;
   padding: 6px 8px;
   margin: 0;
-  min-height: 36px;
+  min-height: var(--btn-md);
   max-height: 200px;
   resize: none;
   font-size: var(--font-size-md);
@@ -112,17 +183,28 @@
   outline: none;
 }
 
+/* ── File pill ─────────────────────────────────────────── */
+
 .composer-file-pill {
   max-width: 200px;
   min-width: 0;
-  border: 0;
-  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-pill);
   padding: 0 10px;
   min-height: 28px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: var(--hover-bg);
+  background: rgba(255, 255, 255, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+@media (prefers-color-scheme: dark) {
+  .composer-file-pill {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
 }
 
 .composer-file-pill.hidden {
@@ -149,31 +231,31 @@
   font-size: var(--font-size-md);
   line-height: var(--leading-none);
   cursor: pointer;
-  transition: color 120ms ease;
+  transition: color var(--transition-fast);
 }
 
 .composer-file-clear:hover {
   color: var(--ink);
 }
 
+/* ── Send button — accent glass ────────────────────────── */
+
 .composer-send {
   background: var(--ink);
   color: var(--bg);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
 
 .composer-send:hover {
   opacity: 0.85;
-}
-
-.composer-send:active {
-  transform: scale(0.94);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.14);
 }
 
 .composer-send:disabled,
 .composer-plus:disabled,
 .composer-project-select:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.4;
 }
 
 .composer-send.is-loading svg {
@@ -184,9 +266,9 @@
   content: "";
   width: 14px;
   height: 14px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.4);
-  border-top-color: var(--on-accent);
+  border-radius: var(--radius-pill);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: var(--bg);
   animation: composer-spin 0.8s linear infinite;
 }
 
@@ -201,6 +283,8 @@
   }
 }
 
+/* ── Capture hint ──────────────────────────────────────── */
+
 .capture-hint {
   margin: 0;
   min-height: 16px;
@@ -214,9 +298,11 @@
 }
 
 .composer-shell.drag-active .composer-input-shell {
-  box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px rgba(16, 163, 127, 0.12);
-  background: var(--accent-soft);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, rgba(255, 255, 255, 0.4));
 }
+
+/* ── Mobile ────────────────────────────────────────────── */
 
 @media (max-width: 900px) {
   .composer-input-shell {

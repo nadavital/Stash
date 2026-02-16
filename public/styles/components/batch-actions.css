@@ -29,7 +29,7 @@
   padding-left: 32px;
 }
 
-/* Batch action bar */
+/* Batch action bar — floating, keep glass */
 .batch-action-bar {
   position: fixed;
   bottom: 0;
@@ -41,10 +41,19 @@
   gap: 12px;
   min-height: var(--batch-bar-height);
   padding: 12px 24px calc(12px + var(--safe-bottom));
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  box-shadow: var(--shadow-elevated);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  border: 0;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.06);
   animation: slideUp 200ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  .batch-action-bar {
+    background: rgba(13, 13, 13, 0.7);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+  }
 }
 
 .batch-action-bar.hidden {
@@ -59,25 +68,29 @@
 }
 
 .batch-action-btn {
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 8px;
   min-height: 36px;
   padding: 8px 14px;
   font-size: var(--font-size-sm);
   font-weight: var(--weight-medium);
   cursor: pointer;
-  background: transparent;
+  background: var(--hover-bg);
   color: var(--ink);
   transition: background 150ms ease, color 150ms ease;
 }
 
 .batch-action-btn:hover {
-  background: var(--hover-bg);
+  background: var(--surface-strong);
+}
+
+.batch-action-btn:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .batch-action-btn--danger {
   color: var(--danger);
-  border-color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .batch-action-btn--danger:hover {
@@ -97,14 +110,15 @@
 
 /* Select mode toggle in topbar */
 .topbar-select-btn {
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
   padding: 6px 12px;
   font-size: var(--font-size-xs);
   font-weight: var(--weight-medium);
   cursor: pointer;
-  background: transparent;
+  background: var(--surface-strong);
   color: var(--muted);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   transition: background 150ms ease, color 150ms ease;
 }
 
@@ -113,10 +127,13 @@
   color: var(--ink);
 }
 
+.topbar-select-btn:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
 .topbar-select-btn.is-active {
   background: var(--accent-soft);
   color: var(--accent);
-  border-color: var(--accent);
 }
 
 @media (max-width: 760px) {

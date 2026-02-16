@@ -13,6 +13,9 @@ const DEFAULT_STATE = {
   accessedIds: [],
   draftFolders: [],
   toastTimer: null,
+  chatMessages: [],
+  chatCitations: [],
+  chatProjectHint: "",
 };
 
 export function createStore() {

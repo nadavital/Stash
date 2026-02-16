@@ -17,8 +17,8 @@
   position: absolute;
   inset: 0;
   background: var(--overlay);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
 }
 
 .folder-modal-panel {
@@ -26,11 +26,20 @@
   z-index: 1;
   width: min(480px, 100%);
   border-radius: 20px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(40px) saturate(1.5);
+  -webkit-backdrop-filter: blur(40px) saturate(1.5);
   border: 0;
-  background: var(--surface);
-  box-shadow: var(--shadow-elevated);
+  box-shadow: 0 24px 80px -12px rgba(0, 0, 0, 0.15);
   padding: 24px;
   animation: modalIn 200ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  .folder-modal-panel {
+    background: rgba(30, 30, 30, 0.85);
+    box-shadow: 0 24px 80px -12px rgba(0, 0, 0, 0.5);
+  }
 }
 
 .folder-modal-close {
@@ -40,8 +49,8 @@
   width: 32px;
   height: 32px;
   border: 0;
-  border-radius: 10px;
-  background: var(--input-bg);
+  border-radius: var(--radius-pill);
+  background: transparent;
   color: var(--muted);
   padding: 0;
   cursor: pointer;
@@ -54,8 +63,12 @@
 }
 
 .folder-modal-close:hover {
-  color: var(--accent);
+  color: var(--ink);
   background: var(--hover-bg);
+}
+
+.folder-modal-close:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .folder-modal-heading {
@@ -79,7 +92,7 @@
 .folder-kind-choice {
   border: 0;
   border-radius: 999px;
-  background: var(--input-bg);
+  background: var(--hover-bg);
   color: var(--muted);
   min-height: 32px;
   padding: 0 12px;
@@ -95,11 +108,16 @@
 }
 
 .folder-kind-choice:hover {
-  background: var(--hover-bg);
+  background: var(--surface-strong);
+  color: var(--ink);
 }
 
 .folder-kind-choice.is-selected:hover {
   background: var(--accent);
+}
+
+.folder-kind-choice:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .folder-form-label {
@@ -113,6 +131,13 @@
 .folder-input,
 .folder-textarea {
   margin-top: 0;
+  background: var(--input-bg);
+  border: 0;
+}
+
+.folder-input:focus,
+.folder-textarea:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .folder-textarea {
@@ -144,7 +169,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: border-color 150ms ease, transform 100ms ease;
+  transition: transform 100ms ease;
 }
 
 .folder-color-choice:hover {
@@ -152,7 +177,11 @@
 }
 
 .folder-color-choice.is-selected {
-  border-color: var(--ink);
+  box-shadow: 0 0 0 2px var(--ink);
+}
+
+.folder-color-choice:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .folder-color-row .folder-color-dot {
@@ -176,20 +205,26 @@
 
 .folder-create-btn {
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
   color: var(--on-accent);
   min-height: 40px;
   padding: 0 20px;
   font-weight: var(--weight-medium);
   font-size: var(--font-size-body-sm);
-  transition: background 150ms ease, transform 100ms ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: background 150ms ease, transform 100ms ease, box-shadow 150ms ease;
 }
 
 .folder-create-btn:hover {
   background: var(--accent-deep);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .folder-create-btn:active {
   transform: scale(0.96);
+}
+
+.folder-create-btn:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }

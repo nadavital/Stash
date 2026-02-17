@@ -29,7 +29,7 @@ export function renderFolderHeroToolbar({
     <section class="folder-hero-toolbar" data-component="folder-hero-toolbar" aria-label="Folder path">
       <div class="folder-hero-head">
         <nav class="folder-breadcrumb" aria-label="Breadcrumb">
-          <a class="folder-back-link" href="#/">Folders</a>
+          <a class="folder-back-link" href="#/">Stash</a>
           <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="6 4 10 8 6 12"/>
           </svg>
@@ -40,7 +40,13 @@ export function renderFolderHeroToolbar({
         </nav>
         <div style="display:flex;gap:6px;align-items:center;">
           <button id="new-folder-btn" class="folder-subfolder-btn" type="button">+ Folder</button>
-          <button id="rename-folder-btn" class="folder-subfolder-btn" type="button">Rename</button>
+          <div class="folder-edit-wrap" style="position:relative;">
+            <button id="edit-folder-btn" class="folder-subfolder-btn" type="button">Edit</button>
+            <div id="edit-folder-menu" class="folder-edit-menu hidden">
+              <button class="folder-edit-menu-item" id="edit-select-btn" type="button">Select items</button>
+              <button class="folder-edit-menu-item" id="edit-rename-btn" type="button">Rename folder</button>
+            </div>
+          </div>
           ${
             showDeleteAction
               ? `<button id="delete-folder-btn" class="folder-delete-btn" type="button" aria-label="Delete folder ${safeFolderName}">Delete folder</button>`

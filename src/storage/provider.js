@@ -33,3 +33,4 @@ export const noteRepo = defaultProvider.noteRepo;
 export const taskRepo = defaultProvider.taskRepo;
 export const folderRepo = defaultProvider.folderRepo;
 export const authRepo = defaultProvider.authRepo;
+export const versionRepo = defaultProvider.versionRepo;

@@ -1,8 +1,5 @@
 import { renderFolderHeroToolbar } from "../components/folder-hero-toolbar/folder-hero-toolbar.js";
 import { renderFolderItemGrid } from "../components/folder-item-grid/folder-item-grid.js";
-import {
-  renderRecentInlineStripHTML,
-} from "../components/home-recent-list/home-recent-list.js";
 import { showToast } from "../components/toast/toast.js";
 import {
   renderItemModalHTML,
@@ -50,10 +47,6 @@ import {
 } from "../services/folder-utils.js";
 import { createBatchSelectController } from "../services/batch-select.js";
 import { createFolderCrudController } from "../services/folder-crud.js";
-import {
-  renderContentToolbarHTML,
-  queryContentToolbarEls,
-} from "../components/content-toolbar/content-toolbar.js";
 import { initKeyboardShortcuts } from "../services/keyboard.js";
 import {
   applySortFilter,
@@ -65,10 +58,10 @@ import { createSaveModalController } from "../services/save-modal-controller.js"
 import { createItemModalController } from "../services/item-modal-controller.js";
 import { createNoteCrudController } from "../services/note-crud.js";
 import { renderNoteTiles } from "../services/render-note-tiles.js";
-import { renderRecentNoteStrip } from "../services/render-recent-strip.js";
 import { renderSubfolders } from "../services/render-subfolders.js";
 import { subscribeNoteEnrichment } from "../services/sse-notes.js";
 import { createViewToggleController } from "../services/view-toggle.js";
+
 
 function renderFolderPageContent(folderMeta) {
   return `
@@ -76,9 +69,7 @@ function renderFolderPageContent(folderMeta) {
       ${renderSortFilterHTML()}
 
       <div class="folder-explorer-pane">
-        ${renderContentToolbarHTML()}
         ${renderInlineSearchHTML()}
-        ${renderRecentInlineStripHTML({ title: "Recent in folder" })}
         ${renderFolderHeroToolbar({
           folderName: folderMeta.name,
           folderDescription: folderMeta.description,
@@ -119,7 +110,6 @@ function queryPageElements(mountNode) {
   const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
-  const toolbarEls = queryContentToolbarEls(mountNode);
 
   return {
     ...itemModalEls,
@@ -128,11 +118,11 @@ function queryPageElements(mountNode) {
     ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
-    ...toolbarEls,
-    recentNotesList: mountNode.querySelector("#recent-notes-list"),
-    refreshBtn: mountNode.querySelector("#refresh-btn"),
     deleteFolderBtn: mountNode.querySelector("#delete-folder-btn"),
-    renameFolderBtn: mountNode.querySelector("#rename-folder-btn"),
+    editFolderBtn: mountNode.querySelector("#edit-folder-btn"),
+    editFolderMenu: mountNode.querySelector("#edit-folder-menu"),
+    editSelectBtn: mountNode.querySelector("#edit-select-btn"),
+    editRenameBtn: mountNode.querySelector("#edit-rename-btn"),
     newFolderBtn: mountNode.querySelector("#new-folder-btn"),
     subfoldersSection: mountNode.querySelector("#subfolders-section"),
     subfoldersGrid: mountNode.querySelector("#subfolders-grid"),
@@ -216,7 +206,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
 
       on(document, "click", () => {
         closeAllActionMenus(mountNode);
-        els.toolbarNewMenu?.classList.add("hidden");
+        els.editFolderMenu?.classList.add("hidden");
       });
 
       function getState() {
@@ -273,29 +263,9 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         markAccessed(note.id);
         navigate(`#/item/${note.id}`);
       });
-      // + menu toggle
-      on(els.toolbarNewBtn, "click", (e) => {
-        e.stopPropagation();
-        els.toolbarNewMenu?.classList.toggle("hidden");
+      shell.setOnWorkspaceAction(() => {
+        refreshNotes();
       });
-      on(els.toolbarNewItemBtn, "click", () => {
-        els.toolbarNewMenu?.classList.add("hidden");
-        openSaveModal(els, { folders: listAllFolderNames(), preselectedFolder: folderMeta.name });
-      });
-      on(els.toolbarNewFolderBtn, "click", () => {
-        els.toolbarNewMenu?.classList.add("hidden");
-        openFolderModal(els);
-      });
-      on(els.toolbarNewTaskBtn, "click", () => {
-        els.toolbarNewMenu?.classList.add("hidden");
-        // Use apiClient.createTask directly for tasks
-        const title = prompt("Task title:");
-        if (!title?.trim()) return;
-        apiClient.createTask({ title: title.trim(), status: "open" })
-          .then(() => { toast("Task created"); refreshNotes(); })
-          .catch(() => { toast("Task save failed", "error"); });
-      });
-
       // Search toggle
       on(els.toolbarSearchToggle, "click", () => {
         const searchWrap = mountNode.querySelector(".inline-search");
@@ -381,7 +351,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
           const parent = parentResult?.folder;
           if (!parent || !isMounted) return;
           breadcrumb.innerHTML = `
-            <a class="folder-back-link" href="#/">Folders</a>
+            <a class="folder-back-link" href="#/">Stash</a>
             <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>
             <a class="folder-back-link" href="#/folder/${encodeURIComponent(parent.name)}">${parent.name}</a>
             <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>
@@ -454,17 +424,6 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         });
       }
 
-      function renderRecent() {
-        renderRecentNoteStrip(
-          els.recentNotesList,
-          Array.isArray(recentNotes) ? recentNotes : [],
-          {
-            onOpen(note) { markAccessed(note.id); navigate(`#/item/${note.id}`); },
-            limit: 12,
-          },
-        );
-      }
-
       function renderInlineSearchResults() {
         if (!els.folderItemsGrid) return;
         const query = String(els.inlineSearchInput?.value || "").trim();
@@ -487,13 +446,11 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
 
         if (query) {
           renderInlineSearchResults();
-          renderRecent();
           return;
         }
 
         renderSubfoldersView();
         renderFolderItems(applySortFilter(recentNotes, { sortMode, filterType }));
-        renderRecent();
       }
 
       async function refreshNotes() {
@@ -649,15 +606,21 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
       });
       disposers.push(cleanupSaveModal);
 
-      on(els.refreshBtn, "click", async () => {
-        await refreshNotes();
-      });
-
       on(els.deleteFolderBtn, "click", async () => {
         await deleteCurrentFolder();
       });
 
-      on(els.renameFolderBtn, "click", async () => {
+      // Edit dropdown
+      on(els.editFolderBtn, "click", (e) => {
+        e.stopPropagation();
+        els.editFolderMenu?.classList.toggle("hidden");
+      });
+      on(els.editSelectBtn, "click", () => {
+        els.editFolderMenu?.classList.add("hidden");
+        batchSelect.toggleSelectMode();
+      });
+      on(els.editRenameBtn, "click", async () => {
+        els.editFolderMenu?.classList.add("hidden");
         await renameFolder(
           {
             id: dbFolderMeta?.id || "",
@@ -728,7 +691,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
             clearInlineSearch();
           }
           closeAllActionMenus(mountNode);
-          els.toolbarNewMenu?.classList.add("hidden");
+          els.editFolderMenu?.classList.add("hidden");
           closeItemModal(els);
           closeFolderModal(els);
           moveDialog.cleanup();
@@ -736,11 +699,6 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
       });
 
       function showSkeletons() {
-        if (els.recentNotesList) {
-          els.recentNotesList.innerHTML = Array.from({ length: 5 }, () =>
-            `<div class="recent-inline-skeleton skeleton-pulse" aria-hidden="true"></div>`
-          ).join('');
-        }
         if (els.folderItemsGrid) {
           els.folderItemsGrid.innerHTML = Array.from({ length: 6 }, () =>
             `<div class="skeleton-card skeleton-pulse"></div>`
@@ -780,6 +738,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         // Clear shell callbacks
         shell.setToast(null);
         shell.setOnOpenCitation(null);
+        shell.setOnWorkspaceAction(null);
         disposers.forEach((dispose) => {
           dispose();
         });

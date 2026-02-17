@@ -5,12 +5,21 @@ const MAX_MESSAGES = 100;
 export function renderChatPanelHTML() {
   return `
     <div id="chat-panel" class="chat-panel" aria-label="Chat with your notes">
+      <div id="chat-empty-state" class="chat-empty-state">
+        <p class="chat-empty-heading">What would you like to do?</p>
+        <div class="chat-empty-chips">
+          <button class="chat-chip" data-prompt="save" type="button">Save a link</button>
+          <button class="chat-chip" data-prompt="note" type="button">Create a note</button>
+          <button class="chat-chip" data-prompt="folder" type="button">New folder</button>
+          <button class="chat-chip" data-prompt="search" type="button">Search my notes</button>
+        </div>
+      </div>
       <div id="chat-panel-messages" class="chat-panel-messages"></div>
       <div class="chat-panel-citations hidden" id="chat-panel-citations"></div>
       <div id="chat-context-header" class="chat-context-chip hidden"></div>
       <form id="chat-panel-form" class="chat-panel-form">
         <div class="chat-panel-input-wrap">
-          <textarea id="chat-panel-input" class="chat-panel-input" rows="2" placeholder="Ask about your notes..." autocomplete="off"></textarea>
+          <textarea id="chat-panel-input" class="chat-panel-input" rows="2" placeholder="Save a link, create a note, ask anything..." autocomplete="off"></textarea>
           <button id="chat-panel-send" class="chat-panel-send" type="submit" aria-label="Send">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="8" y1="14" x2="8" y2="3"/>
@@ -27,15 +36,17 @@ export function queryChatPanelEls(root) {
   return {
     chatPanel: root.querySelector("#chat-panel"),
     chatContextHeader: root.querySelector("#chat-context-header"),
+    chatEmptyState: root.querySelector("#chat-empty-state"),
     chatPanelMessages: root.querySelector("#chat-panel-messages"),
     chatPanelCitations: root.querySelector("#chat-panel-citations"),
     chatPanelForm: root.querySelector("#chat-panel-form"),
     chatPanelInput: root.querySelector("#chat-panel-input"),
     chatPanelSend: root.querySelector("#chat-panel-send"),
+    chatChips: root.querySelectorAll(".chat-chip"),
   };
 }
 
-export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } = {}) {
+export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspaceAction, store } = {}) {
   const handlers = [];
   let isAsking = false;
   let nextProjectHint = "";
@@ -46,7 +57,9 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
     const ctx = store.getState().chatContext || { type: "home" };
     let label = "";
     if (ctx.type === "item" && ctx.itemTitle) {
-      label = `Viewing: ${ctx.itemTitle}`;
+      label = ctx.project
+        ? `${ctx.itemTitle} \u00B7 in ${ctx.project}`
+        : `Viewing: ${ctx.itemTitle}`;
     } else if (ctx.type === "folder" && ctx.folderId) {
       label = `In: ${ctx.folderId}`;
     }
@@ -114,6 +127,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
 
   function addMessage(role, text) {
     if (!els.chatPanelMessages) return;
+    if (els.chatEmptyState) els.chatEmptyState.classList.add("hidden");
     const msg = document.createElement("div");
     msg.className = `chat-msg chat-msg--${role}`;
     msg.textContent = text;
@@ -128,6 +142,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
     const messages = state.chatMessages || [];
     if (!messages.length) return;
 
+    if (els.chatEmptyState) els.chatEmptyState.classList.add("hidden");
     els.chatPanelMessages.innerHTML = "";
     messages.forEach((msg) => {
       const el = document.createElement("div");
@@ -232,6 +247,9 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
 
     if (ctx.type === "item" && ctx.itemId) {
       contextNoteId = ctx.itemId;
+      if (!project && ctx.project) {
+        project = ctx.project;
+      }
     } else if (ctx.type === "folder" && ctx.folderId && !project) {
       project = ctx.folderId;
     }
@@ -275,13 +293,35 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
           },
           onToken(token) {
             removeTyping();
+            const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
+            if (toolStatus) toolStatus.remove();
             if (assistantMsg) {
               assistantMsg.textContent += token;
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
             }
           },
+          onToolCall(name) {
+            removeTyping();
+            const statusMap = { create_note: "Saving...", create_folder: "Creating folder...", search_notes: "Searching..." };
+            const statusEl = document.createElement("span");
+            statusEl.className = "chat-tool-status";
+            statusEl.textContent = statusMap[name] || "Working...";
+            if (assistantMsg) {
+              assistantMsg.appendChild(statusEl);
+              els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
+            }
+          },
+          onToolResult(name) {
+            const statusEl = assistantMsg?.querySelector(".chat-tool-status");
+            if (statusEl) statusEl.remove();
+            if ((name === "create_note" || name === "create_folder") && typeof onWorkspaceAction === "function") {
+              onWorkspaceAction(name);
+            }
+          },
           onDone() {
             removeTyping();
+            const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
+            if (toolStatus) toolStatus.remove();
             if (assistantMsg && !assistantMsg.textContent.trim()) {
               assistantMsg.textContent = "No answer generated.";
             }
@@ -344,6 +384,27 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, store } =
     e.preventDefault();
     handleSubmit();
   });
+
+  // Wire suggestion chip clicks
+  if (els.chatChips) {
+    const chipPrompts = {
+      save: "Save this link: ",
+      note: "Create a note about ",
+      folder: "Create a folder called ",
+      search: "",
+    };
+    els.chatChips.forEach((chip) => {
+      addHandler(chip, "click", () => {
+        const promptKey = chip.dataset.prompt || "";
+        const prompt = chipPrompts[promptKey] ?? "";
+        if (els.chatPanelInput) {
+          els.chatPanelInput.value = prompt;
+          els.chatPanelInput.focus();
+          els.chatPanelInput.selectionStart = els.chatPanelInput.selectionEnd = prompt.length;
+        }
+      });
+    });
+  }
 
   rebuildFromStore();
 

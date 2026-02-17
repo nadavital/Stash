@@ -15,3 +15,10 @@
   gap: var(--space-3);
   animation: fadeInUp 180ms ease both;
 }
+
+.home-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-3);
+}

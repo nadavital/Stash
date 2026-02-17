@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config, publicUploadPath } from "./config.js";
-import { noteRepo } from "./storage/provider.js";
+import { noteRepo, versionRepo } from "./storage/provider.js";
 import { enrichmentQueue } from "./queue.js";
 import {
   convertUploadToMarkdown,
@@ -1360,6 +1360,27 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
   if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
   assertCanMutateNote(existing, actorContext);
 
+  // Detect changes and snapshot before editing
+  const changes = [];
+  if (content !== undefined && String(content) !== existing.content) changes.push("content");
+  if (summary !== undefined && String(summary) !== existing.summary) changes.push("summary");
+  if (tags !== undefined && JSON.stringify(tags) !== JSON.stringify(existing.tags)) changes.push("tags");
+  if (project !== undefined && String(project) !== existing.project) changes.push("project");
+
+  if (changes.length > 0) {
+    await versionRepo.createSnapshot({
+      noteId: normalizedId,
+      workspaceId: actorContext.workspaceId,
+      content: existing.content,
+      summary: existing.summary,
+      tags: existing.tags,
+      project: existing.project,
+      metadata: existing.metadata,
+      actorUserId: actorContext.userId,
+      changeSummary: `Edited: ${changes.join(", ")}`,
+    });
+  }
+
   const newContent = content !== undefined ? String(content) : existing.content;
   const contentChanged = content !== undefined && newContent !== existing.content;
 
@@ -1390,6 +1411,76 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
     });
   } else {
     // Sync consolidated file even without re-enrichment
+    await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
+  }
+
+  return updatedNote;
+}
+
+export async function listMemoryVersions({ id, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
+
+  const items = await versionRepo.listVersions(normalizedId, actorContext.workspaceId);
+  return { items, count: items.length };
+}
+
+export async function restoreMemoryVersion({ id, versionNumber, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
+  assertCanMutateNote(existing, actorContext);
+
+  const version = await versionRepo.getVersion(normalizedId, versionNumber, actorContext.workspaceId);
+  if (!version) throw new Error(`Version ${versionNumber} not found`);
+
+  // Snapshot current state before restoring
+  await versionRepo.createSnapshot({
+    noteId: normalizedId,
+    workspaceId: actorContext.workspaceId,
+    content: existing.content,
+    summary: existing.summary,
+    tags: existing.tags,
+    project: existing.project,
+    metadata: existing.metadata,
+    actorUserId: actorContext.userId,
+    changeSummary: `Restored from version ${versionNumber}`,
+  });
+
+  const contentChanged = version.content !== existing.content;
+
+  const updatedNote = await noteRepo.updateNote({
+    id: normalizedId,
+    content: version.content || "",
+    summary: version.summary || "",
+    tags: version.tags || [],
+    project: version.project || "",
+    workspaceId: actorContext.workspaceId,
+  });
+
+  if (contentChanged) {
+    await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
+    enqueueEnrichmentJob({
+      noteId: normalizedId,
+      workspaceId: actorContext.workspaceId,
+      visibilityUserId: noteOwnerId(existing) || actorContext.userId,
+      requestedProject: updatedNote.project || "",
+      normalizedSourceType: updatedNote.sourceType || "text",
+      normalizedSourceUrl: updatedNote.sourceUrl || "",
+      hasFileUpload: false,
+      uploadEnrichment: null,
+      fileDataUrl: null,
+      fileName: updatedNote.fileName || "",
+      fileMime: updatedNote.fileMime || "",
+    });
+  } else {
     await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
   }
 
@@ -1925,9 +2016,12 @@ export async function askMemories({ question, project = "", limit = 6, contextNo
 
   try {
     const context = buildCitationBlock(citations);
+    let askInstructions = "Answer ONLY using the provided memory snippets. Be concise. Every factual claim must cite at least one snippet using [N1], [N2], etc. If uncertain, say what is missing.";
+    if (project) {
+      askInstructions = `The user is working in project "${project}". Consider this context when answering.\n\n${askInstructions}`;
+    }
     const { text } = await createResponse({
-      instructions:
-        "Answer ONLY using the provided memory snippets. Be concise. Every factual claim must cite at least one snippet using [N1], [N2], etc. If uncertain, say what is missing.",
+      instructions: askInstructions,
       input: [
         {
           role: "user",

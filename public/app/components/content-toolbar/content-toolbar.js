@@ -6,24 +6,6 @@ export function renderContentToolbarHTML() {
   return `
     <div class="content-toolbar">
       <a class="toolbar-brand" href="#/">Stash</a>
-      <div class="toolbar-new-wrap">
-        <button class="content-toolbar-new-btn" id="toolbar-new-btn" type="button">+</button>
-        <div class="toolbar-new-menu hidden" id="toolbar-new-menu">
-          <button class="toolbar-new-menu-item" id="toolbar-new-item-btn" type="button">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8.67l-5.15 5.15a3.5 3.5 0 0 1-4.95-4.95L9.05 3.72a2.33 2.33 0 0 1 3.3 3.3L7.2 12.17a1.17 1.17 0 0 1-1.65-1.65L10.7 5.37"/></svg>
-            Save item
-          </button>
-          <button class="toolbar-new-menu-item" id="toolbar-new-folder-btn" type="button">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4v8a1 1 0 001 1h10a1 1 0 001-1V6a1 1 0 00-1-1H8L6.5 3.5A1 1 0 005.8 3H3a1 1 0 00-1 1z"/></svg>
-            New folder
-          </button>
-          <button class="toolbar-new-menu-item" id="toolbar-new-task-btn" type="button">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5.5 8l2 2 3.5-4"/></svg>
-            New task
-          </button>
-        </div>
-      </div>
-      <button class="topbar-select-btn" id="toolbar-select-btn" type="button">Select</button>
       <span class="content-toolbar-spacer"></span>
       <button class="toolbar-icon-btn" id="toolbar-search-toggle" type="button" aria-label="Search">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -65,12 +47,6 @@ export function renderContentToolbarHTML() {
 
 export function queryContentToolbarEls(root) {
   return {
-    toolbarNewBtn: root.querySelector("#toolbar-new-btn"),
-    toolbarNewMenu: root.querySelector("#toolbar-new-menu"),
-    toolbarNewItemBtn: root.querySelector("#toolbar-new-item-btn"),
-    toolbarNewFolderBtn: root.querySelector("#toolbar-new-folder-btn"),
-    toolbarNewTaskBtn: root.querySelector("#toolbar-new-task-btn"),
-    toolbarSelectBtn: root.querySelector("#toolbar-select-btn"),
     toolbarSearchToggle: root.querySelector("#toolbar-search-toggle"),
     toolbarSortBtn: root.querySelector("#toolbar-sort-btn"),
     toolbarViewGridBtn: root.querySelector("#toolbar-view-grid-btn"),

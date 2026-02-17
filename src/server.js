@@ -18,9 +18,11 @@ import {
   exportMemories,
   findRelatedMemories,
   getMemoryStats,
+  listMemoryVersions,
   listProjects,
   listRecentMemories,
   listTags,
+  restoreMemoryVersion,
   searchMemories,
   updateMemory,
 } from "./memoryService.js";
@@ -379,6 +381,101 @@ function handleSSE(req, res, actor) {
     clearInterval(keepalive);
     unsubscribe();
   });
+}
+
+const CHAT_TOOLS = [
+  {
+    type: "function",
+    name: "create_note",
+    description: "Save a new note or link. Use when the user wants to save content, a URL, or create a new note.",
+    parameters: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The note content or URL to save" },
+        project: { type: "string", description: "Folder to save into (optional)" },
+        sourceType: { type: "string", enum: ["url", "text", "manual"], description: "Type of content" },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    type: "function",
+    name: "create_folder",
+    description: "Create a new folder/collection. Use when the user wants to organize items into a new group.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Folder name" },
+        description: { type: "string", description: "Optional description" },
+        color: { type: "string", description: "Color: green, blue, purple, orange, pink, red, yellow" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    type: "function",
+    name: "search_notes",
+    description: "Search through saved notes. Use when the user asks about their saved content.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+        project: { type: "string", description: "Filter to specific folder (optional)" },
+      },
+      required: ["query"],
+    },
+  },
+];
+
+const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links, create notes, make folders, and search existing content. When the user wants to save or create something, use the appropriate tool. When answering questions, use the provided context or search first, then answer using the results. Be concise and helpful.";
+
+async function executeChatToolCall(name, args, actor) {
+  switch (name) {
+    case "create_note": {
+      const content = String(args.content || "").trim();
+      let sourceType = args.sourceType || "text";
+      let sourceUrl = "";
+      if (!args.sourceType && /^https?:\/\//i.test(content)) {
+        sourceType = "url";
+        sourceUrl = content;
+      }
+      const note = await createMemory({
+        content,
+        sourceType,
+        sourceUrl,
+        project: args.project || "",
+        metadata: { createdFrom: "chat-agent", actorUserId: actor.userId },
+        actor,
+      });
+      return { noteId: note.id, title: note.summary || content.slice(0, 80) || "New note" };
+    }
+    case "create_folder": {
+      const folder = await folderRepo.createFolder({
+        name: args.name,
+        description: args.description || "",
+        color: args.color || "",
+        workspaceId: actor.workspaceId,
+      });
+      return { folderId: folder.id, name: folder.name };
+    }
+    case "search_notes": {
+      const results = await searchMemories({
+        query: args.query,
+        project: args.project || "",
+        limit: 6,
+        actor,
+      });
+      return {
+        results: results.slice(0, 6).map((r) => ({
+          id: r.note?.id,
+          title: r.note?.summary || String(r.note?.content || "").slice(0, 80),
+          project: r.note?.project || "",
+        })),
+      };
+    }
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
 }
 
 async function handleApi(req, res, url) {
@@ -1104,12 +1201,14 @@ async function handleApi(req, res, url) {
     const wantsStream = (req.headers.accept || "").includes("text/event-stream");
 
     if (wantsStream) {
-      // Streaming path: search first, then stream OpenAI tokens
+      // Streaming agent path: search for context, then stream with tools
       const question = String(body.question || "").trim();
       if (!question) {
         sendJson(res, 400, { error: "Missing question" });
         return;
       }
+
+      // Pre-search for context
       let citations = await searchMemories({
         query: question,
         project: body.project || "",
@@ -1117,7 +1216,6 @@ async function handleApi(req, res, url) {
         actor,
       });
 
-      // If contextNoteId is provided, prepend that note as the primary citation
       const contextNoteId = String(body.contextNoteId || "").trim();
       if (contextNoteId) {
         try {
@@ -1126,7 +1224,7 @@ async function handleApi(req, res, url) {
             citations = citations.filter((c) => String(c.note?.id || "") !== contextNoteId);
             citations.unshift({ rank: 0, score: 1.0, note: contextNote });
           }
-        } catch { /* ignore — context note fetch is best-effort */ }
+        } catch { /* best-effort */ }
       }
 
       res.writeHead(200, {
@@ -1136,67 +1234,115 @@ async function handleApi(req, res, url) {
         "Access-Control-Allow-Origin": "*",
       });
 
-      // Send citations first
       res.write(`event: citations\ndata: ${JSON.stringify({ citations })}\n\n`);
 
-      if (citations.length === 0) {
-        res.write(`event: token\ndata: ${JSON.stringify({ token: "No relevant memory found yet. Save a few notes first." })}\n\n`);
-        res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
-        return;
-      }
-
       try {
-        const context = buildCitationBlock(citations);
-        const streamResponse = await createStreamingResponse({
-          instructions:
-            "Answer ONLY using the provided memory snippets. Be concise. Every factual claim must cite at least one snippet using [N1], [N2], etc. If uncertain, say what is missing.",
-          input: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: `Question: ${question}\n\nMemory snippets:\n${context}`,
-                },
-              ],
-            },
-          ],
-          temperature: 0.2,
-        });
+        const context = citations.length ? buildCitationBlock(citations) : "";
+        let systemPrompt = CHAT_SYSTEM_PROMPT;
+        if (body.project) {
+          systemPrompt = `The user is working in folder "${body.project}". Consider this context.\n\n${systemPrompt}`;
+        }
 
-        // Parse SSE from OpenAI stream
-        const reader = streamResponse.body;
-        let buffer = "";
-        for await (const chunk of reader) {
-          buffer += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6).trim();
-            if (data === "[DONE]") continue;
-            try {
-              const parsed = JSON.parse(data);
-              // Handle responses API streaming format
-              if (parsed.type === "response.output_text.delta" && parsed.delta) {
-                res.write(`event: token\ndata: ${JSON.stringify({ token: parsed.delta })}\n\n`);
-              } else if (parsed.type === "response.completed") {
-                // done
-              }
-            } catch { /* skip non-JSON lines */ }
+        const questionText = context
+          ? `${question}\n\nContext from saved notes:\n${context}`
+          : question;
+
+        let currentInput = [
+          { role: "user", content: [{ type: "input_text", text: questionText }] },
+        ];
+        let currentInstructions = systemPrompt;
+        let currentPreviousId = undefined;
+        let toolRounds = 0;
+        const MAX_TOOL_ROUNDS = 3;
+
+        while (toolRounds <= MAX_TOOL_ROUNDS) {
+          const streamResponse = await createStreamingResponse({
+            instructions: currentInstructions,
+            input: currentInput,
+            tools: CHAT_TOOLS,
+            previousResponseId: currentPreviousId,
+            temperature: 0.2,
+          });
+
+          // Parse OpenAI Responses API streaming events
+          const reader = streamResponse.body;
+          let buffer = "";
+          let responseId = "";
+          const pendingToolCalls = [];
+          let currentToolCall = null;
+
+          for await (const chunk of reader) {
+            buffer += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const data = line.slice(6).trim();
+              if (data === "[DONE]") continue;
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.type === "response.created") {
+                  responseId = parsed.response?.id || "";
+                } else if (parsed.type === "response.output_text.delta" && parsed.delta) {
+                  res.write(`event: token\ndata: ${JSON.stringify({ token: parsed.delta })}\n\n`);
+                } else if (parsed.type === "response.output_item.added" && parsed.item?.type === "function_call") {
+                  currentToolCall = { callId: parsed.item.call_id, name: parsed.item.name, args: "" };
+                } else if (parsed.type === "response.function_call_arguments.delta") {
+                  if (currentToolCall) currentToolCall.args += parsed.delta || "";
+                } else if (parsed.type === "response.output_item.done" && parsed.item?.type === "function_call") {
+                  if (currentToolCall) {
+                    currentToolCall.args = parsed.item.arguments || currentToolCall.args;
+                    pendingToolCalls.push(currentToolCall);
+                    currentToolCall = null;
+                  }
+                }
+              } catch { /* skip non-JSON lines */ }
+            }
           }
+
+          // No tool calls — we're done
+          if (pendingToolCalls.length === 0) break;
+
+          // Execute tool calls and collect outputs for continuation
+          const toolOutputs = [];
+          for (const tc of pendingToolCalls) {
+            res.write(`event: tool_call\ndata: ${JSON.stringify({ name: tc.name, status: "executing" })}\n\n`);
+            try {
+              const parsedArgs = JSON.parse(tc.args);
+              const result = await executeChatToolCall(tc.name, parsedArgs, actor);
+              res.write(`event: tool_result\ndata: ${JSON.stringify({ name: tc.name, result })}\n\n`);
+              toolOutputs.push({
+                type: "function_call_output",
+                call_id: tc.callId,
+                output: JSON.stringify(result),
+              });
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              res.write(`event: tool_result\ndata: ${JSON.stringify({ name: tc.name, error: errMsg })}\n\n`);
+              toolOutputs.push({
+                type: "function_call_output",
+                call_id: tc.callId,
+                output: JSON.stringify({ error: errMsg }),
+              });
+            }
+          }
+
+          // Continue conversation with tool outputs
+          currentPreviousId = responseId;
+          currentInput = toolOutputs;
+          currentInstructions = undefined;
+          toolRounds++;
         }
 
         res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch {
-        // Fallback: send heuristic answer as single token
+        // Fallback: heuristic answer
         const answer = citations
           .slice(0, 4)
-          .map((entry, idx) => `- [N${idx + 1}] ${entry.note.summary || ""}`)
+          .map((entry, idx) => `- [N${idx + 1}] ${entry.note?.summary || ""}`)
           .join("\n");
-        res.write(`event: token\ndata: ${JSON.stringify({ token: "Based on your saved notes:\n" + answer })}\n\n`);
+        res.write(`event: token\ndata: ${JSON.stringify({ token: answer ? "Based on your saved notes:\n" + answer : "Something went wrong. Please try again." })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       }
@@ -1412,6 +1558,50 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to add comment";
+      sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
+    }
+    return;
+  }
+
+  // GET /api/notes/:id/versions — list version history for a note
+  if (req.method === "GET" && url.pathname.match(/^\/api\/notes\/[^/]+\/versions$/)) {
+    const suffix = "/versions";
+    const encodedId = url.pathname.slice("/api/notes/".length, -suffix.length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    try {
+      const result = await listMemoryVersions({ id, actor });
+      sendJson(res, 200, result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to list versions";
+      sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
+    }
+    return;
+  }
+
+  // POST /api/notes/:id/restore — restore a note to a previous version
+  if (req.method === "POST" && url.pathname.match(/^\/api\/notes\/[^/]+\/restore$/)) {
+    const suffix = "/restore";
+    const encodedId = url.pathname.slice("/api/notes/".length, -suffix.length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const versionNumber = Number(body?.versionNumber);
+    if (!Number.isFinite(versionNumber) || versionNumber < 1) {
+      sendJson(res, 400, { error: "Missing or invalid versionNumber" });
+      return;
+    }
+    try {
+      const note = await restoreMemoryVersion({ id, versionNumber, actor });
+      sendJson(res, 200, { note });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Restore failed";
       sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
     }
     return;

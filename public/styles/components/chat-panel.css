@@ -352,3 +352,66 @@
     opacity: 0.5;
   }
 }
+
+/* ── Empty State + Suggestion Chips ──────────────────────── */
+
+.chat-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-4);
+}
+
+.chat-empty-state.hidden {
+  display: none;
+}
+
+.chat-empty-state:not(.hidden) ~ .chat-panel-messages {
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-empty-heading {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  color: var(--muted);
+  margin: 0;
+}
+
+.chat-empty-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.chat-chip {
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
+  color: var(--ink-secondary);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-caption);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.chat-chip:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
+/* ── Tool Status Indicator ───────────────────────────────── */
+
+.chat-tool-status {
+  display: block;
+  font-size: var(--font-size-2xs);
+  color: var(--muted);
+  font-style: italic;
+  padding: var(--space-1) 0;
+}

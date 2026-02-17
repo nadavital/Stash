@@ -138,7 +138,7 @@ export async function createResponse({ input, instructions, model = config.opena
   };
 }
 
-export async function createStreamingResponse({ input, instructions, model = config.openaiChatModel, temperature = 0.2 }) {
+export async function createStreamingResponse({ input, instructions, model = config.openaiChatModel, temperature = 0.2, tools, previousResponseId }) {
   if (!hasOpenAI()) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
@@ -146,10 +146,12 @@ export async function createStreamingResponse({ input, instructions, model = con
   const payload = {
     model,
     input: normalizeInput(input),
-    instructions,
     temperature,
     stream: true,
   };
+  if (instructions) payload.instructions = instructions;
+  if (tools?.length) payload.tools = tools;
+  if (previousResponseId) payload.previous_response_id = previousResponseId;
 
   const response = await fetch(`${config.openaiBaseUrl}/responses`, {
     method: "POST",

@@ -544,7 +544,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return adaptAnswerResponse(response, "chat");
     },
 
-    async askStreaming(payload, { onCitations, onToken, onDone, onError }) {
+    async askStreaming(payload, { onCitations, onToken, onDone, onError, onToolCall, onToolResult }) {
       try {
         const token = getStoredSessionToken();
         const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
@@ -596,6 +596,8 @@ export function createApiClient({ adapterDebug = false } = {}) {
                 const parsed = JSON.parse(data);
                 if (eventType === "citations" && onCitations) onCitations(parsed.citations || []);
                 else if (eventType === "token" && onToken) onToken(parsed.token || "");
+                else if (eventType === "tool_call" && onToolCall) onToolCall(parsed.name, parsed.status);
+                else if (eventType === "tool_result" && onToolResult) onToolResult(parsed.name, parsed.result || null, parsed.error || null);
                 else if (eventType === "done" && onDone) onDone();
               } catch {
                 // skip malformed event payloads
@@ -697,6 +699,21 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}`, {
         method: "PUT",
         body: JSON.stringify(payload),
+      });
+    },
+
+    async fetchNoteVersions(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing id");
+      return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/versions`);
+    },
+
+    async restoreNoteVersion(id, versionNumber) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing id");
+      return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/restore`, {
+        method: "POST",
+        body: JSON.stringify({ versionNumber }),
       });
     },
 

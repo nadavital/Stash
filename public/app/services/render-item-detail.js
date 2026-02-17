@@ -7,6 +7,8 @@ import {
   buildModalSummary,
   buildModalFullExtract,
 } from "./note-utils.js";
+import { renderMarkdownInto } from "./markdown.js";
+import { createMarkdownEditor } from "../components/markdown-editor/markdown-editor.js";
 
 function extractDomain(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
@@ -19,19 +21,22 @@ function extractDomain(url) {
  * @param {object}      note       – the note object to render
  * @param {object}      opts
  * @param {Array}       [opts.relatedNotes]
- * @param {() => void}  opts.onBack
+ * @param {Array}       [opts.versions]       – pre-fetched version history
+ * @param {HTMLElement}  [opts.actionsBar]     – external actions bar element (for edit mode show/hide)
  * @param {(id: string) => void} opts.onNavigate – navigate to another item
- * @param {() => Promise}        opts.onMove
- * @param {() => Promise}        opts.onDelete
  * @param {(text: string) => Promise} opts.onAddComment
+ * @param {(payload) => Promise}      opts.onEdit
+ * @param {(versionNumber) => Promise} opts.onRestoreVersion
  */
 export function renderItemDetail(container, note, {
   relatedNotes = [],
-  onBack,
+  versions = [],
+  actionsBar: externalActionsBar = null,
   onNavigate,
-  onMove,
-  onDelete,
   onAddComment,
+  onEdit,
+  onFetchVersions,
+  onRestoreVersion,
 }) {
   if (!note || !container) return;
 
@@ -43,17 +48,6 @@ export function renderItemDetail(container, note, {
 
   const wrap = document.createElement("div");
   wrap.className = "item-detail-content";
-
-  // Back button
-  const backRow = document.createElement("div");
-  backRow.className = "item-back-row";
-  const backBtn = document.createElement("button");
-  backBtn.type = "button";
-  backBtn.className = "item-back-btn";
-  backBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="10 2 4 8 10 14"/></svg> Back`;
-  backBtn.addEventListener("click", () => onBack());
-  backRow.appendChild(backBtn);
-  wrap.appendChild(backRow);
 
   // Header
   const header = document.createElement("div");
@@ -93,6 +87,22 @@ export function renderItemDetail(container, note, {
   dateEl.title = note.createdAt || "";
   metaRow.appendChild(dateEl);
 
+  // Show "edited" indicator if updated significantly after creation
+  const createdMs = note.createdAt ? new Date(note.createdAt).getTime() : 0;
+  const updatedMs = note.updatedAt ? new Date(note.updatedAt).getTime() : 0;
+  if (updatedMs && createdMs && (updatedMs - createdMs) > 60000) {
+    const editSep = document.createElement("span");
+    editSep.className = "item-meta-sep";
+    editSep.textContent = " \u00B7 ";
+    metaRow.appendChild(editSep);
+
+    const editedEl = document.createElement("span");
+    editedEl.className = "item-date";
+    editedEl.textContent = `edited ${relativeTime(note.updatedAt)}`;
+    editedEl.title = note.updatedAt || "";
+    metaRow.appendChild(editedEl);
+  }
+
   const processingState = getNoteProcessingState(note);
   if (processingState.showLabel) {
     const sep2 = document.createElement("span");
@@ -124,19 +134,21 @@ export function renderItemDetail(container, note, {
     wrap.appendChild(imgWrap);
   }
 
-  // Summary
+  // Summary (hoisted so edit handler can show/hide)
+  let summaryBlock = null;
   const summaryText = buildModalSummary(note);
   if (summaryText) {
-    const summaryBlock = document.createElement("div");
+    summaryBlock = document.createElement("div");
     summaryBlock.className = "item-summary";
     summaryBlock.textContent = summaryText;
     wrap.appendChild(summaryBlock);
   }
 
-  // Tags
+  // Tags (hoisted)
+  let tagRow = null;
   const tags = Array.isArray(note.tags) ? note.tags.filter(Boolean) : [];
   if (tags.length) {
-    const tagRow = document.createElement("div");
+    tagRow = document.createElement("div");
     tagRow.className = "item-tags";
     tags.forEach((tag) => {
       const pill = document.createElement("span");
@@ -161,41 +173,132 @@ export function renderItemDetail(container, note, {
     if (domain) {
       sourceLink.innerHTML = `<img class="item-source-favicon" src="https://www.google.com/s2/favicons?sz=16&domain=${encodeURIComponent(domain)}" alt="" width="14" height="14" /> ${domain}`;
     } else {
-      sourceLink.textContent = "Open source";
+      sourceLink.textContent = "Open link";
     }
     sourceRow.appendChild(sourceLink);
     wrap.appendChild(sourceRow);
   }
 
-  // Full content
+  // Full content (hoisted) — rendered as markdown
+  let contentSection = null;
   const fullExtract = buildModalFullExtract(note);
   if (fullExtract) {
-    const contentSection = document.createElement("div");
+    contentSection = document.createElement("div");
     contentSection.className = "item-full-content";
 
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "item-content-toggle";
-    toggle.textContent = "Show full content";
+    const contentBody = document.createElement("div");
+    contentBody.className = "item-content-body";
+    renderMarkdownInto(contentBody, fullExtract);
 
-    const pre = document.createElement("pre");
-    pre.className = "item-content-pre hidden";
-    pre.textContent = fullExtract;
+    contentSection.appendChild(contentBody);
+    wrap.appendChild(contentSection);
+  }
 
-    toggle.addEventListener("click", () => {
-      const isHidden = pre.classList.contains("hidden");
-      pre.classList.toggle("hidden");
-      toggle.textContent = isHidden ? "Hide full content" : "Show full content";
+  // Edit form (hidden by default) — references to sections we need to toggle
+  let editForm = null;
+  let relatedSection = null;
+  let activitySection = null;
+  let mdEditor = null;
+  const actionsBar = externalActionsBar;
+
+  if (onEdit) {
+    editForm = document.createElement("div");
+    editForm.className = "item-edit-form hidden";
+
+    const contentLabel = document.createElement("label");
+    contentLabel.className = "item-edit-label";
+    contentLabel.textContent = "Content";
+
+    mdEditor = createMarkdownEditor(note.content || "");
+
+    const editRow = document.createElement("div");
+    editRow.className = "item-edit-row";
+
+    const tagsGroup = document.createElement("div");
+    tagsGroup.className = "item-edit-group";
+    const tagsLabel = document.createElement("label");
+    tagsLabel.className = "item-edit-label";
+    tagsLabel.textContent = "Tags (comma-separated)";
+    const tagsInput = document.createElement("input");
+    tagsInput.type = "text";
+    tagsInput.className = "item-edit-input";
+    tagsInput.value = tags.join(", ");
+    tagsGroup.append(tagsLabel, tagsInput);
+
+    const projectGroup = document.createElement("div");
+    projectGroup.className = "item-edit-group";
+    const projectLabel = document.createElement("label");
+    projectLabel.className = "item-edit-label";
+    projectLabel.textContent = "Project";
+    const projectInput = document.createElement("input");
+    projectInput.type = "text";
+    projectInput.className = "item-edit-input";
+    projectInput.value = note.project || "";
+    projectGroup.append(projectLabel, projectInput);
+
+    editRow.append(tagsGroup, projectGroup);
+
+    const editActions = document.createElement("div");
+    editActions.className = "item-edit-actions";
+
+    const doneBtn = document.createElement("button");
+    doneBtn.type = "button";
+    doneBtn.className = "item-action-btn item-action-btn--primary";
+    doneBtn.textContent = "Save";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "item-action-btn";
+    cancelBtn.textContent = "Cancel";
+
+    function exitEditMode() {
+      editForm.classList.add("hidden");
+      if (summaryBlock) summaryBlock.classList.remove("hidden");
+      if (tagRow) tagRow.classList.remove("hidden");
+      if (contentSection) contentSection.classList.remove("hidden");
+      if (relatedSection) relatedSection.classList.remove("hidden");
+      if (activitySection) activitySection.classList.remove("hidden");
+      if (actionsBar) actionsBar.classList.remove("hidden");
+    }
+
+    cancelBtn.addEventListener("click", exitEditMode);
+
+    async function submitEdit() {
+      doneBtn.disabled = true;
+      doneBtn.textContent = "Saving...";
+      const parsedTags = tagsInput.value
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      await onEdit({
+        content: mdEditor.getValue(),
+        tags: parsedTags,
+        project: projectInput.value.trim(),
+      });
+    }
+
+    doneBtn.addEventListener("click", submitEdit);
+
+    // Cmd/Ctrl+Enter to save, Esc to cancel
+    editForm.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        submitEdit();
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        exitEditMode();
+      }
     });
 
-    contentSection.appendChild(toggle);
-    contentSection.appendChild(pre);
-    wrap.appendChild(contentSection);
+    editActions.append(doneBtn, cancelBtn);
+    editForm.append(contentLabel, mdEditor.element, editRow, editActions);
+    wrap.appendChild(editForm);
   }
 
   // Related notes
   if (relatedNotes.length) {
-    const relatedSection = document.createElement("div");
+    relatedSection = document.createElement("div");
     relatedSection.className = "item-related";
 
     const relatedHeading = document.createElement("h3");
@@ -229,32 +332,139 @@ export function renderItemDetail(container, note, {
     wrap.appendChild(relatedSection);
   }
 
-  // Comments
+  // ── Activity Timeline (unified comments + version history) ──
   const comments = Array.isArray(note.metadata?.comments) ? note.metadata.comments : [];
-  const commentsSection = document.createElement("div");
-  commentsSection.className = "item-comments";
 
-  const commentsHeading = document.createElement("h3");
-  commentsHeading.className = "item-comments-heading";
-  commentsHeading.textContent = `Comments${comments.length ? ` (${comments.length})` : ""}`;
-  commentsSection.appendChild(commentsHeading);
+  const timelineEntries = [];
 
-  if (comments.length) {
-    const commentsList = document.createElement("div");
-    commentsList.className = "item-comments-list";
-    comments.forEach((c) => {
-      const commentEl = document.createElement("div");
-      commentEl.className = "item-comment";
-      const commentText = document.createElement("p");
-      commentText.className = "item-comment-text";
-      commentText.textContent = c.text || "";
-      const commentTime = document.createElement("span");
-      commentTime.className = "item-comment-time";
-      commentTime.textContent = relativeTime(c.createdAt);
-      commentEl.append(commentText, commentTime);
-      commentsList.appendChild(commentEl);
+  comments.forEach((c) => {
+    timelineEntries.push({
+      type: "comment",
+      text: c.text || "",
+      actor: c.actor || "You",
+      createdAt: c.createdAt,
+      ts: c.createdAt ? new Date(c.createdAt).getTime() : 0,
     });
-    commentsSection.appendChild(commentsList);
+  });
+
+  versions.forEach((v) => {
+    timelineEntries.push({
+      type: "edit",
+      changeSummary: v.changeSummary || "Edited",
+      actor: v.actorUserId || "Unknown",
+      createdAt: v.createdAt,
+      ts: v.createdAt ? new Date(v.createdAt).getTime() : 0,
+      versionNumber: v.versionNumber,
+      content: v.content,
+    });
+  });
+
+  timelineEntries.sort((a, b) => b.ts - a.ts);
+
+  activitySection = document.createElement("div");
+  activitySection.className = "item-activity";
+
+  const activityHeading = document.createElement("h3");
+  activityHeading.className = "item-activity-heading";
+  activityHeading.textContent = `Activity${timelineEntries.length ? ` (${timelineEntries.length})` : ""}`;
+  activitySection.appendChild(activityHeading);
+
+  if (timelineEntries.length) {
+    const feed = document.createElement("div");
+    feed.className = "item-activity-feed";
+
+    timelineEntries.forEach((entry) => {
+      const entryEl = document.createElement("div");
+      entryEl.className = "activity-entry";
+
+      // Icon
+      const iconEl = document.createElement("div");
+      const iconClass = entry.type === "comment" ? "activity-icon--comment"
+        : entry.type === "enrichment" ? "activity-icon--enrichment"
+        : "activity-icon--edit";
+      iconEl.className = `activity-icon ${iconClass}`;
+
+      if (entry.type === "comment") {
+        iconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 10c0 .55-.45 1-1 1H5l-3 3V3c0-.55.45-1 1-1h10c.55 0 1 .45 1 1v7z"/></svg>`;
+      } else if (entry.type === "enrichment") {
+        iconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="8 1 10 6 15 6 11 9.5 12.5 15 8 11.5 3.5 15 5 9.5 1 6 6 6"/></svg>`;
+      } else {
+        iconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>`;
+      }
+      entryEl.appendChild(iconEl);
+
+      // Content column
+      const contentEl = document.createElement("div");
+      contentEl.className = "activity-content";
+
+      // Meta line
+      const metaEl = document.createElement("div");
+      metaEl.className = "activity-meta";
+      const typeLabel = entry.type === "comment" ? "Comment"
+        : entry.type === "enrichment" ? "AI enriched"
+        : "Edited";
+      metaEl.innerHTML = `<strong>${typeLabel}</strong> \u00B7 ${entry.actor} \u00B7 ${relativeTime(entry.createdAt)}`;
+      contentEl.appendChild(metaEl);
+
+      // Body
+      const bodyEl = document.createElement("div");
+      bodyEl.className = "activity-body";
+      if (entry.type === "comment") {
+        bodyEl.textContent = entry.text;
+      } else if (entry.type === "edit") {
+        bodyEl.textContent = entry.changeSummary;
+      } else {
+        bodyEl.textContent = "AI enriched this note";
+      }
+      contentEl.appendChild(bodyEl);
+
+      // Version actions (Preview/Restore)
+      if (entry.type === "edit" && onRestoreVersion) {
+        const actionsEl = document.createElement("div");
+        actionsEl.className = "activity-actions";
+
+        const previewBtn = document.createElement("button");
+        previewBtn.type = "button";
+        previewBtn.className = "item-action-btn";
+        previewBtn.textContent = "Preview";
+
+        const restoreBtn = document.createElement("button");
+        restoreBtn.type = "button";
+        restoreBtn.className = "item-action-btn item-action-btn--primary";
+        restoreBtn.textContent = "Restore";
+
+        let previewEl = null;
+        previewBtn.addEventListener("click", () => {
+          if (previewEl) {
+            previewEl.remove();
+            previewEl = null;
+            previewBtn.textContent = "Preview";
+            return;
+          }
+          previewEl = document.createElement("div");
+          previewEl.className = "activity-preview";
+          const previewText = (entry.content || "").slice(0, 500) + ((entry.content || "").length > 500 ? "..." : "");
+          renderMarkdownInto(previewEl, previewText);
+          contentEl.appendChild(previewEl);
+          previewBtn.textContent = "Hide preview";
+        });
+
+        restoreBtn.addEventListener("click", async () => {
+          if (!window.confirm(`Restore to version ${entry.versionNumber}? Current state will be saved as a new version.`)) return;
+          restoreBtn.disabled = true;
+          restoreBtn.textContent = "Restoring...";
+          await onRestoreVersion(entry.versionNumber);
+        });
+
+        actionsEl.append(previewBtn, restoreBtn);
+        contentEl.appendChild(actionsEl);
+      }
+
+      entryEl.appendChild(contentEl);
+      feed.appendChild(entryEl);
+    });
+
+    activitySection.appendChild(feed);
   }
 
   // Comment form
@@ -276,37 +486,8 @@ export function renderItemDetail(container, note, {
     await onAddComment(text);
     commentInput.value = "";
   });
-  commentsSection.appendChild(commentForm);
-  wrap.appendChild(commentsSection);
+  activitySection.appendChild(commentForm);
+  wrap.appendChild(activitySection);
 
-  // Actions bar
-  const actionsBar = document.createElement("div");
-  actionsBar.className = "item-actions";
-
-  const moveBtn = document.createElement("button");
-  moveBtn.type = "button";
-  moveBtn.className = "item-action-btn";
-  moveBtn.textContent = "Move";
-  moveBtn.addEventListener("click", () => onMove());
-
-  const deleteBtn = document.createElement("button");
-  deleteBtn.type = "button";
-  deleteBtn.className = "item-action-btn item-action-btn--danger";
-  deleteBtn.textContent = "Delete";
-  deleteBtn.addEventListener("click", () => onDelete());
-
-  actionsBar.append(moveBtn, deleteBtn);
-
-  if (sourceUrl) {
-    const openSourceBtn = document.createElement("a");
-    openSourceBtn.className = "item-action-btn";
-    openSourceBtn.href = sourceUrl;
-    openSourceBtn.target = "_blank";
-    openSourceBtn.rel = "noopener noreferrer";
-    openSourceBtn.textContent = "Open source";
-    actionsBar.appendChild(openSourceBtn);
-  }
-
-  wrap.appendChild(actionsBar);
   container.appendChild(wrap);
 }

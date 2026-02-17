@@ -45,10 +45,6 @@ import {
 } from "../services/folder-utils.js";
 import { createBatchSelectController } from "../services/batch-select.js";
 import { createFolderCrudController } from "../services/folder-crud.js";
-import {
-  renderContentToolbarHTML,
-  queryContentToolbarEls,
-} from "../components/content-toolbar/content-toolbar.js";
 import { initKeyboardShortcuts } from "../services/keyboard.js";
 import {
   applySortFilter,
@@ -65,15 +61,19 @@ import { subscribeNoteEnrichment } from "../services/sse-notes.js";
 import { createViewToggleController } from "../services/view-toggle.js";
 
 
+
 function renderHomePageContent() {
   return `
     <section class="page page-home" style="position:relative;">
       ${renderSortFilterHTML()}
 
       <div class="home-explorer-pane">
-        ${renderContentToolbarHTML()}
         ${renderInlineSearchHTML()}
-        ${renderRecentInlineStripHTML({ title: "Recent" })}
+        ${renderRecentInlineStripHTML({ title: "Recently Added" })}
+        <div class="home-section-header">
+          <h2 class="home-section-title" style="margin:0;font-size:var(--font-size-body-sm);font-weight:var(--weight-medium);color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">Collections</h2>
+          <button id="home-edit-btn" class="folder-subfolder-btn" type="button">Edit</button>
+        </div>
         ${renderHomeFolderGrid()}
       </div>
     </section>
@@ -102,7 +102,6 @@ function queryPageElements(mountNode) {
   const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
-  const toolbarEls = queryContentToolbarEls(mountNode);
 
   return {
     ...itemModalEls,
@@ -111,12 +110,12 @@ function queryPageElements(mountNode) {
     ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
-    ...toolbarEls,
     recentNotesList: mountNode.querySelector("#recent-notes-list"),
     refreshBtn: mountNode.querySelector("#refresh-btn"),
     foldersList: mountNode.querySelector("#home-folders-list"),
     foldersEmpty: mountNode.querySelector("#home-folders-empty"),
     foldersError: mountNode.querySelector("#home-folders-error"),
+    homeEditBtn: mountNode.querySelector("#home-edit-btn"),
     batchActionBar: mountNode.querySelector("#batch-action-bar"),
     batchActionCount: mountNode.querySelector("#batch-action-count"),
     batchDeleteBtn: mountNode.querySelector("#batch-delete-btn"),
@@ -154,7 +153,6 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
 
       on(document, "click", () => {
         closeAllActionMenus(mountNode);
-        els.toolbarNewMenu?.classList.add("hidden");
       });
 
       function getState() {
@@ -208,26 +206,9 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
         markAccessed(note.id);
         navigate(`#/item/${note.id}`);
       });
-      // + menu toggle
-      on(els.toolbarNewBtn, "click", (e) => {
-        e.stopPropagation();
-        els.toolbarNewMenu?.classList.toggle("hidden");
+      shell.setOnWorkspaceAction(() => {
+        refreshNotes();
       });
-      on(els.toolbarNewItemBtn, "click", () => {
-        els.toolbarNewMenu?.classList.add("hidden");
-        openSaveModal(els, { folders: listAllFolderNames() });
-      });
-      on(els.toolbarNewFolderBtn, "click", () => {
-        els.toolbarNewMenu?.classList.add("hidden");
-        openFolderModal(els, { color: "green", kind: "folder" });
-        setFolderModalKind("folder");
-      });
-      on(els.toolbarNewTaskBtn, "click", () => {
-        els.toolbarNewMenu?.classList.add("hidden");
-        openFolderModal(els, { color: "green", kind: "task" });
-        setFolderModalKind("task");
-      });
-
       // Search toggle
       on(els.toolbarSearchToggle, "click", () => {
         const searchWrap = mountNode.querySelector(".inline-search");
@@ -458,6 +439,20 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
       });
       disposers.push(() => batchSelect.cleanup());
 
+      // Edit button → toggle select mode
+      function syncEditBtnLabel() {
+        if (els.homeEditBtn) {
+          els.homeEditBtn.textContent = batchSelect.isSelectMode() ? "Done" : "Edit";
+        }
+      }
+      on(els.homeEditBtn, "click", () => {
+        batchSelect.toggleSelectMode();
+        syncEditBtnLabel();
+      });
+      on(els.batchCancelBtn, "click", () => {
+        syncEditBtnLabel();
+      });
+
       // View toggle via extracted controller
       const viewToggle = createViewToggleController({
         els,
@@ -616,7 +611,6 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
             clearInlineSearch();
           }
           closeAllActionMenus(mountNode);
-          els.toolbarNewMenu?.classList.add("hidden");
           closeItemModal(els);
           closeFolderModal(els);
           moveDialog.cleanup();
@@ -650,6 +644,7 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
         // Clear shell callbacks
         shell.setToast(null);
         shell.setOnOpenCitation(null);
+        shell.setOnWorkspaceAction(null);
         disposers.forEach((dispose) => {
           dispose();
         });

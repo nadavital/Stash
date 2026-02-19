@@ -1,8 +1,12 @@
 import { buildNoteTitle, buildContentPreview, normalizeCitation } from "../../services/mappers.js";
+import { renderMarkdownInto } from "../../services/markdown.js";
+import { renderIcon } from "../../services/icons.js";
 
 const MAX_MESSAGES = 100;
 
 export function renderChatPanelHTML() {
+  const attachIcon = renderIcon("attach", { size: 15 });
+  const sendIcon = renderIcon("arrow-up", { size: 16 });
   return `
     <div id="chat-panel" class="chat-panel" aria-label="Chat with your notes">
       <div id="chat-empty-state" class="chat-empty-state">
@@ -20,17 +24,12 @@ export function renderChatPanelHTML() {
       <form id="chat-panel-form" class="chat-panel-form">
         <div class="chat-panel-input-wrap">
           <button id="chat-panel-attach-btn" class="chat-panel-attach" type="button" aria-label="Attach file">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14 8.67l-5.15 5.15a3.5 3.5 0 0 1-4.95-4.95L9.05 3.72a2.33 2.33 0 0 1 3.3 3.3L7.2 12.17a1.17 1.17 0 0 1-1.65-1.65L10.7 5.37"/>
-            </svg>
+            ${attachIcon}
           </button>
           <input id="chat-panel-file-input" type="file" class="hidden" />
           <textarea id="chat-panel-input" class="chat-panel-input" rows="2" placeholder="Save a link, create a note, ask anything..." autocomplete="off"></textarea>
           <button id="chat-panel-send" class="chat-panel-send" type="submit" aria-label="Send">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="8" y1="14" x2="8" y2="3"/>
-              <polyline points="3 7 8 2 13 7"/>
-            </svg>
+            ${sendIcon}
           </button>
         </div>
         <div id="chat-panel-attachment" class="chat-panel-attachment hidden">
@@ -147,6 +146,35 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     handlers.push(() => target.removeEventListener(event, handler));
   }
 
+  function setMessageBodyText(msgEl, role, text) {
+    if (!msgEl) return;
+    let body = msgEl.querySelector(".chat-msg-body");
+    if (!body) {
+      body = document.createElement("div");
+      body.className = "chat-msg-body";
+      msgEl.prepend(body);
+    }
+    const rawText = String(text || "");
+    msgEl.dataset.rawText = rawText;
+
+    if (role === "assistant") {
+      renderMarkdownInto(body, rawText);
+      return;
+    }
+
+    body.classList.remove("markdown-body");
+    body.textContent = rawText;
+  }
+
+  function appendAssistantToken(msgEl, token) {
+    const current = String(msgEl?.dataset.rawText || "");
+    setMessageBodyText(msgEl, "assistant", current + String(token || ""));
+  }
+
+  function getMessageRawText(msgEl) {
+    return String(msgEl?.dataset.rawText || "");
+  }
+
   function pushToStore(role, text) {
     if (!store) return;
     const state = store.getState();
@@ -181,7 +209,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     if (els.chatEmptyState) els.chatEmptyState.classList.add("hidden");
     const msg = document.createElement("div");
     msg.className = `chat-msg chat-msg--${role}`;
-    msg.textContent = text;
+    setMessageBodyText(msg, role, text);
     els.chatPanelMessages.appendChild(msg);
     els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
     return msg;
@@ -198,7 +226,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     messages.forEach((msg) => {
       const el = document.createElement("div");
       el.className = `chat-msg chat-msg--${msg.role}`;
-      el.textContent = msg.text;
+      setMessageBodyText(el, msg.role, msg.text);
       els.chatPanelMessages.appendChild(el);
     });
     els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
@@ -231,7 +259,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
       const title = document.createElement("span");
       title.className = "chat-citation-title";
-      title.textContent = `[N${index + 1}] ${buildNoteTitle(note)}`;
+      title.textContent = buildNoteTitle(note);
 
       const meta = document.createElement("span");
       meta.className = "chat-citation-meta";
@@ -393,7 +421,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
             const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
             if (toolStatus) toolStatus.remove();
             if (assistantMsg) {
-              assistantMsg.textContent += token;
+              appendAssistantToken(assistantMsg, token);
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
             }
           },
@@ -419,9 +447,22 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
             }
           },
-          onToolResult(name) {
+          onToolResult(name, result, error) {
             const statusEl = assistantMsg?.querySelector(".chat-tool-status");
             if (statusEl) statusEl.remove();
+            if (
+              name === "create_note" &&
+              result?.noteId &&
+              ["file", "image"].includes(String(result?.sourceType || "").trim().toLowerCase())
+            ) {
+              void apiClient.fetchNote(String(result.noteId))
+                .then((payload) => {
+                  if (typeof onOpenCitation === "function" && payload?.note) {
+                    onOpenCitation(payload.note);
+                  }
+                })
+                .catch(() => {});
+            }
             if (
               (name === "create_note" ||
                 name === "create_folder" ||
@@ -432,17 +473,17 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
                 name === "retry_note_enrichment") &&
               typeof onWorkspaceAction === "function"
             ) {
-              onWorkspaceAction(name);
+              onWorkspaceAction({ name, result: result || null, error: error || null });
             }
           },
           onDone() {
             removeTyping();
             const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
             if (toolStatus) toolStatus.remove();
-            if (assistantMsg && !assistantMsg.textContent.trim()) {
-              assistantMsg.textContent = "No answer generated.";
+            if (assistantMsg && !getMessageRawText(assistantMsg).trim()) {
+              setMessageBodyText(assistantMsg, "assistant", "No answer generated.");
             }
-            updateLastAssistantInStore(assistantMsg?.textContent || "");
+            updateLastAssistantInStore(getMessageRawText(assistantMsg));
           },
           onError() {
             removeTyping();
@@ -482,14 +523,17 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
         fileName: hasAttachment ? attachment.fileName : undefined,
         fileMimeType: hasAttachment ? attachment.fileMimeType : undefined,
       });
-      if (msgEl) msgEl.textContent = result.text || "No answer.";
-      updateLastAssistantInStore(msgEl?.textContent || "");
+      const resultText = result.text || "No answer.";
+      if (msgEl) {
+        setMessageBodyText(msgEl, "assistant", resultText);
+      }
+      updateLastAssistantInStore(msgEl ? getMessageRawText(msgEl) : resultText);
       if (result.citations) {
         renderCitations(result.citations);
         saveCitationsToStore(result.citations);
       }
     } catch (error) {
-      if (msgEl) msgEl.textContent = "Failed to get answer.";
+      if (msgEl) setMessageBodyText(msgEl, "assistant", "Failed to get answer.");
       updateLastAssistantInStore("Failed to get answer.");
     }
   }

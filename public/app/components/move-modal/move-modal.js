@@ -1,3 +1,5 @@
+import { renderIcon } from "../../services/icons.js";
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -8,12 +10,13 @@ function escapeHtml(value) {
 }
 
 export function renderMoveModalHTML() {
+  const closeIcon = renderIcon("close", { size: 14 });
   return `
     <div id="move-modal" class="move-modal hidden" aria-hidden="true">
       <div id="move-modal-backdrop" class="move-modal-backdrop"></div>
       <article class="move-modal-panel" role="dialog" aria-modal="true" aria-labelledby="move-modal-heading">
         <button id="move-modal-close" class="move-modal-close" type="button" aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
+          ${closeIcon}
         </button>
 
         <h3 id="move-modal-heading" class="move-modal-heading">Move to folder</h3>

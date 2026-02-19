@@ -4,10 +4,13 @@ import {
   buildModalSummary,
   buildModalFullExtract,
 } from "../../services/note-utils.js";
+import { renderIcon } from "../../services/icons.js";
 
 let currentNote = null;
 
 export function renderItemModalHTML() {
+  const editIcon = renderIcon("edit", { size: 14 });
+  const closeIcon = renderIcon("close", { size: 12 });
   return `
     <div id="item-modal" class="item-modal hidden" aria-hidden="true">
       <div id="item-modal-backdrop" class="item-modal-backdrop"></div>
@@ -15,10 +18,10 @@ export function renderItemModalHTML() {
         <div class="item-modal-header">
           <p id="item-modal-project" class="item-modal-project"></p>
           <button id="item-modal-edit-btn" class="item-modal-edit-btn" type="button" aria-label="Edit">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8.5 2.5l3 3M1.5 9.5l6-6 3 3-6 6H1.5v-3z"/></svg>
+            ${editIcon}
           </button>
           <button id="item-modal-close" class="item-modal-close" type="button" aria-label="Close">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>
+            ${closeIcon}
           </button>
         </div>
         <div class="item-modal-body">

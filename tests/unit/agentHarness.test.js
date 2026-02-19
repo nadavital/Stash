@@ -49,6 +49,25 @@ describe("createAgentToolHarness", () => {
     assert.match(String(result.error || ""), /requires content or an attachment/i);
   });
 
+  it("normalizes create_note title when provided", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "create_note",
+      rawArgs: JSON.stringify({
+        title: "  Test Context Note  ",
+        content: "## Body\n\nSome details",
+      }),
+      callId: "call-title",
+      round: 0,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.title, "Test Context Note");
+  });
+
   it("normalizes search scope and working set ids", async () => {
     const harness = createAgentToolHarness({
       executeTool: async (_name, args) => ({ args }),
@@ -131,5 +150,48 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.result?.args?.fileName, "spec.md");
     assert.equal(result.result?.args?.fileMimeType, "text/markdown");
     assert.equal(result.result?.args?.requeueEnrichment, true);
+  });
+
+  it("accepts update_note title updates", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "update_note",
+      rawArgs: JSON.stringify({
+        id: "note-42",
+        title: "Quarterly planning brief",
+      }),
+      callId: "call-7",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.id, "note-42");
+    assert.equal(result.result?.args?.title, "Quarterly planning brief");
+  });
+
+  it("applies resolveArgs before validation so context can provide missing ids", async () => {
+    const harness = createAgentToolHarness({
+      resolveArgs: (name, args) => {
+        if (name === "update_note" && !args.id) {
+          return { ...args, id: "note-context" };
+        }
+        return args;
+      },
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "update_note",
+      rawArgs: JSON.stringify({ title: "Retitle from context" }),
+      callId: "call-8",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.id, "note-context");
+    assert.equal(result.result?.args?.title, "Retitle from context");
   });
 });

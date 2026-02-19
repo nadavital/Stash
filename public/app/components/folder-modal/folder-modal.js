@@ -2,6 +2,7 @@ import {
   FOLDER_COLOR_TOKENS,
   normalizeFolderColor,
 } from "../../services/folder-utils.js";
+import { renderIcon } from "../../services/icons.js";
 
 function renderFolderColorChoices() {
   return FOLDER_COLOR_TOKENS.map((color, index) => {
@@ -19,6 +20,7 @@ function renderFolderColorChoices() {
  * @param {{ showKindRow?: boolean }} options
  */
 export function renderFolderModalHTML({ showKindRow = false } = {}) {
+  const closeIcon = renderIcon("close", { size: 14 });
   const kindRowHTML = showKindRow
     ? `
         <div class="folder-kind-row" id="folder-kind-row" role="radiogroup" aria-label="Create type">
@@ -37,7 +39,7 @@ export function renderFolderModalHTML({ showKindRow = false } = {}) {
       <div id="folder-modal-backdrop" class="folder-modal-backdrop"></div>
       <article class="folder-modal-panel" role="dialog" aria-modal="true">
         <button id="folder-modal-close" class="folder-modal-close" type="button" aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
+          ${closeIcon}
         </button>
 
         <h3 id="folder-modal-heading" class="folder-modal-heading">New Folder</h3>

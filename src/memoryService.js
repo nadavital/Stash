@@ -349,6 +349,13 @@ async function resolveFolderForNoteProject(note = null, workspaceId = config.def
   return folderRepo.getFolderByName(project, workspaceId);
 }
 
+function noteDisplayTitle(note = null, maxChars = 120) {
+  if (!note || typeof note !== "object") return "";
+  const explicit = String(note?.metadata?.title || "").trim();
+  if (explicit) return explicit.slice(0, maxChars);
+  return String(note.summary || note.fileName || note.content || "").slice(0, maxChars);
+}
+
 async function emitNoteActivity({
   actorContext,
   note,
@@ -368,7 +375,7 @@ async function emitNoteActivity({
     noteId: keepNoteForeignKey ? note.id : null,
     visibilityUserId: folder ? null : ownerUserId,
     details: {
-      title: String(note.summary || note.fileName || note.content || "").slice(0, 120),
+      title: noteDisplayTitle(note, 120),
       project: String(note.project || ""),
       ...details,
     },
@@ -584,6 +591,73 @@ function normalizeSourceType(sourceType) {
   if (!sourceType) return "text";
   const normalized = String(sourceType).toLowerCase().trim();
   return SOURCE_TYPES.has(normalized) ? normalized : "text";
+}
+
+function normalizeInlineTitleText(value, maxLen = 180) {
+  let text = String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1")
+    .replace(/^#{1,6}\s+/g, "")
+    .replace(/^\s*[-*+]\s+/g, "")
+    .replace(/^\s*\d+[.)]\s+/g, "")
+    .replace(/[*_~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  if (text.length > maxLen) {
+    text = `${text.slice(0, maxLen - 1).trim()}...`;
+  }
+  return text;
+}
+
+function extractAutoTitleFromMarkdownishText(value, maxLen = 180) {
+  const source = String(value || "").replace(/\r\n/g, "\n");
+  if (!source.trim()) return "";
+  const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
+
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s+(.+)$/);
+    if (heading?.[1]) {
+      const cleaned = normalizeInlineTitleText(heading[1], maxLen);
+      if (cleaned) return cleaned;
+    }
+  }
+
+  for (const line of lines) {
+    if (line.startsWith("```")) continue;
+    const cleaned = normalizeInlineTitleText(line, maxLen);
+    if (cleaned) return cleaned;
+  }
+
+  return "";
+}
+
+function deriveMemoryTitle({
+  explicitTitle = "",
+  sourceType = "text",
+  content = "",
+  markdownContent = "",
+  rawContent = "",
+  fileName = "",
+} = {}) {
+  const normalizedExplicit = normalizeInlineTitleText(explicitTitle, 180);
+  if (normalizedExplicit) return normalizedExplicit;
+
+  const normalizedType = normalizeSourceType(sourceType);
+  if (normalizedType === "link") return "";
+
+  const fromText = extractAutoTitleFromMarkdownishText(
+    [content, markdownContent, rawContent].filter(Boolean).join("\n"),
+    180
+  );
+  if (fromText && !/^https?:\/\//i.test(fromText)) return fromText;
+
+  const cleanedFileName = normalizeInlineTitleText(String(fileName || "").replace(/\.[^.]+$/, ""), 180);
+  if (cleanedFileName) return cleanedFileName;
+
+  return "";
 }
 
 function buildProjectFallback(sourceUrl, tags) {
@@ -1694,6 +1768,7 @@ async function enqueueEnrichmentJob(params, { throwOnError = false } = {}) {
  */
 export async function createMemory({
   content = "",
+  title = "",
   sourceType = "text",
   sourceUrl = "",
   imageDataUrl = null,
@@ -1713,6 +1788,7 @@ export async function createMemory({
   const normalizedFileDataUrl = String(fileDataUrl || imageDataUrl || "").trim() || null;
   const normalizedFileName = String(fileName || "").trim();
   const normalizedFileMimeType = String(fileMimeType || "").trim().toLowerCase();
+  const explicitTitle = String(title || metadata?.title || "").trim();
 
   let uploadMime = normalizedFileMimeType || null;
   let uploadSize = null;
@@ -1785,6 +1861,14 @@ export async function createMemory({
   const id = crypto.randomUUID();
   const createdAt = nowIso();
   const seedTags = heuristicTags(`${normalizedContent} ${normalizedSourceUrl}`);
+  const derivedTitle = deriveMemoryTitle({
+    explicitTitle,
+    sourceType: normalizedSourceType,
+    content: normalizedContent,
+    markdownContent,
+    rawContent,
+    fileName: normalizedFileName,
+  });
   const note = await noteRepo.createNote({
     id,
     workspaceId: actorContext.workspaceId,
@@ -1807,7 +1891,7 @@ export async function createMemory({
     embedding: null,
     metadata: {
       ...metadata,
-      title: linkTitle || null,
+      title: derivedTitle || linkTitle || null,
       imageMime: imageData?.imageMime || null,
       imageSize: imageData?.imageSize || null,
       fileMime: uploadMime || null,
@@ -1845,7 +1929,7 @@ export async function createMemory({
   return note;
 }
 
-export async function updateMemory({ id, content, summary, tags, project, actor = null } = {}) {
+export async function updateMemory({ id, content, summary, title, tags, project, actor = null } = {}) {
   const actorContext = resolveActor(actor);
   const normalizedId = String(id || "").trim();
   if (!normalizedId) throw new Error("Missing id");
@@ -1859,11 +1943,14 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
       ? await resolveCanonicalProjectName(String(project), actorContext.workspaceId)
       : String(existing.project || "");
   const existingProject = String(existing.project || "");
+  const existingTitle = String(existing?.metadata?.title || "").trim();
+  const normalizedTitle = title !== undefined ? String(title || "").trim().slice(0, 180) : undefined;
 
   // Detect changes and snapshot before editing
   const changes = [];
   if (content !== undefined && String(content) !== existing.content) changes.push("content");
   if (summary !== undefined && String(summary) !== existing.summary) changes.push("summary");
+  if (title !== undefined && normalizedTitle !== existingTitle) changes.push("title");
   if (tags !== undefined && JSON.stringify(tags) !== JSON.stringify(existing.tags)) changes.push("tags");
   if (project !== undefined && resolvedProject !== existingProject) changes.push("project");
 
@@ -1883,6 +1970,12 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
 
   const newContent = content !== undefined ? String(content) : existing.content;
   const contentChanged = content !== undefined && newContent !== existing.content;
+  const nextMetadata = title !== undefined
+    ? {
+        ...(existing.metadata || {}),
+        title: normalizedTitle || null,
+      }
+    : existing.metadata;
 
   const updatedNote = await noteRepo.updateNote({
     id: normalizedId,
@@ -1890,6 +1983,7 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
     summary: summary !== undefined ? String(summary) : existing.summary,
     tags: tags !== undefined ? tags : existing.tags,
     project: project !== undefined ? resolvedProject : existingProject,
+    metadata: nextMetadata,
     workspaceId: actorContext.workspaceId,
   });
 
@@ -2059,6 +2153,7 @@ export async function updateMemoryAttachment({
 
 export async function updateMemoryExtractedContent({
   id,
+  title,
   content,
   rawContent,
   markdownContent,
@@ -2069,10 +2164,11 @@ export async function updateMemoryExtractedContent({
   const normalizedId = String(id || "").trim();
   if (!normalizedId) throw new Error("Missing id");
 
+  const hasTitle = title !== undefined;
   const hasContent = content !== undefined;
   const hasRawContent = rawContent !== undefined;
   const hasMarkdownContent = markdownContent !== undefined;
-  if (!hasContent && !hasRawContent && !hasMarkdownContent) {
+  if (!hasTitle && !hasContent && !hasRawContent && !hasMarkdownContent) {
     throw new Error("Nothing to update");
   }
 
@@ -2081,6 +2177,7 @@ export async function updateMemoryExtractedContent({
   await assertCanMutateNote(existing, actorContext);
 
   const normalizedContent = hasContent ? String(content || "") : String(existing.content || "");
+  const normalizedTitle = hasTitle ? String(title || "").trim().slice(0, 180) : undefined;
   const normalizedRawContent = hasRawContent
     ? (rawContent === null ? null : String(rawContent))
     : undefined;
@@ -2088,12 +2185,13 @@ export async function updateMemoryExtractedContent({
     ? (markdownContent === null ? null : String(markdownContent))
     : undefined;
 
+  const titleChanged = hasTitle && normalizedTitle !== String(existing?.metadata?.title || "").trim();
   const contentChanged = hasContent && normalizedContent !== String(existing.content || "");
   const rawChanged = hasRawContent && String(normalizedRawContent ?? "") !== String(existing.rawContent ?? "");
   const markdownChanged =
     hasMarkdownContent && String(normalizedMarkdownContent ?? "") !== String(existing.markdownContent ?? "");
 
-  if (contentChanged || rawChanged || markdownChanged) {
+  if (titleChanged || contentChanged || rawChanged || markdownChanged) {
     await versionRepo.createSnapshot({
       noteId: normalizedId,
       workspaceId: actorContext.workspaceId,
@@ -2127,6 +2225,7 @@ export async function updateMemoryExtractedContent({
     embedding: noteAfterContent.embedding || null,
     metadata: {
       ...(noteAfterContent.metadata || {}),
+      ...(hasTitle ? { title: normalizedTitle || null } : {}),
       extractedContentEditedAt: nowIso(),
       extractedContentEditedBy: actorContext.userId,
     },
@@ -2135,6 +2234,10 @@ export async function updateMemoryExtractedContent({
     updatedAt: nowIso(),
     workspaceId: actorContext.workspaceId,
   });
+
+  const changedKeys = [];
+  if (titleChanged) changedKeys.push("title");
+  if (contentChanged || rawChanged || markdownChanged) changedKeys.push("extracted_content");
 
   if (requeueEnrichment && (contentChanged || rawChanged || markdownChanged)) {
     await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
@@ -2157,7 +2260,7 @@ export async function updateMemoryExtractedContent({
       note: queued || noteAfterExtract,
       eventType: "note.updated",
       details: {
-        changed: ["extracted_content"],
+        changed: changedKeys.length ? changedKeys : ["extracted_content"],
         requeueEnrichment: true,
       },
     });
@@ -2170,7 +2273,7 @@ export async function updateMemoryExtractedContent({
     note: noteAfterExtract,
     eventType: "note.updated",
     details: {
-      changed: ["extracted_content"],
+      changed: changedKeys.length ? changedKeys : ["extracted_content"],
       requeueEnrichment: false,
     },
   });
@@ -3170,7 +3273,7 @@ export function buildCitationBlock(citations) {
       const label = `N${idx + 1}`;
       const note = entry.note;
       return [
-        `[${label}] note_id=${note.id}`,
+        `[${label}] title: ${noteDisplayTitle(note, 140)}`,
         `summary: ${note.summary || ""}`,
         `project: ${note.project || ""}`,
         `source_url: ${note.sourceUrl || ""}`,
@@ -3283,7 +3386,7 @@ export async function askMemories({
   if (!hasOpenAI()) {
     const answer = [
       "Based on your saved notes:",
-      ...citations.slice(0, 4).map((entry, idx) => `- [N${idx + 1}] ${entry.note.summary || heuristicSummary(entry.note.content, 120)}`),
+      ...citations.slice(0, 4).map((entry) => `- ${entry.note.summary || heuristicSummary(entry.note.content, 120)}`),
     ].join("\n");
     return {
       answer,
@@ -3294,7 +3397,7 @@ export async function askMemories({
 
   try {
     const context = buildCitationBlock(citations);
-    let askInstructions = "Answer ONLY using the provided memory snippets. Be concise. Every factual claim must cite at least one snippet using [N1], [N2], etc. If uncertain, say what is missing.";
+    let askInstructions = "Answer ONLY using the provided memory snippets. Be concise. If uncertain, say what is missing. Do not use citation codes like [N1] in the final answer; refer to items naturally by title or folder.";
     if (project) {
       askInstructions = `The user is working in project "${project}". Consider this context when answering.\n\n${askInstructions}`;
     }
@@ -3322,7 +3425,7 @@ export async function askMemories({
   } catch {
     const answer = [
       "I could not call the model, but these notes look relevant:",
-      ...citations.slice(0, 4).map((entry, idx) => `- [N${idx + 1}] ${entry.note.summary || heuristicSummary(entry.note.content, 120)}`),
+      ...citations.slice(0, 4).map((entry) => `- ${entry.note.summary || heuristicSummary(entry.note.content, 120)}`),
     ].join("\n");
     return {
       answer,

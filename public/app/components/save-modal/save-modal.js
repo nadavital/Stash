@@ -1,10 +1,14 @@
+import { renderIcon } from "../../services/icons.js";
+
 export function renderSaveModalHTML() {
+  const closeIcon = renderIcon("close", { size: 14 });
+  const attachIcon = renderIcon("attach", { size: 16 });
   return `
     <div id="save-modal" class="save-modal hidden" aria-hidden="true">
       <div id="save-modal-backdrop" class="save-modal-backdrop"></div>
       <article class="save-modal-panel" role="dialog" aria-modal="true">
         <button id="save-modal-close" class="save-modal-close" type="button" aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="1" y1="1" x2="13" y2="13"/><line x1="13" y1="1" x2="1" y2="13"/></svg>
+          ${closeIcon}
         </button>
 
         <h3 class="save-modal-heading">New Item</h3>
@@ -18,9 +22,7 @@ export function renderSaveModalHTML() {
             </select>
 
             <button id="save-modal-attach-btn" class="save-modal-attach-btn" type="button" aria-label="Attach file">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 8.67l-5.15 5.15a3.5 3.5 0 0 1-4.95-4.95L9.05 3.72a2.33 2.33 0 0 1 3.3 3.3L7.2 12.17a1.17 1.17 0 0 1-1.65-1.65L10.7 5.37"/>
-              </svg>
+              ${attachIcon}
             </button>
             <input id="save-modal-file-input" type="file" hidden />
           </div>

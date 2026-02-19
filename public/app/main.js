@@ -13,6 +13,12 @@ import { createHomePage } from "./pages/home-page.js";
 import { createItemPage } from "./pages/item-page.js";
 import { createRouter } from "./router.js";
 import { createApiClient } from "./services/api-client.js";
+import {
+  clearPersistedChatState,
+  getBrowserStorage,
+  loadPersistedChatState,
+  savePersistedChatState,
+} from "./services/chat-persistence.js";
 import { createStore } from "./state/store.js";
 
 const mountNode = document.getElementById("app-root");
@@ -31,15 +37,73 @@ const authContext = {
 let router = null;
 let disposeAuthGate = null;
 let disposeShell = null;
+let disposeChatPersistence = null;
+
+function stopChatPersistence() {
+  if (typeof disposeChatPersistence === "function") {
+    disposeChatPersistence();
+    disposeChatPersistence = null;
+  }
+}
+
+function hydrateChatFromStorage(session) {
+  const storage = getBrowserStorage();
+  const restored = loadPersistedChatState(storage, session);
+  store.setState({
+    chatMessages: restored?.chatMessages || [],
+    chatCitations: restored?.chatCitations || [],
+  });
+}
+
+function startChatPersistence(session) {
+  stopChatPersistence();
+
+  const storage = getBrowserStorage();
+  if (!storage) return;
+
+  let prevMessages = store.getState().chatMessages;
+  let prevCitations = store.getState().chatCitations;
+
+  savePersistedChatState(storage, session, {
+    chatMessages: prevMessages,
+    chatCitations: prevCitations,
+  });
+
+  const unsubscribe = store.subscribe((nextState) => {
+    if (nextState.chatMessages === prevMessages && nextState.chatCitations === prevCitations) {
+      return;
+    }
+
+    prevMessages = nextState.chatMessages;
+    prevCitations = nextState.chatCitations;
+
+    savePersistedChatState(storage, session, {
+      chatMessages: nextState.chatMessages,
+      chatCitations: nextState.chatCitations,
+    });
+  });
+
+  disposeChatPersistence = () => {
+    unsubscribe();
+  };
+}
 
 function getAuthSession() {
   return authContext.session;
 }
 
 async function handleSignOut() {
+  const currentSession = getAuthSession();
+  clearPersistedChatState(getBrowserStorage(), currentSession);
+  stopChatPersistence();
   apiClient.logout();
   authContext.session = null;
-  store.setState({ accessedIds: [] });
+  store.setState({
+    accessedIds: [],
+    chatMessages: [],
+    chatCitations: [],
+    chatContext: { type: "home" },
+  });
   mountAuthGate();
 }
 
@@ -54,6 +118,8 @@ function mountAppShell() {
     router = null;
   }
 
+  stopChatPersistence();
+
   if (typeof disposeShell === "function") {
     disposeShell();
     disposeShell = null;
@@ -65,12 +131,14 @@ function mountAppShell() {
   };
 
   const authSession = getAuthSession();
+  hydrateChatFromStorage(authSession);
 
   // Render persistent app shell
   mountNode.innerHTML = renderAppShellHTML({ auth: authSession });
   const shellEls = queryAppShellEls(mountNode);
   const shell = initAppShell(shellEls, { store, apiClient, auth });
   disposeShell = shell.dispose;
+  startChatPersistence(authSession);
 
   const contentSlot = shell.getContentSlot();
 
@@ -101,6 +169,8 @@ function mountAuthGate({ mode = "signin", email = "", name = "", error = "" } = 
     router.stop();
     router = null;
   }
+
+  stopChatPersistence();
 
   if (typeof disposeShell === "function") {
     disposeShell();

@@ -1,5 +1,9 @@
+import { renderIcon } from "../../services/icons.js";
+
 export function renderComposer({ mode = "home" } = {}) {
   const placeholder = mode === "folder" ? "Add item to this folder" : "Add a note, link, or drop a file...";
+  const attachIcon = renderIcon("attach", { size: 18 });
+  const sendIcon = renderIcon("arrow-up", { size: 18 });
 
   return `
     <section class="composer-shell" data-component="composer">
@@ -8,9 +12,7 @@ export function renderComposer({ mode = "home" } = {}) {
 
         <div class="composer-input-shell">
           <button id="attachment-toggle" class="composer-plus" type="button" aria-label="Choose file">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
-            </svg>
+            ${attachIcon}
           </button>
           <select id="project-select" class="composer-project-select" aria-label="Choose folder">
             <option value="">Folder</option>
@@ -23,10 +25,7 @@ export function renderComposer({ mode = "home" } = {}) {
           </span>
 
           <button class="composer-send" id="save-btn" type="submit" aria-label="Save item">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <line x1="12" y1="19" x2="12" y2="5"/>
-              <polyline points="5 12 12 5 19 12"/>
-            </svg>
+            ${sendIcon}
           </button>
         </div>
 

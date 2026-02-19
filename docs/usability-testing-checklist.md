@@ -38,7 +38,24 @@ Use this checklist for manual end-to-end testing of the web app as a collaborati
 - [ ] Ask agent to replace/update an item's attachment.
 - [ ] Ask agent to move an item to another folder.
 - [ ] Ask agent to move an item during enrichment and confirm it is not moved back after enrichment finishes.
+- [ ] Ask agent to create a file in a folder and confirm the app opens that item view automatically.
 - [ ] Confirm actions appear in UI and persist after refresh.
+
+## 3.1) Context-Aware Agent Targeting
+
+- [ ] From an item page, ask: `retitle this note to <new title>` and confirm the current item title updates (no manual ID needed).
+- [ ] From an item page, ask: `add a section called Next Steps` and confirm the current item content updates.
+- [ ] From a folder page, ask: `create a note in this folder called <name>` and confirm the note is created in the current folder.
+- [ ] From a folder page, ask: `search notes about <topic> in this folder` and confirm results are folder-scoped.
+- [ ] Ask an action using a citation label (for example `update [N1]`) and confirm the action applies to the cited item, not a literal `N1` id.
+- [ ] Confirm assistant responses reference item/folder names and avoid exposing raw internal IDs in normal flows.
+
+## 3.2) Live File Editing
+
+- [ ] Open a file item and confirm content is directly editable without entering edit mode.
+- [ ] Type continuously for 10+ seconds and verify autosave status transitions (`Unsaved` -> `Saving` -> `All changes saved`).
+- [ ] Refresh and confirm latest file text persists.
+- [ ] Keep a file open, ask chat agent to edit the same file, and verify remote update is applied (or deferred until local draft save).
 
 ## 4) Search, Context, and Chat Grounding
 

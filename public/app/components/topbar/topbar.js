@@ -1,3 +1,5 @@
+import { renderIcon } from "../../services/icons.js";
+
 function formatAuthLabel(auth = null) {
   if (!auth) return "";
   const user = String(auth.userEmail || "").trim();
@@ -20,11 +22,7 @@ export function renderTopbar({
   const authLabelAttr = escapeHtmlAttr(authLabel);
   const authLabelText = escapeHtmlAttr(authLabel);
 
-  const chatToggleHTML = `<button id="topbar-chat-toggle" class="topbar-chat-toggle" type="button" aria-label="Toggle chat">
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 3h12v9H6l-3 3V3z"/>
-      </svg>
-    </button>`;
+  const chatToggleHTML = `<button id="topbar-chat-toggle" class="topbar-chat-toggle" type="button" aria-label="Toggle chat">${renderIcon("chat", { size: 18 })}</button>`;
 
   return `
     <header class="topbar-shell" data-component="topbar">

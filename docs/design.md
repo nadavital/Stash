@@ -203,12 +203,15 @@ All component JS files live under `public/app/components/`. All component CSS fi
 | Folder Hero Toolbar | `components/folder-hero-toolbar/folder-hero-toolbar.js` | `components/folder-hero-toolbar.css` | `.folder-hero-*` |
 | Folder Item Grid | `components/folder-item-grid/folder-item-grid.js` | `components/folder-item-grid.css` | `.folder-file-*` |
 | Activity Feed | `components/activity-feed/activity-feed.js` | `components/activity-feed.css` | `.activity-feed-*` |
+| Folder Activity Modal | `components/folder-activity-modal/folder-activity-modal.js` | `components/folder-activity-modal.css` | `.folder-activity-modal-*` |
 | Item Modal | `components/item-modal/item-modal.js` | `components/item-modal.css` | `.item-modal-*` |
 | Folder Modal | `components/folder-modal/folder-modal.js` | `components/folder-modal.css` | `.folder-modal-*` |
 | Folder Share Modal | `components/folder-share-modal/folder-share-modal.js` | `components/folder-share-modal.css` | `.folder-share-*` |
 | Move Modal | `components/move-modal/move-modal.js` | `components/move-modal.css` | `.move-modal-*` |
+| Activity Modal | `components/activity-modal/activity-modal.js` | `components/activity-modal.css` | `.activity-modal-*` |
 | Action Menu | `components/action-menu/action-menu.js` | `components/action-menu.css` | `.action-menu-*` |
 | Inline Search | `components/inline-search/inline-search.js` | `components/inline-search.css` | `.inline-search-*` |
+| Markdown Editor | `components/markdown-editor/markdown-editor.js` | `components/markdown.css` | `.md-editor-*` |
 | Chat Panel | `components/chat-panel/chat-panel.js` | `components/chat-panel.css` | `.chat-panel-*` |
 | Sort/Filter | `components/sort-filter/sort-filter.js` | (in `topbar.css`) | `.sort-filter-*` |
 | Toast | `components/toast/toast.js` | `components/toast.css` | `.toast` |
@@ -322,7 +325,22 @@ export function renderFolderHeroToolbar({
 })
 ```
 
-Returns HTML string. Includes `+ Folder`, `Rename`, and optional delete actions.
+Returns HTML string. Includes `+ Folder`, `Share`, `Activity`, `Edit`, and optional delete actions.
+
+---
+
+#### Folder Activity Modal
+
+Compact modal used by folder pages to show live activity events on demand.
+
+```js
+export function renderFolderActivityModalHTML()
+export function queryFolderActivityModalEls(root)
+export function renderFolderActivityModalItems(els, items)
+export function openFolderActivityModal(els, { title, items })
+export function closeFolderActivityModal(els)
+export function initFolderActivityModal(els, { onClose, onRefresh })
+```
 
 ---
 
@@ -387,12 +405,29 @@ Right-side chat surface for grounded Q&A over saved notes, with source citations
 ```js
 export function renderChatPanelHTML()
 export function queryChatPanelEls(root)
-export function initChatPanel(els, { apiClient, toast, onOpenCitation })
+export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspaceAction })
 ```
 
 `initChatPanel()` returns controls for `toggle(show?)`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
 When `onOpenCitation` is provided, citation cards expose `Open item` for in-app context. If a source URL exists, `Open source` opens the original link in a new tab.
+When chat tools create a file/image item, the panel automatically opens that newly created item view.
+Assistant responses are rendered via the shared Markdown service (`services/markdown.js`), so headings, lists, tables, code fences, and links render consistently with the rest of the app while remaining sanitized.
+Chat messages/citations persist across page refresh via workspace/user-scoped local storage and are restored during app-shell bootstrap.
 The panel and controls use touch-target tokens (`--tap-target`, `--tap-target-mobile`) so close/send/citation actions remain comfortable on small screens.
+
+---
+
+#### Markdown Editor
+
+Rich text editor surface used on item detail pages while persisting Markdown under the hood.
+
+```js
+export function createMarkdownEditor(initialValue, { placeholder, showToolbar } = {})
+```
+
+- Toolbar uses compact SVG actions for text style, heading, list variants (bulleted, numbered, checklist), list indent/outdent, quote, link, and horizontal rule.
+- Checklist items are editable in-place and serialize to Markdown task list syntax (`- [ ]` / `- [x]`).
+- Markdown shortcuts entered directly by users still auto-transform inline (for example `**bold**`, links, and checklist triggers).
 
 ---
 
@@ -411,6 +446,22 @@ export function initMoveModalHandlers(els, { onClose, onSubmit, onInput, onSugge
 ```
 
 The modal is safe-area aware on mobile and supports stacked action buttons on very narrow viewports.
+
+---
+
+#### Activity Modal
+
+Reusable modal for item timeline review (comments + version edits), including version preview/restore and in-modal comment capture.
+
+```js
+export function renderActivityModalHTML()
+export function queryActivityModalEls(root)
+export function openActivityModal(els, options)
+export function closeActivityModal(els)
+export function initActivityModalHandlers(els, { onClose, onRestoreVersion, onAddComment })
+```
+
+This modal is used by the item detail page so the main item surface stays focused on content editing.
 
 ---
 
@@ -569,6 +620,49 @@ Data transformation and presentation utilities.
 
 ---
 
+### `services/markdown.js`
+
+Shared markdown renderer used by chat, item detail, and the rich text editor's markdown import/shortcut rendering path.
+
+| Export | Signature | Purpose |
+|--------|-----------|---------|
+| `renderMarkdown(text)` | `string => string` | Parse Markdown (GFM + line breaks) and return sanitized HTML |
+| `renderMarkdownInto(container, text)` | `(HTMLElement, string) => void` | Render sanitized markdown into an element and apply `.markdown-body` |
+
+Security behavior: unsafe tags are removed, unsafe attributes are stripped, `javascript:`/unsafe protocols are blocked, and safe links are forced to `target="_blank"` with hardened `rel`.
+
+---
+
+### `services/icons.js`
+
+Central icon registry for web UI symbols. Components should render icons through this service instead of inlining SVG markup.
+
+| Export | Signature | Purpose |
+|--------|-----------|---------|
+| `renderIcon(name, options)` | `(string, object) => string` | Return SVG markup by icon key (`size`, `className`, accessibility label/title, stroke width) |
+| `noteTypeIconName(type)` | `string => string` | Map capture types (`text`, `file`, `image`, `link`) to canonical icon keys |
+
+Why this exists:
+- Ensures consistent iconography across toolbar, chat, modals, breadcrumbs, item detail, and note cards.
+- Makes icon swaps/rebranding a single-file change in `services/icons.js`.
+
+---
+
+### `services/chat-persistence.js`
+
+Workspace/user-scoped chat persistence helpers used by `main.js` during app bootstrap/signout.
+
+| Export | Signature | Purpose |
+|--------|-----------|---------|
+| `buildChatStorageKey(session)` | `object => string` | Build stable key per workspace + user |
+| `sanitizeChatState(state)` | `object => { chatMessages, chatCitations }` | Enforce bounded/safe persisted shape |
+| `getBrowserStorage()` | `() => Storage \| null` | Resolve `window.localStorage` safely |
+| `loadPersistedChatState(storage, session)` | `(Storage, object) => object \| null` | Read and sanitize persisted chat snapshot |
+| `savePersistedChatState(storage, session, state)` | `(Storage, object, object) => void` | Persist sanitized chat snapshot |
+| `clearPersistedChatState(storage, session)` | `(Storage, object) => void` | Remove persisted chat snapshot |
+
+---
+
 ### `services/note-utils.js`
 
 Note-specific UI helpers.
@@ -579,11 +673,11 @@ Note-specific UI helpers.
 | `iconTypeFor(note)` | `object => string` | Map note to icon type key |
 | `fileToDataUrl(file)` | `File => Promise<string>` | Read file as data URL |
 | `isProcessedNote(note)` | `object => boolean` | Check if note has been enriched |
-| `deleteIconMarkup()` | `() => string` | SVG trash-can icon HTML |
+| `deleteIconMarkup()` | `() => string` | Trash icon markup (delegates to `services/icons.js`) |
 | `compactInlineText(value)` | `string => string` | Collapse whitespace for inline display |
 | `buildModalSummary(note)` | `object => string` | Summary HTML for item modal |
 | `buildModalFullExtract(note)` | `object => string` | Full-extract HTML for item modal |
-| `noteTypeIconMarkup(type)` | `string => string` | SVG icon HTML for a capture type |
+| `noteTypeIconMarkup(type)` | `string => string` | Capture-type icon markup (delegates to `services/icons.js`) |
 
 ---
 

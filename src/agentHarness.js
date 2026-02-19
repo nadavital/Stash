@@ -99,6 +99,7 @@ function normalizeToolArgs(name, args) {
       if (!content && !hasAttachment) throw new Error("create_note requires content or an attachment");
       return {
         content,
+        title: normalizeText(source.title),
         project: normalizeText(source.project),
         sourceType: normalizeChatSourceType(source.sourceType),
         sourceUrl: normalizeText(source.sourceUrl),
@@ -197,6 +198,7 @@ function normalizeToolArgs(name, args) {
       if (!id) throw new Error("update_note requires an id");
       return {
         id,
+        ...(source.title !== undefined ? { title: String(source.title || "").trim() } : {}),
         ...(source.content !== undefined ? { content: String(source.content || "") } : {}),
         ...(source.summary !== undefined ? { summary: String(source.summary || "") } : {}),
         ...(source.tags !== undefined ? { tags: normalizeStringArray(source.tags, 40) } : {}),
@@ -253,7 +255,7 @@ function normalizeToolArgs(name, args) {
   }
 }
 
-export function createAgentToolHarness({ actor = null, requestId = "", executeTool } = {}) {
+export function createAgentToolHarness({ actor = null, requestId = "", executeTool, resolveArgs = null } = {}) {
   if (typeof executeTool !== "function") {
     throw new Error("createAgentToolHarness requires executeTool(name, args, actor)");
   }
@@ -268,11 +270,23 @@ export function createAgentToolHarness({ actor = null, requestId = "", executeTo
     const normalizedName = normalizeText(name);
 
     let parsedArgs = {};
+    let resolvedArgs = {};
     let normalizedArgs = {};
     let idempotencyKey = "";
     try {
       parsedArgs = parseRawArgs(rawArgs);
-      normalizedArgs = normalizeToolArgs(normalizedName, parsedArgs);
+      if (typeof resolveArgs === "function") {
+        const maybeResolved = await resolveArgs(normalizedName, parsedArgs, {
+          actor,
+          requestId: normalizedRequestId,
+          callId: normalizeText(callId),
+          round: Number(round) || 0,
+        });
+        resolvedArgs = isPlainObject(maybeResolved) ? maybeResolved : parsedArgs;
+      } else {
+        resolvedArgs = parsedArgs;
+      }
+      normalizedArgs = normalizeToolArgs(normalizedName, resolvedArgs);
       idempotencyKey = `${normalizedName}:${stableStringify(normalizedArgs)}`;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

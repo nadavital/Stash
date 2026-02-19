@@ -68,6 +68,12 @@ describe("validateNotePayload", () => {
     const result = validateNotePayload({ sourceUrl: "https://example.com" });
     assert.equal(result.valid, true);
   });
+
+  it("rejects non-string title", () => {
+    const result = validateNotePayload({ content: "x", title: 123 });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((e) => e.includes("title must be a string")));
+  });
 });
 
 describe("validateBatchPayload", () => {

@@ -497,6 +497,39 @@ describe("API Integration", () => {
     await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
   });
 
+  it("PUT /api/notes/:id/extracted updates markdown/raw content", async () => {
+    const fileDataUrl = "data:text/markdown;base64,IyBUZXN0IEZpbGUK";
+    const { body: created } = await jsonFetch("/api/notes", {
+      method: "POST",
+      body: {
+        content: "Uploaded file: test.md",
+        sourceType: "file",
+        fileDataUrl,
+        fileName: "test.md",
+        fileMimeType: "text/markdown",
+        project: "TestExtracted",
+      },
+    });
+    const id = created.note.id;
+
+    const nextMarkdown = "# Updated spec\n\n- one\n- two";
+    const { status, body } = await jsonFetch(`/api/notes/${encodeURIComponent(id)}/extracted`, {
+      method: "PUT",
+      body: {
+        content: nextMarkdown,
+        rawContent: nextMarkdown,
+        markdownContent: nextMarkdown,
+        requeueEnrichment: false,
+      },
+    });
+    assert.equal(status, 200);
+    assert.equal(body.note.content, nextMarkdown);
+    assert.equal(body.note.rawContent, nextMarkdown);
+    assert.equal(body.note.markdownContent, nextMarkdown);
+
+    await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  });
+
   it("PUT /api/notes/:id returns 404 for nonexistent note", async () => {
     const { status } = await jsonFetch("/api/notes/nonexistent-id-12345", {
       method: "PUT",

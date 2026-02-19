@@ -4,7 +4,6 @@ import {
   getNoteProcessingState,
   noteTypeIconMarkup,
   relativeTime,
-  buildModalSummary,
   buildModalFullExtract,
 } from "./note-utils.js";
 import { renderMarkdownInto } from "./markdown.js";
@@ -14,6 +13,58 @@ function extractDomain(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
+function normalizeActorLabel(value, fallback = "Workspace member") {
+  const actor = String(value || "").trim();
+  if (!actor) return fallback;
+  if (/^[a-z]+_\w+/i.test(actor) || /^[A-Z]\d+$/i.test(actor) || /^[0-9a-f-]{16,}$/i.test(actor)) {
+    return fallback;
+  }
+  return actor;
+}
+
+function latestCommentPreview(note) {
+  const comments = Array.isArray(note?.metadata?.comments) ? note.metadata.comments : [];
+  if (!comments.length) return "";
+  const latest = comments
+    .slice()
+    .sort((a, b) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime())[0];
+  const text = String(latest?.text || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > 160 ? `${text.slice(0, 159).trim()}...` : text;
+}
+
+export function buildItemActivityEntries(note, versions = []) {
+  const comments = Array.isArray(note?.metadata?.comments) ? note.metadata.comments : [];
+  const timelineEntries = [];
+
+  comments.forEach((entry, index) => {
+    timelineEntries.push({
+      id: `comment-${index}-${String(entry?.createdAt || "")}`,
+      type: "comment",
+      text: entry?.text || "",
+      actor: normalizeActorLabel(entry?.actor, "You"),
+      createdAt: entry?.createdAt || "",
+      ts: entry?.createdAt ? new Date(entry.createdAt).getTime() : 0,
+    });
+  });
+
+  (Array.isArray(versions) ? versions : []).forEach((version) => {
+    timelineEntries.push({
+      id: `version-${String(version?.versionNumber || "")}-${String(version?.createdAt || "")}`,
+      type: "edit",
+      changeSummary: version?.changeSummary || "Edited",
+      actor: normalizeActorLabel(version?.actorName || version?.actorUserId, "Workspace member"),
+      createdAt: version?.createdAt || "",
+      ts: version?.createdAt ? new Date(version.createdAt).getTime() : 0,
+      versionNumber: version?.versionNumber,
+      content: version?.content || "",
+    });
+  });
+
+  timelineEntries.sort((a, b) => b.ts - a.ts);
+  return timelineEntries;
+}
+
 /**
  * Renders the full item detail view into the given container.
  *
@@ -21,22 +72,17 @@ function extractDomain(url) {
  * @param {object}      note       – the note object to render
  * @param {object}      opts
  * @param {Array}       [opts.relatedNotes]
- * @param {Array}       [opts.versions]       – pre-fetched version history
- * @param {HTMLElement}  [opts.actionsBar]     – external actions bar element (for edit mode show/hide)
+ * @param {boolean}     [opts.isEditing]      – controls non-file edit mode
  * @param {(id: string) => void} opts.onNavigate – navigate to another item
- * @param {(text: string) => Promise} opts.onAddComment
  * @param {(payload) => Promise}      opts.onEdit
- * @param {(versionNumber) => Promise} opts.onRestoreVersion
+ * @param {(state: {dirty: boolean, saving: boolean}) => void} [opts.onFileDraftStateChange]
  */
 export function renderItemDetail(container, note, {
   relatedNotes = [],
-  versions = [],
-  actionsBar: externalActionsBar = null,
+  isEditing = false,
   onNavigate,
-  onAddComment,
   onEdit,
-  onFetchVersions,
-  onRestoreVersion,
+  onFileDraftStateChange,
 }) {
   if (!note || !container) return;
 
@@ -44,10 +90,14 @@ export function renderItemDetail(container, note, {
   const loading = container.querySelector(".item-detail-loading");
   if (loading) loading.remove();
   const existing = container.querySelector(".item-detail-content");
-  if (existing) existing.remove();
+  if (existing) {
+    if (typeof existing._dispose === "function") existing._dispose();
+    existing.remove();
+  }
 
   const wrap = document.createElement("div");
   wrap.className = "item-detail-content";
+  const isFileNote = String(note.sourceType || "").trim().toLowerCase() === "file";
 
   // Header
   const header = document.createElement("div");
@@ -60,10 +110,12 @@ export function renderItemDetail(container, note, {
   typeBadge.innerHTML = `${noteTypeIconMarkup(noteType)} <span>${noteType}</span>`;
   header.appendChild(typeBadge);
 
-  const title = document.createElement("h1");
-  title.className = "item-title";
-  title.textContent = buildNoteTitle(note);
-  header.appendChild(title);
+  const explicitNoteTitle = String(note.title || note.metadata?.title || "").trim();
+  const initialNoteTitle = explicitNoteTitle || buildNoteTitle(note);
+  const titleEl = document.createElement("h1");
+  titleEl.className = "item-title";
+  titleEl.textContent = initialNoteTitle;
+  header.appendChild(titleEl);
 
   const metaRow = document.createElement("div");
   metaRow.className = "item-meta-row";
@@ -117,6 +169,14 @@ export function renderItemDetail(container, note, {
   }
 
   header.appendChild(metaRow);
+
+  const latestComment = latestCommentPreview(note);
+  if (latestComment) {
+    const commentPreview = document.createElement("p");
+    commentPreview.className = "item-comment-preview";
+    commentPreview.textContent = `Latest comment: ${latestComment}`;
+    header.appendChild(commentPreview);
+  }
   wrap.appendChild(header);
 
   // Image
@@ -132,31 +192,6 @@ export function renderItemDetail(container, note, {
     img.onerror = () => imgWrap.remove();
     imgWrap.appendChild(img);
     wrap.appendChild(imgWrap);
-  }
-
-  // Summary (hoisted so edit handler can show/hide)
-  let summaryBlock = null;
-  const summaryText = buildModalSummary(note);
-  if (summaryText) {
-    summaryBlock = document.createElement("div");
-    summaryBlock.className = "item-summary";
-    summaryBlock.textContent = summaryText;
-    wrap.appendChild(summaryBlock);
-  }
-
-  // Tags (hoisted)
-  let tagRow = null;
-  const tags = Array.isArray(note.tags) ? note.tags.filter(Boolean) : [];
-  if (tags.length) {
-    tagRow = document.createElement("div");
-    tagRow.className = "item-tags";
-    tags.forEach((tag) => {
-      const pill = document.createElement("span");
-      pill.className = "item-tag";
-      pill.textContent = tag;
-      tagRow.appendChild(pill);
-    });
-    wrap.appendChild(tagRow);
   }
 
   // Source link
@@ -179,121 +214,228 @@ export function renderItemDetail(container, note, {
     wrap.appendChild(sourceRow);
   }
 
-  // Full content (hoisted) — rendered as markdown
+  // Full content (hoisted) — rendered as markdown for non-file notes.
   let contentSection = null;
+  let relatedSection = null;
+  let editForm = null;
+  let mdEditor = null;
+  const editController = {
+    isEditing: false,
+    focusEditEditor() {},
+    getPendingEditPayload() {
+      return null;
+    },
+  };
   const fullExtract = buildModalFullExtract(note);
-  if (fullExtract) {
+  const displayContent = fullExtract || String(note.content || "").trim();
+
+  if (isFileNote && onEdit) {
+    const liveSection = document.createElement("section");
+    liveSection.className = "item-file-live";
+
+    const liveHeader = document.createElement("div");
+    liveHeader.className = "item-file-live-head";
+
+    const liveTitle = document.createElement("h2");
+    liveTitle.className = "item-file-live-title";
+    liveTitle.textContent = "File content";
+
+    const liveStatus = document.createElement("span");
+    liveStatus.className = "item-file-live-status";
+    liveStatus.textContent = "All changes saved";
+
+    liveHeader.append(liveTitle, liveStatus);
+
+    titleEl.classList.add("item-title--editable");
+    titleEl.contentEditable = "true";
+    titleEl.spellcheck = true;
+    titleEl.setAttribute("role", "textbox");
+    titleEl.setAttribute("aria-label", "File title");
+
+    const initialDraft = displayContent;
+    const fileEditor = createMarkdownEditor(initialDraft);
+    fileEditor.textarea.classList.add("item-file-live-textarea");
+
+    let saveTimer = null;
+    let baselineDraft = fileEditor.getValue();
+    let baselineTitle = String(titleEl.textContent || "").replace(/\s+/g, " ").trim();
+    let inflight = false;
+    let queued = false;
+
+    function readTitleText() {
+      return String(titleEl.textContent || "").replace(/\s+/g, " ").trim();
+    }
+
+    function reportDraftState() {
+      if (typeof onFileDraftStateChange === "function") {
+        onFileDraftStateChange({
+          dirty: fileEditor.getValue() !== baselineDraft || readTitleText() !== baselineTitle,
+          saving: inflight || queued,
+        });
+      }
+    }
+
+    function updateLiveStatus(text, tone = "") {
+      liveStatus.textContent = text;
+      liveStatus.classList.remove("is-saving", "is-error");
+      if (tone === "saving") liveStatus.classList.add("is-saving");
+      if (tone === "error") liveStatus.classList.add("is-error");
+      reportDraftState();
+    }
+
+    async function flushDraft(force = false) {
+      if (inflight) {
+        queued = true;
+        reportDraftState();
+        return;
+      }
+      const draft = fileEditor.getValue();
+      const nextTitle = readTitleText();
+      const titleChanged = nextTitle !== baselineTitle;
+      if (!force && draft === baselineDraft && !titleChanged) {
+        updateLiveStatus("All changes saved");
+        return;
+      }
+      inflight = true;
+      updateLiveStatus("Saving...", "saving");
+      try {
+        const result = await onEdit({
+          mode: "file-live",
+          ...(titleChanged ? { title: nextTitle } : {}),
+          content: draft,
+          rawContent: draft,
+          markdownContent: draft,
+          requeueEnrichment: false,
+        });
+        if (result?.note) {
+          baselineDraft = String(result.note.markdownContent || result.note.rawContent || result.note.content || draft);
+        } else {
+          baselineDraft = draft;
+        }
+        baselineTitle = nextTitle;
+        updateLiveStatus("All changes saved");
+      } catch {
+        updateLiveStatus("Save failed. Keep typing to retry.", "error");
+      } finally {
+        inflight = false;
+        if (queued) {
+          queued = false;
+          void flushDraft();
+        } else {
+          reportDraftState();
+        }
+      }
+    }
+
+    function scheduleDraftSave() {
+      clearTimeout(saveTimer);
+      updateLiveStatus("Unsaved changes");
+      saveTimer = window.setTimeout(() => {
+        saveTimer = null;
+        void flushDraft();
+      }, 700);
+    }
+
+    fileEditor.textarea.addEventListener("input", scheduleDraftSave);
+    titleEl.addEventListener("input", scheduleDraftSave);
+    titleEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        titleEl.blur();
+      }
+    });
+    fileEditor.textarea.addEventListener("blur", () => {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      void flushDraft(true);
+    });
+    titleEl.addEventListener("blur", () => {
+      titleEl.textContent = readTitleText();
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      void flushDraft(true);
+    });
+
+    wrap._dispose = () => {
+      if (saveTimer) clearTimeout(saveTimer);
+      fileEditor.destroy();
+      if (typeof onFileDraftStateChange === "function") {
+        onFileDraftStateChange({ dirty: false, saving: false });
+      }
+    };
+
+    reportDraftState();
+    liveSection.append(liveHeader, fileEditor.element);
+    wrap.appendChild(liveSection);
+  } else if (displayContent) {
     contentSection = document.createElement("div");
     contentSection.className = "item-full-content";
 
     const contentBody = document.createElement("div");
     contentBody.className = "item-content-body";
-    renderMarkdownInto(contentBody, fullExtract);
+    renderMarkdownInto(contentBody, displayContent);
 
     contentSection.appendChild(contentBody);
     wrap.appendChild(contentSection);
   }
 
-  // Edit form (hidden by default) — references to sections we need to toggle
-  let editForm = null;
-  let relatedSection = null;
-  let activitySection = null;
-  let mdEditor = null;
-  const actionsBar = externalActionsBar;
-
-  if (onEdit) {
-    editForm = document.createElement("div");
-    editForm.className = "item-edit-form hidden";
-
-    const contentLabel = document.createElement("label");
-    contentLabel.className = "item-edit-label";
-    contentLabel.textContent = "Content";
-
-    mdEditor = createMarkdownEditor(note.content || "");
-
-    const editRow = document.createElement("div");
-    editRow.className = "item-edit-row";
-
-    const tagsGroup = document.createElement("div");
-    tagsGroup.className = "item-edit-group";
-    const tagsLabel = document.createElement("label");
-    tagsLabel.className = "item-edit-label";
-    tagsLabel.textContent = "Tags (comma-separated)";
-    const tagsInput = document.createElement("input");
-    tagsInput.type = "text";
-    tagsInput.className = "item-edit-input";
-    tagsInput.value = tags.join(", ");
-    tagsGroup.append(tagsLabel, tagsInput);
-
-    const projectGroup = document.createElement("div");
-    projectGroup.className = "item-edit-group";
-    const projectLabel = document.createElement("label");
-    projectLabel.className = "item-edit-label";
-    projectLabel.textContent = "Project";
-    const projectInput = document.createElement("input");
-    projectInput.type = "text";
-    projectInput.className = "item-edit-input";
-    projectInput.value = note.project || "";
-    projectGroup.append(projectLabel, projectInput);
-
-    editRow.append(tagsGroup, projectGroup);
-
-    const editActions = document.createElement("div");
-    editActions.className = "item-edit-actions";
-
-    const doneBtn = document.createElement("button");
-    doneBtn.type = "button";
-    doneBtn.className = "item-action-btn item-action-btn--primary";
-    doneBtn.textContent = "Save";
-
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "item-action-btn";
-    cancelBtn.textContent = "Cancel";
-
-    function exitEditMode() {
-      editForm.classList.add("hidden");
-      if (summaryBlock) summaryBlock.classList.remove("hidden");
-      if (tagRow) tagRow.classList.remove("hidden");
-      if (contentSection) contentSection.classList.remove("hidden");
-      if (relatedSection) relatedSection.classList.remove("hidden");
-      if (activitySection) activitySection.classList.remove("hidden");
-      if (actionsBar) actionsBar.classList.remove("hidden");
-    }
-
-    cancelBtn.addEventListener("click", exitEditMode);
-
-    async function submitEdit() {
-      doneBtn.disabled = true;
-      doneBtn.textContent = "Saving...";
-      const parsedTags = tagsInput.value
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      await onEdit({
-        content: mdEditor.getValue(),
-        tags: parsedTags,
-        project: projectInput.value.trim(),
+  if (onEdit && !isFileNote) {
+    if (isEditing) {
+      const initialEditTitle = String(titleEl.textContent || "").replace(/\s+/g, " ").trim();
+      titleEl.classList.add("item-title--editable");
+      titleEl.contentEditable = "true";
+      titleEl.spellcheck = true;
+      titleEl.setAttribute("role", "textbox");
+      titleEl.setAttribute("aria-label", "Note title");
+      titleEl.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          titleEl.blur();
+        }
       });
+
+      editForm = document.createElement("div");
+      editForm.className = "item-edit-form";
+
+      const contentLabel = document.createElement("label");
+      contentLabel.className = "item-edit-label";
+      contentLabel.textContent = "Content";
+
+      mdEditor = createMarkdownEditor(displayContent);
+      editForm.append(contentLabel, mdEditor.element);
+      wrap.appendChild(editForm);
+
+      if (contentSection) contentSection.classList.add("hidden");
+
+      editController.isEditing = true;
+      editController.focusEditEditor = () => {
+        const target = mdEditor?.textarea;
+        if (!target) return;
+        requestAnimationFrame(() => target.focus());
+      };
+      editController.getPendingEditPayload = () => {
+        const nextTitle = String(titleEl.textContent || "").replace(/\s+/g, " ").trim();
+        return {
+          ...(nextTitle !== initialEditTitle ? { title: nextTitle } : {}),
+          content: mdEditor.getValue(),
+        };
+      };
+    } else {
+      titleEl.classList.remove("item-title--editable");
+      titleEl.contentEditable = "false";
+      titleEl.removeAttribute("role");
+      titleEl.removeAttribute("aria-label");
     }
 
-    doneBtn.addEventListener("click", submitEdit);
-
-    // Cmd/Ctrl+Enter to save, Esc to cancel
-    editForm.addEventListener("keydown", (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-        e.preventDefault();
-        submitEdit();
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        exitEditMode();
-      }
-    });
-
-    editActions.append(doneBtn, cancelBtn);
-    editForm.append(contentLabel, mdEditor.element, editRow, editActions);
-    wrap.appendChild(editForm);
+    if (!wrap._dispose && mdEditor) {
+      wrap._dispose = () => {
+        mdEditor.destroy();
+      };
+    }
   }
 
   // Related notes
@@ -332,162 +474,10 @@ export function renderItemDetail(container, note, {
     wrap.appendChild(relatedSection);
   }
 
-  // ── Activity Timeline (unified comments + version history) ──
-  const comments = Array.isArray(note.metadata?.comments) ? note.metadata.comments : [];
-
-  const timelineEntries = [];
-
-  comments.forEach((c) => {
-    timelineEntries.push({
-      type: "comment",
-      text: c.text || "",
-      actor: c.actor || "You",
-      createdAt: c.createdAt,
-      ts: c.createdAt ? new Date(c.createdAt).getTime() : 0,
-    });
-  });
-
-  versions.forEach((v) => {
-    timelineEntries.push({
-      type: "edit",
-      changeSummary: v.changeSummary || "Edited",
-      actor: v.actorUserId || "Unknown",
-      createdAt: v.createdAt,
-      ts: v.createdAt ? new Date(v.createdAt).getTime() : 0,
-      versionNumber: v.versionNumber,
-      content: v.content,
-    });
-  });
-
-  timelineEntries.sort((a, b) => b.ts - a.ts);
-
-  activitySection = document.createElement("div");
-  activitySection.className = "item-activity";
-
-  const activityHeading = document.createElement("h3");
-  activityHeading.className = "item-activity-heading";
-  activityHeading.textContent = `Activity${timelineEntries.length ? ` (${timelineEntries.length})` : ""}`;
-  activitySection.appendChild(activityHeading);
-
-  if (timelineEntries.length) {
-    const feed = document.createElement("div");
-    feed.className = "item-activity-feed";
-
-    timelineEntries.forEach((entry) => {
-      const entryEl = document.createElement("div");
-      entryEl.className = "activity-entry";
-
-      // Icon
-      const iconEl = document.createElement("div");
-      const iconClass = entry.type === "comment" ? "activity-icon--comment"
-        : entry.type === "enrichment" ? "activity-icon--enrichment"
-        : "activity-icon--edit";
-      iconEl.className = `activity-icon ${iconClass}`;
-
-      if (entry.type === "comment") {
-        iconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 10c0 .55-.45 1-1 1H5l-3 3V3c0-.55.45-1 1-1h10c.55 0 1 .45 1 1v7z"/></svg>`;
-      } else if (entry.type === "enrichment") {
-        iconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="8 1 10 6 15 6 11 9.5 12.5 15 8 11.5 3.5 15 5 9.5 1 6 6 6"/></svg>`;
-      } else {
-        iconEl.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>`;
-      }
-      entryEl.appendChild(iconEl);
-
-      // Content column
-      const contentEl = document.createElement("div");
-      contentEl.className = "activity-content";
-
-      // Meta line
-      const metaEl = document.createElement("div");
-      metaEl.className = "activity-meta";
-      const typeLabel = entry.type === "comment" ? "Comment"
-        : entry.type === "enrichment" ? "AI enriched"
-        : "Edited";
-      metaEl.innerHTML = `<strong>${typeLabel}</strong> \u00B7 ${entry.actor} \u00B7 ${relativeTime(entry.createdAt)}`;
-      contentEl.appendChild(metaEl);
-
-      // Body
-      const bodyEl = document.createElement("div");
-      bodyEl.className = "activity-body";
-      if (entry.type === "comment") {
-        bodyEl.textContent = entry.text;
-      } else if (entry.type === "edit") {
-        bodyEl.textContent = entry.changeSummary;
-      } else {
-        bodyEl.textContent = "AI enriched this note";
-      }
-      contentEl.appendChild(bodyEl);
-
-      // Version actions (Preview/Restore)
-      if (entry.type === "edit" && onRestoreVersion) {
-        const actionsEl = document.createElement("div");
-        actionsEl.className = "activity-actions";
-
-        const previewBtn = document.createElement("button");
-        previewBtn.type = "button";
-        previewBtn.className = "item-action-btn";
-        previewBtn.textContent = "Preview";
-
-        const restoreBtn = document.createElement("button");
-        restoreBtn.type = "button";
-        restoreBtn.className = "item-action-btn item-action-btn--primary";
-        restoreBtn.textContent = "Restore";
-
-        let previewEl = null;
-        previewBtn.addEventListener("click", () => {
-          if (previewEl) {
-            previewEl.remove();
-            previewEl = null;
-            previewBtn.textContent = "Preview";
-            return;
-          }
-          previewEl = document.createElement("div");
-          previewEl.className = "activity-preview";
-          const previewText = (entry.content || "").slice(0, 500) + ((entry.content || "").length > 500 ? "..." : "");
-          renderMarkdownInto(previewEl, previewText);
-          contentEl.appendChild(previewEl);
-          previewBtn.textContent = "Hide preview";
-        });
-
-        restoreBtn.addEventListener("click", async () => {
-          if (!window.confirm(`Restore to version ${entry.versionNumber}? Current state will be saved as a new version.`)) return;
-          restoreBtn.disabled = true;
-          restoreBtn.textContent = "Restoring...";
-          await onRestoreVersion(entry.versionNumber);
-        });
-
-        actionsEl.append(previewBtn, restoreBtn);
-        contentEl.appendChild(actionsEl);
-      }
-
-      entryEl.appendChild(contentEl);
-      feed.appendChild(entryEl);
-    });
-
-    activitySection.appendChild(feed);
+  if (editController.isEditing && relatedSection) {
+    relatedSection.classList.add("hidden");
   }
 
-  // Comment form
-  const commentForm = document.createElement("form");
-  commentForm.className = "item-comment-form";
-  const commentInput = document.createElement("textarea");
-  commentInput.className = "item-comment-input";
-  commentInput.placeholder = "Add a comment...";
-  commentInput.rows = 2;
-  const commentSubmit = document.createElement("button");
-  commentSubmit.type = "submit";
-  commentSubmit.className = "item-comment-submit";
-  commentSubmit.textContent = "Comment";
-  commentForm.append(commentInput, commentSubmit);
-  commentForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = commentInput.value.trim();
-    if (!text) return;
-    await onAddComment(text);
-    commentInput.value = "";
-  });
-  activitySection.appendChild(commentForm);
-  wrap.appendChild(activitySection);
-
   container.appendChild(wrap);
+  return editController;
 }

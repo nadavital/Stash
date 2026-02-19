@@ -1,3 +1,5 @@
+import { renderIcon } from "../../services/icons.js";
+
 function closeSiblingMenus(menu) {
   const root = menu?.ownerDocument || document;
   root.querySelectorAll(".action-menu[open]").forEach((entry) => {
@@ -19,13 +21,7 @@ export function createActionMenu({ ariaLabel = "More actions", actions = [] } = 
   const trigger = document.createElement("summary");
   trigger.className = "action-menu-trigger";
   trigger.setAttribute("aria-label", ariaLabel);
-  trigger.innerHTML = `
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="10" cy="4.5" r="1.6"></circle>
-      <circle cx="10" cy="10" r="1.6"></circle>
-      <circle cx="10" cy="15.5" r="1.6"></circle>
-    </svg>
-  `;
+  trigger.innerHTML = renderIcon("ellipsis-vertical", { size: 20 });
 
   const panel = document.createElement("div");
   panel.className = "action-menu-panel";

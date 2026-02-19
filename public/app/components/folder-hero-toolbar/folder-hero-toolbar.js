@@ -1,3 +1,5 @@
+import { renderIcon } from "../../services/icons.js";
+
 export function renderFolderHeroToolbar({
   folderName = "Folder",
   folderDescription = "",
@@ -24,15 +26,14 @@ export function renderFolderHeroToolbar({
     .trim()
     .slice(0, 4)
     .toUpperCase();
+  const chevron = renderIcon("chevron-right", { size: 16, className: "folder-breadcrumb-chevron" });
 
   return `
     <section class="folder-hero-toolbar" data-component="folder-hero-toolbar" aria-label="Folder path">
       <div class="folder-hero-head">
         <nav class="folder-breadcrumb" aria-label="Breadcrumb">
           <a class="folder-back-link" href="#/">Stash</a>
-          <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="6 4 10 8 6 12"/>
-          </svg>
+          ${chevron}
           <span class="folder-breadcrumb-current">
             <span class="folder-color-dot" data-color="${safeFolderColor}" aria-hidden="true"></span>
             <span class="folder-current-name">${safeFolderName}</span>
@@ -41,6 +42,7 @@ export function renderFolderHeroToolbar({
         <div style="display:flex;gap:6px;align-items:center;">
           <button id="new-folder-btn" class="folder-subfolder-btn" type="button">+ Folder</button>
           <button id="share-folder-btn" class="folder-subfolder-btn" type="button">Share</button>
+          <button id="folder-activity-btn" class="folder-subfolder-btn" type="button">Activity</button>
           <div class="folder-edit-wrap" style="position:relative;">
             <button id="edit-folder-btn" class="folder-subfolder-btn" type="button">Edit</button>
             <div id="edit-folder-menu" class="folder-edit-menu hidden">

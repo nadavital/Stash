@@ -69,7 +69,9 @@
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   line-height: var(--leading-relaxed);
-  white-space: pre-wrap;
+}
+
+.chat-msg-body {
   word-break: break-word;
 }
 
@@ -88,6 +90,34 @@
   padding-right: 0;
   line-height: var(--leading-loose);
   letter-spacing: -0.003em;
+}
+
+.chat-msg--user .chat-msg-body {
+  white-space: pre-wrap;
+}
+
+.chat-msg--assistant .chat-msg-body {
+  white-space: normal;
+}
+
+.chat-msg--assistant .chat-msg-body.markdown-body {
+  font-size: inherit;
+  line-height: var(--leading-loose);
+}
+
+.chat-msg--assistant .chat-msg-body.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.chat-msg--assistant .chat-msg-body.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-msg--assistant .chat-msg-body.markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
 /* ── Typing indicator ──────────────────────────────────── */

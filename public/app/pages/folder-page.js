@@ -30,11 +30,14 @@ import {
   queryMoveModalEls,
 } from "../components/move-modal/move-modal.js";
 import {
-  renderActivityFeedHTML,
-  queryActivityFeedEls,
-  initActivityFeed,
-  renderActivityFeedItems,
-} from "../components/activity-feed/activity-feed.js";
+  renderFolderActivityModalHTML,
+  queryFolderActivityModalEls,
+  openFolderActivityModal,
+  closeFolderActivityModal,
+  initFolderActivityModal,
+  isFolderActivityModalOpen,
+  renderFolderActivityModalItems,
+} from "../components/folder-activity-modal/folder-activity-modal.js";
 import { createMoveDialogController } from "../services/move-dialog.js";
 import {
   renderSaveModalHTML,
@@ -77,6 +80,9 @@ import { renderNoteTiles } from "../services/render-note-tiles.js";
 import { renderSubfolders } from "../services/render-subfolders.js";
 import { subscribeNoteEnrichment } from "../services/sse-notes.js";
 import { createViewToggleController } from "../services/view-toggle.js";
+import { renderIcon } from "../services/icons.js";
+
+const BREADCRUMB_CHEVRON = renderIcon("chevron-right", { size: 16, className: "folder-breadcrumb-chevron" });
 
 
 function renderFolderPageContent(folderMeta) {
@@ -92,7 +98,6 @@ function renderFolderPageContent(folderMeta) {
           folderColor: folderMeta.color,
           folderSymbol: folderMeta.symbol,
         })}
-        ${renderActivityFeedHTML({ title: "Live activity" })}
         <div id="subfolders-section" class="subfolders-section hidden">
           <div class="subfolders-head">
             <p class="subfolders-title">Folders</p>
@@ -118,6 +123,8 @@ function renderFolderPageContent(folderMeta) {
 
     ${renderMoveModalHTML()}
 
+    ${renderFolderActivityModalHTML()}
+
     ${renderSaveModalHTML()}
   `;
 }
@@ -130,7 +137,7 @@ function queryPageElements(mountNode) {
   const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
-  const activityFeedEls = queryActivityFeedEls(mountNode);
+  const folderActivityModalEls = queryFolderActivityModalEls(mountNode);
 
   return {
     ...itemModalEls,
@@ -140,9 +147,10 @@ function queryPageElements(mountNode) {
     ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
-    ...activityFeedEls,
+    ...folderActivityModalEls,
     deleteFolderBtn: mountNode.querySelector("#delete-folder-btn"),
     shareFolderBtn: mountNode.querySelector("#share-folder-btn"),
+    folderActivityBtn: mountNode.querySelector("#folder-activity-btn"),
     editFolderBtn: mountNode.querySelector("#edit-folder-btn"),
     editFolderMenu: mountNode.querySelector("#edit-folder-menu"),
     editSelectBtn: mountNode.querySelector("#edit-select-btn"),
@@ -263,7 +271,8 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         const folderId = String(dbFolderMeta?.id || "").trim();
         if (!folderId) {
           activityItems = [];
-          renderActivityFeedItems(els, activityItems);
+          renderFolderActivityModalItems(els, activityItems);
+          updateActivityButtonLabel();
           return;
         }
         const result = await apiClient.fetchActivity({
@@ -271,11 +280,19 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
           limit: 40,
         });
         activityItems = Array.isArray(result?.items) ? result.items : [];
-        renderActivityFeedItems(els, activityItems);
+        renderFolderActivityModalItems(els, activityItems);
+        updateActivityButtonLabel();
+      }
+
+      function updateActivityButtonLabel() {
+        if (!els.folderActivityBtn) return;
+        const count = activityItems.length;
+        els.folderActivityBtn.textContent = count > 0 ? `Activity (${Math.min(count, 40)})` : "Activity";
       }
 
       syncFolderHeader(folderMeta);
-      renderActivityFeedItems(els, activityItems);
+      renderFolderActivityModalItems(els, activityItems);
+      updateActivityButtonLabel();
       renderShareModal();
 
       function on(target, eventName, handler, options) {
@@ -347,14 +364,17 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         refreshNotes();
       });
 
-      const cleanupActivityFeed = initActivityFeed(els, {
+      const cleanupFolderActivityModal = initFolderActivityModal(els, {
+        onClose() {
+          closeFolderActivityModal(els);
+        },
         onRefresh() {
           refreshActivityFeed().catch(() => {
             toast("Failed to refresh activity", "error");
           });
         },
       });
-      disposers.push(cleanupActivityFeed);
+      disposers.push(cleanupFolderActivityModal);
       // Search toggle
       on(els.toolbarSearchToggle, "click", () => {
         const searchWrap = mountNode.querySelector(".inline-search");
@@ -441,9 +461,9 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
           if (!parent || !isMounted) return;
           breadcrumb.innerHTML = `
             <a class="folder-back-link" href="#/">Stash</a>
-            <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>
+            ${BREADCRUMB_CHEVRON}
             <a class="folder-back-link" href="#/folder/${encodeURIComponent(parent.name)}">${parent.name}</a>
-            <svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>
+            ${BREADCRUMB_CHEVRON}
             <span class="folder-breadcrumb-current">
               <span class="folder-color-dot" data-color="${folderDotColor}" aria-hidden="true"></span>
               <span class="folder-current-name">${folder.name}</span>
@@ -747,6 +767,16 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         }
       });
 
+      on(els.folderActivityBtn, "click", async () => {
+        try {
+          await refreshActivityFeed();
+        } catch {
+          toast("Failed to load activity", "error");
+        }
+        const title = folderMeta?.name ? `${folderMeta.name} activity` : "Activity";
+        openFolderActivityModal(els, { title, items: activityItems });
+      });
+
       // Folder modal handlers via extracted component
       const cleanupFolderModal = initFolderModalHandlers(els, {
         onClose() {
@@ -849,6 +879,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
           closeItemModal(els);
           closeFolderModal(els);
           closeShareModal();
+          closeFolderActivityModal(els);
           moveDialog.cleanup();
         },
       });
@@ -878,7 +909,10 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
           if (!eventFolderId || eventFolderId !== String(dbFolderMeta?.id || "").trim()) return;
           const nextItems = [event, ...activityItems].slice(0, 40);
           activityItems = nextItems;
-          renderActivityFeedItems(els, activityItems);
+          updateActivityButtonLabel();
+          if (isFolderActivityModalOpen(els)) {
+            renderFolderActivityModalItems(els, activityItems);
+          }
         },
       });
 
@@ -898,6 +932,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         closeItemModal(els);
         closeFolderModal(els);
         closeShareModal();
+        closeFolderActivityModal(els);
         document.body.classList.remove("batch-mode-active");
         // Clear shell callbacks
         shell.setToast(null);

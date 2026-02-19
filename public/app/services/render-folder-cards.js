@@ -1,16 +1,9 @@
 import { normalizeCitation, buildNoteTitle } from "./mappers.js";
 import { normalizeFolderDrafts, fallbackColorForFolder } from "./folder-utils.js";
-import { iconTypeFor } from "./note-utils.js";
+import { iconTypeFor, noteTypeIconMarkup } from "./note-utils.js";
 import { createActionMenu } from "../components/action-menu/action-menu.js";
 
 /* ── Paper card helpers for folder tissue-box ─────────── */
-
-const PAPER_TYPE_ICONS = {
-  text: "\u{1F4DD}",
-  link: "\u{1F517}",
-  image: "\u{1F5BC}\uFE0F",
-  file: "\u{1F4C4}",
-};
 
 /** Extract best available HTTP image URL from a note object */
 function getNoteImageUrl(note) {
@@ -69,7 +62,7 @@ function buildPaperFallbackContent(note) {
   const noteType = iconTypeFor(note);
   const icon = document.createElement("span");
   icon.className = "folder-paper-icon";
-  icon.textContent = PAPER_TYPE_ICONS[noteType] || "\u{1F4CC}";
+  icon.innerHTML = noteTypeIconMarkup(noteType);
   content.appendChild(icon);
 
   const title = buildNoteTitle(note);

@@ -7,13 +7,43 @@ import {
   initMoveModalHandlers,
 } from "../components/move-modal/move-modal.js";
 import {
+  renderActivityModalHTML,
+  queryActivityModalEls,
+  openActivityModal,
+  closeActivityModal,
+  initActivityModalHandlers,
+} from "../components/activity-modal/activity-modal.js";
+import {
   buildNoteTitle,
   normalizeCitation,
   conciseTechnicalError,
 } from "../services/mappers.js";
-import { renderItemDetail } from "../services/render-item-detail.js";
+import { buildItemActivityEntries, renderItemDetail } from "../services/render-item-detail.js";
+import { renderIcon } from "../services/icons.js";
 
-const CHEVRON_SVG = `<svg class="folder-breadcrumb-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 4 10 8 6 12"/></svg>`;
+const CHEVRON_SVG = renderIcon("chevron-right", { size: 16, className: "folder-breadcrumb-chevron" });
+const actionIcon = (name) => renderIcon(name, {
+  size: 14,
+  className: "item-action-icon",
+  strokeWidth: 1.9,
+});
+const EDIT_ICON = actionIcon("edit");
+const SAVE_ICON = actionIcon("check");
+const CANCEL_ICON = actionIcon("close");
+const MOVE_ICON = actionIcon("move");
+const ACTIVITY_ICON = actionIcon("activity");
+const RETRY_ICON = actionIcon("refresh");
+const OPEN_LINK_ICON = actionIcon("external-link");
+const DELETE_ICON = actionIcon("trash");
+
+function isFileSource(note = null) {
+  return String(note?.sourceType || "").trim().toLowerCase() === "file";
+}
+
+function actionNoteId(action = null) {
+  if (!action || typeof action !== "object") return "";
+  return String(action?.result?.noteId || "").trim();
+}
 
 function renderItemPageContent() {
   return `
@@ -37,15 +67,18 @@ function renderItemPageContent() {
       </div>
 
       ${renderMoveModalHTML()}
+      ${renderActivityModalHTML()}
     </section>
   `;
 }
 
 function queryPageElements(mountNode) {
   const moveModalEls = queryMoveModalEls(mountNode);
+  const activityModalEls = queryActivityModalEls(mountNode);
 
   return {
     ...moveModalEls,
+    ...activityModalEls,
     itemDetail: mountNode.querySelector("#item-detail"),
     itemDetailLoading: mountNode.querySelector("#item-detail-loading"),
     itemBreadcrumb: mountNode.querySelector("#item-breadcrumb"),
@@ -73,6 +106,12 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       let relatedNotes = [];
       let versions = [];
       let moveModalResolver = null;
+      const currentUserId = String(auth?.getSession?.()?.userId || "").trim();
+      let fileDraftState = { dirty: false, saving: false };
+      let pendingRemoteRefresh = false;
+      let remoteRefreshInFlight = false;
+      let isEditingNote = false;
+      let detailController = null;
 
       function on(target, eventName, handler, options) {
         if (!target) return;
@@ -88,6 +127,18 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       shell.setOnOpenCitation((n) => {
         if (!n) return;
         navigate(`#/item/${encodeURIComponent(n.id)}`);
+      });
+      shell.setOnWorkspaceAction((action) => {
+        const targetNoteId = actionNoteId(action);
+        if (!targetNoteId || !note || targetNoteId !== note.id) return;
+
+        if (isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) {
+          pendingRemoteRefresh = true;
+          toast("Agent updated this file. Changes will refresh after your draft is saved.");
+          return;
+        }
+
+        void refreshCurrentNote({ refreshVersions: true });
       });
 
       // Toolbar handlers
@@ -134,6 +185,52 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       });
       disposers.push(cleanupMoveModal);
 
+      const cleanupActivityModal = initActivityModalHandlers(els, {
+        onClose() {
+          closeActivityModal(els);
+        },
+        async onAddComment(text) {
+          if (!note) return null;
+          try {
+            const result = await apiClient.addNoteComment(note.id, { text });
+            if (!isMounted) return null;
+            if (result?.note) {
+              note = result.note?.note || result.note;
+              shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+            }
+            const refreshedVersions = await apiClient.fetchNoteVersions(note.id).catch(() => null);
+            if (refreshedVersions?.items) versions = refreshedVersions.items;
+            toast("Comment added");
+            renderNote();
+            return { entries: buildItemActivityEntries(note, versions) };
+          } catch (err) {
+            toast(conciseTechnicalError(err, "Comment failed"), "error");
+            return null;
+          }
+        },
+        async onRestoreVersion(versionNumber) {
+          if (!note) return null;
+          try {
+            const result = await apiClient.restoreNoteVersion(note.id, versionNumber);
+            if (!isMounted) return null;
+            if (result?.note) {
+              note = result.note;
+              shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+            }
+            const refreshedVersions = await apiClient.fetchNoteVersions(note.id).catch(() => null);
+            if (refreshedVersions?.items) versions = refreshedVersions.items;
+            isEditingNote = false;
+            toast("Restored");
+            renderNote();
+            return { entries: buildItemActivityEntries(note, versions) };
+          } catch (err) {
+            toast(conciseTechnicalError(err, "Restore failed"), "error");
+            return null;
+          }
+        },
+      });
+      disposers.push(cleanupActivityModal);
+
       // ── Breadcrumb + actions (stable across re-renders) ──────────
 
       function updateBreadcrumb() {
@@ -165,32 +262,91 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
 
       const actionsBar = els.itemActionsBar;
 
+      function setActionButtonMarkup(button, { icon = "", label = "" } = {}) {
+        button.innerHTML = `${icon}<span>${label}</span>`;
+      }
+
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.className = "folder-subfolder-btn";
-      editBtn.textContent = "Edit";
+      setActionButtonMarkup(editBtn, { icon: EDIT_ICON, label: "Edit" });
       editBtn.addEventListener("click", () => {
-        if (!note) return;
-        const detail = els.itemDetail;
-        if (!detail) return;
-        detail.querySelector(".item-summary")?.classList.add("hidden");
-        detail.querySelector(".item-tags")?.classList.add("hidden");
-        detail.querySelector(".item-full-content")?.classList.add("hidden");
-        detail.querySelector(".item-related")?.classList.add("hidden");
-        detail.querySelector(".item-activity")?.classList.add("hidden");
-        actionsBar.classList.add("hidden");
-        const ef = detail.querySelector(".item-edit-form");
-        if (ef) {
-          ef.classList.remove("hidden");
-          const ta = ef.querySelector(".md-editor-textarea");
-          if (ta) requestAnimationFrame(() => ta.focus());
+        if (!note || isFileSource(note)) return;
+        isEditingNote = true;
+        renderNote();
+      });
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "folder-subfolder-btn";
+      setActionButtonMarkup(saveBtn, { icon: SAVE_ICON, label: "Save" });
+      saveBtn.addEventListener("click", async () => {
+        if (!note || isFileSource(note) || !isEditingNote) return;
+        const payload = detailController?.getPendingEditPayload?.();
+        if (!payload) return;
+        saveBtn.disabled = true;
+        setActionButtonMarkup(saveBtn, { icon: SAVE_ICON, label: "Saving..." });
+        try {
+          const result = await apiClient.updateNote(note.id, payload);
+          if (!isMounted) return;
+          if (result?.note) {
+            note = result.note;
+            shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+          }
+          try {
+            const vResult = await apiClient.fetchNoteVersions(note.id);
+            if (vResult?.items) versions = vResult.items;
+          } catch {}
+          isEditingNote = false;
+          toast("Saved");
+          renderNote();
+        } catch (err) {
+          toast(conciseTechnicalError(err, "Save failed"), "error");
+        } finally {
+          saveBtn.disabled = false;
+          setActionButtonMarkup(saveBtn, { icon: SAVE_ICON, label: "Save" });
         }
+      });
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "folder-subfolder-btn";
+      setActionButtonMarkup(cancelBtn, { icon: CANCEL_ICON, label: "Cancel" });
+      cancelBtn.addEventListener("click", () => {
+        if (!isEditingNote) return;
+        isEditingNote = false;
+        renderNote();
+      });
+
+      on(els.itemDetail, "keydown", (event) => {
+        if (!isEditingNote || isFileSource(note)) return;
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          saveBtn.click();
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancelBtn.click();
+        }
+      });
+
+      const activityBtn = document.createElement("button");
+      activityBtn.type = "button";
+      activityBtn.className = "folder-subfolder-btn";
+      setActionButtonMarkup(activityBtn, { icon: ACTIVITY_ICON, label: "Activity" });
+      activityBtn.addEventListener("click", () => {
+        if (!note) return;
+        openActivityModal(els, {
+          title: "Activity",
+          entries: buildItemActivityEntries(note, versions),
+        });
       });
 
       const moveBtn = document.createElement("button");
       moveBtn.type = "button";
       moveBtn.className = "folder-subfolder-btn";
-      moveBtn.textContent = "Move";
+      setActionButtonMarkup(moveBtn, { icon: MOVE_ICON, label: "Move" });
       moveBtn.addEventListener("click", async () => {
         if (!note) return;
         const target = await openMoveDialog({ initialValue: note.project || "" });
@@ -209,7 +365,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       const deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
       deleteBtn.className = "folder-delete-btn";
-      deleteBtn.textContent = "Delete";
+      setActionButtonMarkup(deleteBtn, { icon: DELETE_ICON, label: "Delete" });
       deleteBtn.addEventListener("click", async () => {
         if (!note) return;
         if (!window.confirm("Delete this item? This action cannot be undone.")) return;
@@ -227,19 +383,18 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       sourceLinkBtn.className = "folder-subfolder-btn";
       sourceLinkBtn.target = "_blank";
       sourceLinkBtn.rel = "noopener noreferrer";
-      sourceLinkBtn.textContent = "Open link";
+      setActionButtonMarkup(sourceLinkBtn, { icon: OPEN_LINK_ICON, label: "Open link" });
       sourceLinkBtn.style.display = "none";
 
       const retryBtn = document.createElement("button");
       retryBtn.type = "button";
       retryBtn.className = "folder-subfolder-btn";
-      retryBtn.textContent = "Retry AI";
+      setActionButtonMarkup(retryBtn, { icon: RETRY_ICON, label: "Retry AI" });
       retryBtn.style.display = "none";
       retryBtn.addEventListener("click", async () => {
         if (!note) return;
-        const original = retryBtn.textContent;
         retryBtn.disabled = true;
-        retryBtn.textContent = "Retrying...";
+        setActionButtonMarkup(retryBtn, { icon: RETRY_ICON, label: "Retrying..." });
         try {
           const result = await apiClient.retryNoteEnrichment(note.id);
           if (!isMounted) return;
@@ -254,13 +409,13 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           toast(conciseTechnicalError(err, "Retry failed"), "error");
         } finally {
           retryBtn.disabled = false;
-          retryBtn.textContent = original;
+          setActionButtonMarkup(retryBtn, { icon: RETRY_ICON, label: "Retry AI" });
         }
       });
 
-      actionsBar.append(editBtn, moveBtn, retryBtn, deleteBtn, sourceLinkBtn);
+      actionsBar.append(editBtn, saveBtn, cancelBtn, activityBtn, moveBtn, retryBtn, deleteBtn, sourceLinkBtn);
 
-      function updateSourceLink() {
+      function updateActions() {
         const url = String(note?.sourceUrl || "").trim();
         if (url) {
           sourceLinkBtn.href = url;
@@ -270,67 +425,87 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         }
         const status = String(note?.status || "").toLowerCase();
         retryBtn.style.display = status === "failed" ? "" : "none";
+        const fileItem = isFileSource(note);
+        const editing = !fileItem && isEditingNote;
+        editBtn.style.display = !fileItem && !editing ? "" : "none";
+        saveBtn.style.display = editing ? "" : "none";
+        cancelBtn.style.display = editing ? "" : "none";
+        const activityCount = buildItemActivityEntries(note, versions).length;
+        const activityLabel = activityCount > 0 ? `Activity (${activityCount})` : "Activity";
+        setActionButtonMarkup(activityBtn, { icon: ACTIVITY_ICON, label: activityLabel });
+      }
+
+      async function refreshCurrentNote({ refreshVersions = false } = {}) {
+        if (!note || remoteRefreshInFlight) return;
+        remoteRefreshInFlight = true;
+        try {
+          const [noteResult, versionsResult] = await Promise.all([
+            apiClient.fetchNote(note.id),
+            refreshVersions ? apiClient.fetchNoteVersions(note.id).catch(() => null) : Promise.resolve(null),
+          ]);
+          if (!isMounted) return;
+          if (noteResult?.note) {
+            note = noteResult.note;
+            shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+          }
+          if (versionsResult?.items) {
+            versions = versionsResult.items;
+          }
+          renderNote();
+        } catch (err) {
+          if (!isMounted) return;
+          toast(conciseTechnicalError(err, "Failed to refresh item"), "error");
+        } finally {
+          remoteRefreshInFlight = false;
+        }
       }
 
       function renderNote() {
         if (!note || !els.itemDetail) return;
         updateBreadcrumb();
-        updateSourceLink();
+        updateActions();
         actionsBar.classList.remove("hidden");
-        renderItemDetail(els.itemDetail, note, {
+        detailController = renderItemDetail(els.itemDetail, note, {
           relatedNotes,
-          versions,
-          actionsBar,
+          isEditing: isEditingNote,
           onNavigate(id) {
             navigate(`#/item/${encodeURIComponent(id)}`);
           },
-          async onAddComment(text) {
-            try {
-              const result = await apiClient.addNoteComment(note.id, { text });
-              if (!isMounted) return;
-              if (result?.note) {
-                note = result.note?.note || result.note;
-              }
-              toast("Comment added");
-              renderNote();
-            } catch (err) {
-              toast(conciseTechnicalError(err, "Comment failed"), "error");
-            }
-          },
           async onEdit(payload) {
             try {
-              const result = await apiClient.updateNote(note.id, payload);
-              if (!isMounted) return;
-              if (result?.note) note = result.note;
-              try {
-                const vResult = await apiClient.fetchNoteVersions(note.id);
-                if (vResult?.items) versions = vResult.items;
-              } catch {}
-              toast("Saved");
-              renderNote();
+              if (payload?.mode === "file-live") {
+                const result = await apiClient.updateNoteExtracted(note.id, {
+                  title: payload.title,
+                  content: payload.content,
+                  rawContent: payload.rawContent,
+                  markdownContent: payload.markdownContent,
+                  requeueEnrichment: payload.requeueEnrichment === true,
+                });
+                if (!isMounted) return result;
+                if (result?.note) {
+                  note = result.note;
+                  shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+                }
+                return result;
+              }
             } catch (err) {
               toast(conciseTechnicalError(err, "Save failed"), "error");
             }
           },
-          async onFetchVersions() {
-            return apiClient.fetchNoteVersions(note.id);
-          },
-          async onRestoreVersion(versionNumber) {
-            try {
-              const result = await apiClient.restoreNoteVersion(note.id, versionNumber);
-              if (!isMounted) return;
-              if (result?.note) note = result.note;
-              try {
-                const vResult = await apiClient.fetchNoteVersions(note.id);
-                if (vResult?.items) versions = vResult.items;
-              } catch {}
-              toast("Restored");
-              renderNote();
-            } catch (err) {
-              toast(conciseTechnicalError(err, "Restore failed"), "error");
+          onFileDraftStateChange(state) {
+            fileDraftState = {
+              dirty: Boolean(state?.dirty),
+              saving: Boolean(state?.saving),
+            };
+            if (pendingRemoteRefresh && !fileDraftState.dirty && !fileDraftState.saving) {
+              pendingRemoteRefresh = false;
+              void refreshCurrentNote({ refreshVersions: true });
             }
           },
         });
+        if (isEditingNote) {
+          detailController?.focusEditEditor?.();
+        }
       }
 
       // Try to find note in store as immediate fallback
@@ -401,6 +576,24 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       // Subscribe to SSE for live enrichment updates on this note
       const unsubscribeSSE = apiClient.subscribeToEvents?.((event) => {
         if (!isMounted || !note) return;
+        if (event.type === "activity" && String(event.noteId || "") === note.id) {
+          const eventType = String(event.eventType || "").trim().toLowerCase();
+          const actorUserId = String(event.actorUserId || "").trim();
+          if (eventType === "note.deleted") {
+            toast("This item was deleted.");
+            navigate("#/");
+            return;
+          }
+          if (eventType === "note.updated") {
+            if (actorUserId && actorUserId === currentUserId) return;
+            if (isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) {
+              pendingRemoteRefresh = true;
+              return;
+            }
+            void refreshCurrentNote({ refreshVersions: true });
+            return;
+          }
+        }
         if (event.type === "job:start" && event.id === note.id) {
           note.status = "enriching";
           renderNote();
@@ -420,9 +613,11 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         isMounted = false;
         if (unsubscribeSSE) unsubscribeSSE();
         closeMoveModal(els);
+        closeActivityModal(els);
         resolveMoveDialog(null);
         shell.setToast(null);
         shell.setOnOpenCitation(null);
+        shell.setOnWorkspaceAction(null);
         disposers.forEach((fn) => fn());
       };
     },

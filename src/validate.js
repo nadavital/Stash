@@ -1,6 +1,7 @@
 const VALID_SOURCE_TYPES = new Set(["text", "link", "image", "file"]);
 const MAX_CONTENT_LENGTH = 100000;
 const MAX_PROJECT_LENGTH = 120;
+const MAX_TITLE_LENGTH = 180;
 const MAX_TAG_LENGTH = 60;
 const MAX_TAGS = 20;
 
@@ -55,6 +56,14 @@ export function validateNotePayload(body, { requireContent = true } = {}) {
 
   if (body.summary !== undefined && typeof body.summary !== "string") {
     errors.push("summary must be a string");
+  }
+
+  if (body.title !== undefined) {
+    if (typeof body.title !== "string") {
+      errors.push("title must be a string");
+    } else if (body.title.length > MAX_TITLE_LENGTH) {
+      errors.push(`title exceeds maximum length of ${MAX_TITLE_LENGTH} characters`);
+    }
   }
 
   return errors.length > 0 ? { valid: false, errors } : { valid: true, errors: [] };

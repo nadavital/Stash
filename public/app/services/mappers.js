@@ -480,13 +480,46 @@ function truncateText(text, maxChars = 180) {
   return `${normalized.slice(0, maxChars - 1).trim()}...`;
 }
 
+function stripMarkdownTitleSyntax(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/[*_~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function markdownHeadingTitle(value) {
+  const lines = String(value || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    const match = line.match(/^#{1,6}\s+(.+)$/);
+    if (match?.[1]) {
+      const primaryHeading = String(match[1]).split(/\s#{1,6}\s+/)[0];
+      const cleaned = stripMarkdownTitleSyntax(primaryHeading);
+      if (cleaned) return cleaned;
+    }
+  }
+  return "";
+}
+
 export function buildNoteTitle(note) {
-  const content = normalizeText(note.content);
-  const summary = normalizeText(note.summary);
-  const explicitTitle = normalizeText(
+  const contentRaw = String(note.content || "").trim();
+  const content = normalizeText(contentRaw);
+  const summaryRaw = String(note.summary || "").trim();
+  const markdownRaw = String(note.markdownContent || "").trim();
+  const rawContentRaw = String(note.rawContent || "").trim();
+  const explicitTitle = stripMarkdownTitleSyntax(
     note.title || note.metadata?.title || note.metadata?.linkTitle || note.metadata?.documentTitle || note.metadata?.name || ""
   );
-  const fallbackContent = summary || normalizeText(note.markdownContent || "") || normalizeText(note.rawContent || "");
+  const fallbackContent = summaryRaw || markdownRaw || rawContentRaw;
   const isFilePlaceholder = isGenericFilePlaceholder(content);
   const maxTitleLength = 84;
 
@@ -500,8 +533,10 @@ export function buildNoteTitle(note) {
 
   if (!content && note.sourceType === "image") return "Image memory";
   if ((!content || isFilePlaceholder) && fallbackContent) {
-    const sentenceMatch = fallbackContent.match(/^(.{10,130}?[.!?])(\s|$)/);
-    const candidate = sentenceMatch ? sentenceMatch[1] : fallbackContent;
+    const headingCandidate = markdownHeadingTitle(fallbackContent);
+    const cleanedFallback = stripMarkdownTitleSyntax(fallbackContent);
+    const sentenceMatch = cleanedFallback.match(/^(.{10,130}?[.!?])(\s|$)/);
+    const candidate = headingCandidate || (sentenceMatch ? sentenceMatch[1] : cleanedFallback);
     return truncateText(candidate, maxTitleLength);
   }
   if (!content && note.fileName) return truncateText(note.fileName, maxTitleLength);
@@ -511,8 +546,10 @@ export function buildNoteTitle(note) {
     return compactUrl(fallbackUrl, maxTitleLength) || "Saved link";
   }
 
-  const sentenceMatch = content.match(/^(.{10,130}?[.!?])(\s|$)/);
-  const candidate = sentenceMatch ? sentenceMatch[1] : content;
+  const headingCandidate = markdownHeadingTitle(contentRaw);
+  const cleanedContent = stripMarkdownTitleSyntax(contentRaw);
+  const sentenceMatch = cleanedContent.match(/^(.{10,130}?[.!?])(\s|$)/);
+  const candidate = headingCandidate || (sentenceMatch ? sentenceMatch[1] : cleanedContent);
   return truncateText(candidate, maxTitleLength);
 }
 

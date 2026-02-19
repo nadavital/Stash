@@ -401,7 +401,7 @@ class NoteRepository {
 
     this.updateNoteStmt = this.db.prepare(`
       UPDATE notes
-      SET content = ?, summary = ?, tags_json = ?, project = ?, updated_at = ?
+      SET content = ?, summary = ?, tags_json = ?, project = ?, metadata_json = COALESCE(?, metadata_json), updated_at = ?
       WHERE id = ? AND workspace_id = ?
     `);
 
@@ -692,7 +692,7 @@ class NoteRepository {
     return Number(result?.changes || 0);
   }
 
-  updateNote({ id, content, summary, tags, project, workspaceId = config.defaultWorkspaceId }) {
+  updateNote({ id, content, summary, tags, project, metadata, workspaceId = config.defaultWorkspaceId }) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     const now = nowIso();
     this.updateNoteStmt.run(
@@ -700,6 +700,7 @@ class NoteRepository {
       summary || "",
       JSON.stringify(tags || []),
       project || "",
+      metadata === undefined ? null : JSON.stringify(metadata || {}),
       now,
       id,
       normalizedWorkspaceId

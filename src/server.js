@@ -39,6 +39,11 @@ import {
   updateMemoryAttachment,
   updateMemoryExtractedContent,
 } from "./memoryService.js";
+import {
+  createCitationNoteAliasMap,
+  createCitationNoteNameAliasMap,
+  resolveAgentToolArgs,
+} from "./chatToolArgs.js";
 import { createStreamingResponse } from "./openai.js";
 import {
   noteRepo,
@@ -547,6 +552,39 @@ async function resolveWorkspaceMemberForAgent(actor, { userId = "", email = "" }
   return resolved;
 }
 
+function buildAgentNoteTitle(note = null, fallback = "Untitled item") {
+  function cleanTitleCandidate(value) {
+    return String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+      .replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
+      .replace(/[*_~]+/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  if (!note || typeof note !== "object") return fallback;
+  const explicit = cleanTitleCandidate(note?.metadata?.title || "");
+  if (explicit) return explicit.slice(0, 140);
+  const summary = cleanTitleCandidate(note.summary || "");
+  if (summary) return summary.slice(0, 140);
+  const fileName = cleanTitleCandidate(note.fileName || "");
+  if (fileName) return fileName.slice(0, 140);
+  const content = cleanTitleCandidate(note.content || "");
+  if (content) return content.slice(0, 140);
+  return fallback;
+}
+
+async function resolveFolderNameForAgent(folderRef, workspaceId) {
+  const normalized = String(folderRef || "").trim();
+  if (!normalized) return "";
+  let folder = await folderRepo.getFolder(normalized, workspaceId);
+  if (!folder) {
+    folder = await folderRepo.getFolderByName(normalized, workspaceId);
+  }
+  return String(folder?.name || normalized);
+}
+
 const CHAT_TOOLS = [
   {
     type: "function",
@@ -557,6 +595,7 @@ const CHAT_TOOLS = [
       type: "object",
       properties: {
         content: { type: "string", description: "The note content or URL to save (optional when attachment is present)" },
+        title: { type: "string", description: "Preferred item title (optional, plain language)." },
         project: { type: "string", description: "Folder to save into (optional)" },
         sourceType: { type: "string", enum: ["url", "link", "text", "manual", "file", "image"], description: "Type of content" },
         sourceUrl: { type: "string", description: "Optional source URL" },
@@ -686,11 +725,12 @@ const CHAT_TOOLS = [
   {
     type: "function",
     name: "update_note",
-    description: "Update note content/summary/tags/folder.",
+    description: "Update note title/content/summary/tags/folder.",
     parameters: {
       type: "object",
       properties: {
         id: { type: "string", description: "Note id" },
+        title: { type: "string", description: "User-facing title for the note" },
         content: { type: "string", description: "Updated note content" },
         summary: { type: "string", description: "Updated summary" },
         tags: { type: "array", items: { type: "string" }, description: "Updated tags" },
@@ -785,7 +825,7 @@ const CHAT_TOOLS = [
   },
 ];
 
-const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links/files/images, create notes and folders, search notes, read extracted markdown/raw content, update note fields, update markdown/raw extracted content, add note comments, list/restore versions, retry failed enrichment, list workspace members, share/unshare folders, list folder collaborators, and list workspace activity. When the user asks to save, edit, or organize memory items, use tools directly. Keep responses concise and grounded in saved notes.";
+const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links/files/images, create notes and folders, search notes, read extracted markdown/raw content, update note fields, update markdown/raw extracted content, add note comments, list/restore versions, retry failed enrichment, list workspace members, share/unshare folders, list folder collaborators, and list workspace activity. When the user asks to save, edit, or organize memory items, use tools directly. When creating notes and the user implies a name, pass that name using create_note.title. Keep responses concise and grounded in saved notes. In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs.";
 
 async function executeChatToolCall(name, args, actor, { chatAttachment = null } = {}) {
   switch (name) {
@@ -824,6 +864,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
       }
       const note = await createMemory({
         content,
+        title: String(args.title || "").trim(),
         sourceType,
         sourceUrl,
         imageDataUrl: attachment?.imageDataUrl || null,
@@ -836,7 +877,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
       });
       return {
         noteId: note.id,
-        title: note.summary || content.slice(0, 80) || note.fileName || "New note",
+        title: buildAgentNoteTitle(note, content.slice(0, 80) || "New item"),
         sourceType: note.sourceType,
       };
     }
@@ -847,7 +888,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
         color: args.color || "",
         actor,
       });
-      return { folderId: folder.id, name: folder.name };
+      return { folderId: folder.id, name: folder.name, folderName: folder.name };
     }
     case "list_workspace_members": {
       const query = String(args.query || "").trim().toLowerCase();
@@ -897,8 +938,10 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
         role: normalizeFolderMemberRole(args.role),
         actor,
       });
+      const folderName = await resolveFolderNameForAgent(collaborator.folderId || args.folderId, actor.workspaceId);
       return {
         folderId: String(collaborator.folderId || ""),
+        folderName,
         userId: String(collaborator.userId || ""),
         userEmail: String(collaborator.userEmail || ""),
         userName: String(collaborator.userName || ""),
@@ -915,8 +958,10 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
         userId: target.userId,
         actor,
       });
+      const folderName = await resolveFolderNameForAgent(args.folderId, actor.workspaceId);
       return {
         folderId: String(args.folderId || "").trim(),
+        folderName,
         userId: String(target.userId || ""),
         removed: Number(result.removed || 0),
       };
@@ -953,7 +998,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
       return {
         results: results.slice(0, 6).map((r) => ({
           id: r.note?.id,
-          title: r.note?.summary || String(r.note?.content || "").slice(0, 80),
+          title: buildAgentNoteTitle(r.note, String(r.note?.content || "").slice(0, 80) || "Untitled item"),
           project: r.note?.project || "",
         })),
       };
@@ -969,6 +1014,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
     case "update_note": {
       const note = await updateMemory({
         id: String(args.id || "").trim(),
+        title: args.title,
         content: args.content,
         summary: args.summary,
         tags: Array.isArray(args.tags)
@@ -977,7 +1023,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
         project: args.project,
         actor,
       });
-      return { noteId: note.id, title: note.summary || String(note.content || "").slice(0, 80) || "Updated note" };
+      return { noteId: note.id, title: buildAgentNoteTitle(note, "Updated item") };
     }
     case "update_note_attachment": {
       const attachment = chatAttachment && (chatAttachment.fileDataUrl || chatAttachment.imageDataUrl)
@@ -1918,6 +1964,7 @@ async function handleApi(req, res, url) {
     }
     const note = await createMemory({
       content: body.content,
+      title: body.title,
       sourceType: body.sourceType,
       sourceUrl: body.sourceUrl,
       imageDataUrl: body.imageDataUrl,
@@ -1977,6 +2024,8 @@ async function handleApi(req, res, url) {
           }
         } catch { /* best-effort */ }
       }
+      const citationAliasMap = createCitationNoteAliasMap(citations);
+      const noteNameAliasMap = createCitationNoteNameAliasMap(citations);
 
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -1999,11 +2048,14 @@ async function handleApi(req, res, url) {
           systemPrompt = `The user is working in folder "${body.project}". Consider this context.\n\n${systemPrompt}`;
         }
         if (workingSetIds.length > 0) {
-          scopeHints.push(`Prioritize these note ids when searching: ${workingSetIds.slice(0, 12).join(", ")}.`);
+          scopeHints.push("Prioritize the current working-set items when searching and reasoning.");
         }
         if (scopeHints.length > 0) {
           systemPrompt = `${scopeHints.join(" ")}\n\n${systemPrompt}`;
         }
+        systemPrompt = `Citation labels like [N1], [N2], etc are snippet references only and not note IDs. Never pass N1/N2 as tool ids. Do not include citation labels in user-facing prose; refer to items by title/folder name. ${
+          contextNoteId ? `If the user says "this note", use id "${contextNoteId}". ` : ""
+        }\n\n${systemPrompt}`;
         if (hasAttachment) {
           systemPrompt = `A file/image attachment is included with this request. When the user asks to save a new item, call create_note. When the user asks to replace an existing note's attachment, call update_note_attachment. Attachment payload is supplied server-side and should not be reconstructed.\n\n${systemPrompt}`;
         }
@@ -2022,6 +2074,12 @@ async function handleApi(req, res, url) {
         const harness = createAgentToolHarness({
           actor,
           requestId: String(req.headers["x-request-id"] || "").trim(),
+          resolveArgs: (name, args) => resolveAgentToolArgs(name, args, {
+            contextNoteId,
+            contextProject: String(body.project || "").trim(),
+            citationAliasMap,
+            noteNameAliasMap,
+          }),
           executeTool: (name, args, toolActor) => {
             if (name !== "search_notes") {
               return executeChatToolCall(name, args, toolActor, { chatAttachment: hasAttachment ? chatAttachment : null });
@@ -2132,7 +2190,7 @@ async function handleApi(req, res, url) {
         // Fallback: heuristic answer
         const answer = citations
           .slice(0, 4)
-          .map((entry, idx) => `- [N${idx + 1}] ${entry.note?.summary || ""}`)
+          .map((entry) => `- ${buildAgentNoteTitle(entry.note, "Saved item")}`)
           .join("\n");
         res.write(`event: token\ndata: ${JSON.stringify({ token: answer ? "Based on your saved notes:\n" + answer : "Something went wrong. Please try again." })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
@@ -2502,6 +2560,58 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // PUT /api/notes/:id/extracted — update extracted markdown/raw content
+  if (req.method === "PUT" && url.pathname.match(/^\/api\/notes\/[^/]+\/extracted$/)) {
+    const suffix = "/extracted";
+    const encodedId = url.pathname.slice("/api/notes/".length, -suffix.length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    const hasTitle = body.title !== undefined;
+    const hasContent = body.content !== undefined;
+    const hasRawContent = body.rawContent !== undefined;
+    const hasMarkdownContent = body.markdownContent !== undefined;
+    if (!hasTitle && !hasContent && !hasRawContent && !hasMarkdownContent) {
+      sendJson(res, 400, { error: "Nothing to update" });
+      return;
+    }
+    if (hasTitle && body.title !== null && typeof body.title !== "string") {
+      sendJson(res, 400, { error: "title must be a string or null" });
+      return;
+    }
+    if (hasContent && body.content !== null && typeof body.content !== "string") {
+      sendJson(res, 400, { error: "content must be a string or null" });
+      return;
+    }
+    if (hasRawContent && body.rawContent !== null && typeof body.rawContent !== "string") {
+      sendJson(res, 400, { error: "rawContent must be a string or null" });
+      return;
+    }
+    if (hasMarkdownContent && body.markdownContent !== null && typeof body.markdownContent !== "string") {
+      sendJson(res, 400, { error: "markdownContent must be a string or null" });
+      return;
+    }
+    try {
+      const note = await updateMemoryExtractedContent({
+        id,
+        title: body.title,
+        content: body.content,
+        rawContent: body.rawContent,
+        markdownContent: body.markdownContent,
+        requeueEnrichment: body.requeueEnrichment === true,
+        actor,
+      });
+      sendJson(res, 200, { note });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Update extracted content failed";
+      sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
+    }
+    return;
+  }
+
   // PUT /api/notes/:id — update a note
   if (req.method === "PUT" && url.pathname.startsWith("/api/notes/")) {
     const encodedId = url.pathname.slice("/api/notes/".length);
@@ -2519,6 +2629,7 @@ async function handleApi(req, res, url) {
     try {
       const note = await updateMemory({
         id,
+        title: body.title,
         content: body.content,
         summary: body.summary,
         tags: body.tags,

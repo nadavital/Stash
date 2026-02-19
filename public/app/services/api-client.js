@@ -176,7 +176,11 @@ async function refreshSessionToken() {
     });
 
     if (!response.ok) {
-      clearAuthTokens();
+      // Some providers (e.g. Neon) do not support this endpoint.
+      // Avoid wiping all auth state on generic 4xx/5xx failures.
+      if (response.status === 401 || response.status === 403) {
+        clearAuthTokens();
+      }
       return "";
     }
 
@@ -214,6 +218,7 @@ function parseError(payload, statusCode) {
 async function jsonFetch(url, options = {}) {
   const {
     skipAuth = false,
+    skipWorkspace = false,
     json = true,
     headers: customHeaders,
     workspaceId,
@@ -227,7 +232,9 @@ async function jsonFetch(url, options = {}) {
     throw error;
   }
 
-  const selectedWorkspaceId = String(workspaceId || getStoredWorkspaceId() || "").trim();
+  const selectedWorkspaceId = skipWorkspace
+    ? ""
+    : String(workspaceId || getStoredWorkspaceId() || "").trim();
   const headers = {
     ...(json ? { "Content-Type": "application/json" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -406,11 +413,17 @@ export function createApiClient({ adapterDebug = false } = {}) {
     },
 
     async fetchSession() {
-      const token = getStoredSessionToken();
+      let token = getStoredSessionToken();
+      if (!token) {
+        token = await refreshSessionToken();
+      }
       if (!token) return null;
 
       try {
-        const payload = await jsonFetch(API_ENDPOINTS.authSession, { method: "GET" });
+        const payload = await jsonFetch(API_ENDPOINTS.authSession, {
+          method: "GET",
+          skipWorkspace: true,
+        });
         const actor = normalizeActorResponse(payload);
         if (actor?.workspaceId) {
           setStoredWorkspaceId(actor.workspaceId);
@@ -418,6 +431,26 @@ export function createApiClient({ adapterDebug = false } = {}) {
         return actor;
       } catch (error) {
         if (error && typeof error === "object" && error.status === 401) {
+          const refreshedToken = await refreshSessionToken();
+          if (refreshedToken) {
+            try {
+              const payload = await jsonFetch(API_ENDPOINTS.authSession, {
+                method: "GET",
+                skipWorkspace: true,
+              });
+              const actor = normalizeActorResponse(payload);
+              if (actor?.workspaceId) {
+                setStoredWorkspaceId(actor.workspaceId);
+              }
+              return actor;
+            } catch (retryError) {
+              if (retryError && typeof retryError === "object" && retryError.status === 401) {
+                clearSessionToken();
+                return null;
+              }
+              throw retryError;
+            }
+          }
           clearSessionToken();
           return null;
         }
@@ -767,6 +800,15 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}`, {
         method: "PUT",
         body: JSON.stringify(payload),
+      });
+    },
+
+    async updateNoteExtracted(id, payload) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing id");
+      return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/extracted`, {
+        method: "PUT",
+        body: JSON.stringify(payload || {}),
       });
     },
 

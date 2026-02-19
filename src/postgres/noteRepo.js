@@ -368,7 +368,7 @@ class PostgresNoteRepository {
     return Number(result.rowCount || 0);
   }
 
-  async updateNote({ id, content, summary, tags, project, workspaceId = config.defaultWorkspaceId }) {
+  async updateNote({ id, content, summary, tags, project, metadata, workspaceId = config.defaultWorkspaceId }) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     await this._query(
       `
@@ -378,14 +378,16 @@ class PostgresNoteRepository {
           summary = $2,
           tags_json = $3::jsonb,
           project = $4,
-          updated_at = $5::timestamptz
-        WHERE id = $6 AND workspace_id = $7
+          metadata_json = COALESCE($5::jsonb, metadata_json),
+          updated_at = $6::timestamptz
+        WHERE id = $7 AND workspace_id = $8
       `,
       [
         String(content || ""),
         String(summary || ""),
         JSON.stringify(tags || []),
         project || null,
+        metadata === undefined ? null : JSON.stringify(metadata || {}),
         nowIso(),
         String(id || "").trim(),
         normalizedWorkspaceId,

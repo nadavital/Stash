@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveDatabaseUrl } from "./databaseUrl.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,6 +58,7 @@ function parseBool(value, fallback = false) {
 function parseAuthProvider(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "firebase") return "firebase";
+  if (normalized === "neon") return "neon";
   return "local";
 }
 
@@ -84,7 +86,7 @@ export const config = {
   openaiChatModel: process.env.OPENAI_CHAT_MODEL || "gpt-4.1-mini",
   openaiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
   dbProvider: parseDbProvider(process.env.DB_PROVIDER),
-  databaseUrl: String(process.env.DATABASE_URL || "").trim(),
+  databaseUrl: resolveDatabaseUrl(process.env),
   // Legacy SQLite paths kept only for older modules/tests that are no longer primary runtime paths.
   dbPath: resolveDataPath(process.env.DB_PATH, LEGACY_DB_PATH),
   tasksDbPath: resolveDataPath(process.env.TASKS_DB_PATH, LEGACY_TASKS_DB_PATH),
@@ -109,6 +111,9 @@ export const config = {
   firebaseWebApiKey: String(process.env.FIREBASE_WEB_API_KEY || "").trim(),
   firebaseServiceAccountJson: String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "").trim(),
   firebaseServiceAccountPath: String(process.env.FIREBASE_SERVICE_ACCOUNT_PATH || "").trim(),
+  neonAuthBaseUrl: String(process.env.NEON_AUTH_BASE_URL || "").trim(),
+  neonAuthIssuer: String(process.env.NEON_AUTH_ISSUER || "").trim(),
+  neonAuthAudience: String(process.env.NEON_AUTH_AUDIENCE || "").trim(),
 };
 
 export function publicUploadPath(fileName) {

@@ -13,15 +13,18 @@ const API_ENDPOINTS = Object.freeze({
   authRefresh: "/api/auth/refresh",
   authSession: "/api/auth/session",
   workspaces: "/api/workspaces",
+  workspaceMembers: "/api/workspaces/members",
   workspaceInvites: "/api/workspaces/invites",
   workspaceInvitesIncoming: "/api/workspaces/invites/incoming",
   notes: "/api/notes",
+  enrichmentQueue: "/api/enrichment/queue",
   projects: "/api/projects",
   chat: "/api/chat",
   context: "/api/context",
   tasks: "/api/tasks",
   folders: "/api/folders",
   events: "/api/events",
+  activity: "/api/activity",
   tags: "/api/tags",
   stats: "/api/stats",
   export: "/api/export",
@@ -438,6 +441,12 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(API_ENDPOINTS.workspaces);
     },
 
+    async fetchWorkspaceMembers({ limit = 200 } = {}) {
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      return jsonFetch(`${API_ENDPOINTS.workspaceMembers}?${params.toString()}`);
+    },
+
     async fetchWorkspaceInvites({ status = "", limit = 100 } = {}) {
       const params = new URLSearchParams();
       if (status) params.set("status", status);
@@ -499,10 +508,30 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/related?${params.toString()}`);
     },
 
-    async fetchNotes({ query = "", project = "", limit = 80, offset = 0 } = {}) {
+    async retryNoteEnrichment(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing id");
+      return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/retry-enrichment`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    },
+
+    async fetchEnrichmentQueue({ failedLimit = 20 } = {}) {
+      const params = new URLSearchParams();
+      params.set("failedLimit", String(Math.max(1, Number(failedLimit) || 20)));
+      return jsonFetch(`${API_ENDPOINTS.enrichmentQueue}?${params.toString()}`);
+    },
+
+    async fetchNotes({ query = "", project = "", limit = 80, offset = 0, scope = "all", workingSetIds = [] } = {}) {
       const params = new URLSearchParams();
       if (query) params.set("query", query);
       if (project) params.set("project", project);
+      if (scope) params.set("scope", String(scope));
+      const normalizedWorkingSet = Array.isArray(workingSetIds)
+        ? [...new Set(workingSetIds.map((id) => String(id || "").trim()).filter(Boolean))]
+        : [];
+      normalizedWorkingSet.forEach((id) => params.append("workingSetIds", id));
       params.set("limit", String(limit));
       if (offset > 0) params.set("offset", String(offset));
       const payload = await jsonFetch(`${API_ENDPOINTS.notes}?${params.toString()}`);
@@ -693,6 +722,45 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.folders}/${encodeURIComponent(normalizedId)}/children`);
     },
 
+    async fetchFolderCollaborators(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing folder id");
+      return jsonFetch(`${API_ENDPOINTS.folders}/${encodeURIComponent(normalizedId)}/collaborators`);
+    },
+
+    async setFolderCollaborator(id, userId, role = "viewer") {
+      const normalizedId = String(id || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      if (!normalizedId || !normalizedUserId) throw new Error("Missing folder id or user id");
+      return jsonFetch(
+        `${API_ENDPOINTS.folders}/${encodeURIComponent(normalizedId)}/collaborators/${encodeURIComponent(normalizedUserId)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ role }),
+        }
+      );
+    },
+
+    async removeFolderCollaborator(id, userId) {
+      const normalizedId = String(id || "").trim();
+      const normalizedUserId = String(userId || "").trim();
+      if (!normalizedId || !normalizedUserId) throw new Error("Missing folder id or user id");
+      return jsonFetch(
+        `${API_ENDPOINTS.folders}/${encodeURIComponent(normalizedId)}/collaborators/${encodeURIComponent(normalizedUserId)}`,
+        {
+          method: "DELETE",
+        }
+      );
+    },
+
+    async fetchActivity({ folderId = "", noteId = "", limit = 60 } = {}) {
+      const params = new URLSearchParams();
+      if (folderId) params.set("folderId", String(folderId));
+      if (noteId) params.set("noteId", String(noteId));
+      if (limit) params.set("limit", String(limit));
+      return jsonFetch(`${API_ENDPOINTS.activity}?${params.toString()}`);
+    },
+
     async updateNote(id, payload) {
       const normalizedId = String(id || "").trim();
       if (!normalizedId) throw new Error("Missing id");
@@ -794,6 +862,9 @@ export function createApiClient({ adapterDebug = false } = {}) {
       });
       eventSource.addEventListener("job:error", (e) => {
         try { onEvent({ type: "job:error", ...JSON.parse(e.data) }); } catch { /* no-op */ }
+      });
+      eventSource.addEventListener("activity", (e) => {
+        try { onEvent({ type: "activity", ...JSON.parse(e.data) }); } catch { /* no-op */ }
       });
       eventSource.addEventListener("connected", () => {
         adapterLog("SSE connected");

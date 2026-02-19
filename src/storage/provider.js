@@ -34,3 +34,5 @@ export const taskRepo = defaultProvider.taskRepo;
 export const folderRepo = defaultProvider.folderRepo;
 export const authRepo = defaultProvider.authRepo;
 export const versionRepo = defaultProvider.versionRepo;
+export const enrichmentJobRepo = defaultProvider.enrichmentJobRepo;
+export const collaborationRepo = defaultProvider.collaborationRepo;

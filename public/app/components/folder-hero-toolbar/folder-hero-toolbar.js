@@ -40,6 +40,7 @@ export function renderFolderHeroToolbar({
         </nav>
         <div style="display:flex;gap:6px;align-items:center;">
           <button id="new-folder-btn" class="folder-subfolder-btn" type="button">+ Folder</button>
+          <button id="share-folder-btn" class="folder-subfolder-btn" type="button">Share</button>
           <div class="folder-edit-wrap" style="position:relative;">
             <button id="edit-folder-btn" class="folder-subfolder-btn" type="button">Edit</button>
             <div id="edit-folder-menu" class="folder-edit-menu hidden">

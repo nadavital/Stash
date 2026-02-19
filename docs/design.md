@@ -202,8 +202,10 @@ All component JS files live under `public/app/components/`. All component CSS fi
 | Home Recent List | `components/home-recent-list/home-recent-list.js` | `components/home-recent-list.css` | `.recent-*` |
 | Folder Hero Toolbar | `components/folder-hero-toolbar/folder-hero-toolbar.js` | `components/folder-hero-toolbar.css` | `.folder-hero-*` |
 | Folder Item Grid | `components/folder-item-grid/folder-item-grid.js` | `components/folder-item-grid.css` | `.folder-file-*` |
+| Activity Feed | `components/activity-feed/activity-feed.js` | `components/activity-feed.css` | `.activity-feed-*` |
 | Item Modal | `components/item-modal/item-modal.js` | `components/item-modal.css` | `.item-modal-*` |
 | Folder Modal | `components/folder-modal/folder-modal.js` | `components/folder-modal.css` | `.folder-modal-*` |
+| Folder Share Modal | `components/folder-share-modal/folder-share-modal.js` | `components/folder-share-modal.css` | `.folder-share-*` |
 | Move Modal | `components/move-modal/move-modal.js` | `components/move-modal.css` | `.move-modal-*` |
 | Action Menu | `components/action-menu/action-menu.js` | `components/action-menu.css` | `.action-menu-*` |
 | Inline Search | `components/inline-search/inline-search.js` | `components/inline-search.css` | `.inline-search-*` |

@@ -1,8 +1,17 @@
 import {
+  addMemoryComment,
+  createMemory,
   deleteMemory,
   deleteProjectMemories,
+  getEnrichmentQueueStats,
+  getMemoryRawContent,
+  listMemoryVersions,
   readExtractedMarkdownMemory,
+  retryMemoryEnrichment,
+  restoreMemoryVersion,
   searchNotesBm25,
+  updateMemory,
+  updateMemoryExtractedContent,
 } from "../src/memoryService.js";
 import { taskRepo } from "../src/storage/provider.js";
 import { closePostgresPool } from "../src/postgres/pool.js";
@@ -30,10 +39,74 @@ async function run() {
     const actor = await buildActorFromToolArgs(args);
     let result;
     switch (toolName) {
+      case "create_note":
+        result = await createMemory({
+          content: String(args.content || ""),
+          sourceType: String(args.sourceType || "text"),
+          sourceUrl: String(args.sourceUrl || ""),
+          imageDataUrl: String(args.imageDataUrl || "").trim() || null,
+          fileDataUrl: String(args.fileDataUrl || "").trim() || null,
+          fileName: String(args.fileName || ""),
+          fileMimeType: String(args.fileMimeType || ""),
+          project: String(args.project || ""),
+          metadata: { createdFrom: "openclaw-tool", actorUserId: actor.userId },
+          actor,
+        });
+        break;
+      case "get_note_raw_content":
+        result = await getMemoryRawContent({
+          id: String(args.id || ""),
+          includeMarkdown: args.includeMarkdown !== false,
+          maxChars: Number(args.maxChars || 12000),
+          actor,
+        });
+        break;
+      case "update_note":
+        result = await updateMemory({
+          id: String(args.id || ""),
+          content: args.content,
+          summary: args.summary,
+          tags: Array.isArray(args.tags) ? args.tags.map((tag) => String(tag || "").trim()).filter(Boolean) : undefined,
+          project: args.project,
+          actor,
+        });
+        break;
+      case "update_note_markdown":
+        result = await updateMemoryExtractedContent({
+          id: String(args.id || ""),
+          content: args.content,
+          rawContent: args.rawContent,
+          markdownContent: args.markdownContent,
+          requeueEnrichment: args.requeueEnrichment !== false,
+          actor,
+        });
+        break;
+      case "add_note_comment":
+        result = await addMemoryComment({
+          id: String(args.id || ""),
+          text: String(args.text || ""),
+          actor,
+        });
+        break;
+      case "list_note_versions":
+        result = await listMemoryVersions({
+          id: String(args.id || ""),
+          actor,
+        });
+        break;
+      case "restore_note_version":
+        result = await restoreMemoryVersion({
+          id: String(args.id || ""),
+          versionNumber: Number(args.versionNumber || 0),
+          actor,
+        });
+        break;
       case "search_notes":
         result = await searchNotesBm25({
           query: String(args.query || ""),
           project: String(args.project || ""),
+          scope: String(args.scope || "all"),
+          workingSetIds: args.workingSetIds,
           includeMarkdown: args.includeMarkdown === true,
           limit: Number(args.limit || 8),
           actor,
@@ -62,6 +135,18 @@ async function run() {
         result = await deleteProjectMemories({
           project: String(args.project || ""),
           actor,
+        });
+        break;
+      case "retry_note_enrichment":
+        result = await retryMemoryEnrichment({
+          id: String(args.id || ""),
+          actor,
+        });
+        break;
+      case "get_enrichment_queue":
+        result = await getEnrichmentQueueStats({
+          actor,
+          failedLimit: Number(args.failedLimit || 20),
         });
         break;
       default:

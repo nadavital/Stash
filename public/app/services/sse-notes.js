@@ -7,9 +7,10 @@
  * @param {(next: Array) => void} opts.setNotes – replaces notes + triggers render
  * @param {() => boolean} opts.isMounted
  * @param {(note: object) => boolean} [opts.shouldAccept] – optional filter for job:complete
+ * @param {(event: object) => void} [opts.onEvent] – optional passthrough for non-enrichment events
  * @returns {() => void} unsubscribe function
  */
-export function subscribeNoteEnrichment({ apiClient, getNotes, setNotes, isMounted, shouldAccept }) {
+export function subscribeNoteEnrichment({ apiClient, getNotes, setNotes, isMounted, shouldAccept, onEvent }) {
   function updateNoteById(noteId, patchFn) {
     const normalizedId = String(noteId || "").trim();
     if (!normalizedId) return false;
@@ -35,6 +36,7 @@ export function subscribeNoteEnrichment({ apiClient, getNotes, setNotes, isMount
 
   const unsubscribe = apiClient.subscribeToEvents?.((event) => {
     if (!isMounted()) return;
+    if (typeof onEvent === "function") onEvent(event);
 
     if (event.type === "job:start" && event.id) {
       const changed = updateNoteById(event.id, (noteObj) => ({ ...noteObj, status: "enriching" }));

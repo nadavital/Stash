@@ -19,6 +19,12 @@ export function renderChatPanelHTML() {
       <div id="chat-context-header" class="chat-context-chip hidden"></div>
       <form id="chat-panel-form" class="chat-panel-form">
         <div class="chat-panel-input-wrap">
+          <button id="chat-panel-attach-btn" class="chat-panel-attach" type="button" aria-label="Attach file">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 8.67l-5.15 5.15a3.5 3.5 0 0 1-4.95-4.95L9.05 3.72a2.33 2.33 0 0 1 3.3 3.3L7.2 12.17a1.17 1.17 0 0 1-1.65-1.65L10.7 5.37"/>
+            </svg>
+          </button>
+          <input id="chat-panel-file-input" type="file" class="hidden" />
           <textarea id="chat-panel-input" class="chat-panel-input" rows="2" placeholder="Save a link, create a note, ask anything..." autocomplete="off"></textarea>
           <button id="chat-panel-send" class="chat-panel-send" type="submit" aria-label="Send">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -26,6 +32,10 @@ export function renderChatPanelHTML() {
               <polyline points="3 7 8 2 13 7"/>
             </svg>
           </button>
+        </div>
+        <div id="chat-panel-attachment" class="chat-panel-attachment hidden">
+          <span id="chat-panel-attachment-name" class="chat-panel-attachment-name"></span>
+          <button id="chat-panel-attachment-clear" class="chat-panel-attachment-clear" type="button" aria-label="Remove attachment">&times;</button>
         </div>
       </form>
     </div>
@@ -42,6 +52,11 @@ export function queryChatPanelEls(root) {
     chatPanelForm: root.querySelector("#chat-panel-form"),
     chatPanelInput: root.querySelector("#chat-panel-input"),
     chatPanelSend: root.querySelector("#chat-panel-send"),
+    chatPanelAttachBtn: root.querySelector("#chat-panel-attach-btn"),
+    chatPanelFileInput: root.querySelector("#chat-panel-file-input"),
+    chatPanelAttachment: root.querySelector("#chat-panel-attachment"),
+    chatPanelAttachmentName: root.querySelector("#chat-panel-attachment-name"),
+    chatPanelAttachmentClear: root.querySelector("#chat-panel-attachment-clear"),
     chatChips: root.querySelectorAll(".chat-chip"),
   };
 }
@@ -51,6 +66,42 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
   let isAsking = false;
   let nextProjectHint = "";
   let lastContextLabel = "";
+  let pendingAttachment = {
+    fileDataUrl: null,
+    fileName: "",
+    fileMimeType: "",
+    isImage: false,
+  };
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error || new Error("File read failed"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function refreshAttachmentUI() {
+    const hasAttachment = Boolean(pendingAttachment.fileDataUrl);
+    els.chatPanelAttachment?.classList.toggle("hidden", !hasAttachment);
+    if (els.chatPanelAttachmentName) {
+      els.chatPanelAttachmentName.textContent = hasAttachment ? pendingAttachment.fileName || "Attachment" : "";
+    }
+  }
+
+  function clearAttachment() {
+    pendingAttachment = {
+      fileDataUrl: null,
+      fileName: "",
+      fileMimeType: "",
+      isImage: false,
+    };
+    if (els.chatPanelFileInput) {
+      els.chatPanelFileInput.value = "";
+    }
+    refreshAttachmentUI();
+  }
 
   function updateContextHeader() {
     if (!els.chatContextHeader || !store) return;
@@ -235,10 +286,40 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     return lines.filter(Boolean).join("\n");
   }
 
-  async function askQuestion(rawQuestion, { projectHint = "" } = {}) {
+  function buildScopePayload(ctx, contextNoteId = "", project = "") {
+    const state = store ? store.getState() : {};
+    const recentAccessedIds = Array.isArray(state?.accessedIds)
+      ? state.accessedIds.slice(-20).map((id) => String(id || "").trim()).filter(Boolean)
+      : [];
+    const mergedWorkingSet = [...new Set([String(contextNoteId || "").trim(), ...recentAccessedIds])]
+      .filter(Boolean)
+      .slice(0, 20);
+
+    if (ctx?.type === "item" && contextNoteId) {
+      return {
+        scope: "item",
+        workingSetIds: mergedWorkingSet.length ? mergedWorkingSet : [contextNoteId],
+      };
+    }
+
+    if (ctx?.type === "folder" && project) {
+      return {
+        scope: "project",
+        workingSetIds: mergedWorkingSet,
+      };
+    }
+
+    return {
+      scope: "all",
+      workingSetIds: mergedWorkingSet,
+    };
+  }
+
+  async function askQuestion(rawQuestion, { projectHint = "", attachment = null } = {}) {
     if (isAsking) return false;
     const question = String(rawQuestion || "").trim();
-    if (!question) return false;
+    const hasAttachment = Boolean(attachment?.fileDataUrl);
+    if (!question && !hasAttachment) return false;
 
     // Read context from store
     const ctx = store ? (store.getState().chatContext || { type: "home" }) : { type: "home" };
@@ -253,15 +334,20 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     } else if (ctx.type === "folder" && ctx.folderId && !project) {
       project = ctx.folderId;
     }
+    const scopePayload = buildScopePayload(ctx, contextNoteId, project);
 
     nextProjectHint = "";
 
-    addMessage("user", question);
-    pushToStore("user", question);
+    const userLine = hasAttachment
+      ? `${question || "Save this attachment"}\n[attachment: ${attachment.fileName || "file"}]`
+      : question;
+    addMessage("user", userLine);
+    pushToStore("user", userLine);
     if (els.chatPanelInput) {
       els.chatPanelInput.value = "";
       els.chatPanelInput.style.height = "";
     }
+    clearAttachment();
     if (els.chatPanelCitations) {
       els.chatPanelCitations.classList.add("hidden");
       els.chatPanelCitations.innerHTML = "";
@@ -285,7 +371,18 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
     try {
       await apiClient.askStreaming(
-        { question, project: project || undefined, contextNoteId: contextNoteId || undefined },
+        {
+          question: question || "Save this attachment to Stash.",
+          project: project || undefined,
+          contextNoteId: contextNoteId || undefined,
+          scope: scopePayload.scope,
+          workingSetIds: scopePayload.workingSetIds,
+          captureIntent: hasAttachment ? "save" : "",
+          imageDataUrl: hasAttachment && attachment.isImage ? attachment.fileDataUrl : undefined,
+          fileDataUrl: hasAttachment ? attachment.fileDataUrl : undefined,
+          fileName: hasAttachment ? attachment.fileName : undefined,
+          fileMimeType: hasAttachment ? attachment.fileMimeType : undefined,
+        },
         {
           onCitations(citations) {
             renderCitations(citations);
@@ -302,7 +399,18 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
           },
           onToolCall(name) {
             removeTyping();
-            const statusMap = { create_note: "Saving...", create_folder: "Creating folder...", search_notes: "Searching..." };
+            const statusMap = {
+              create_note: "Saving...",
+              create_folder: "Creating folder...",
+              search_notes: "Searching...",
+              get_note_raw_content: "Loading note content...",
+              update_note: "Updating note...",
+              update_note_markdown: "Updating markdown...",
+              add_note_comment: "Adding comment...",
+              list_note_versions: "Loading versions...",
+              restore_note_version: "Restoring version...",
+              retry_note_enrichment: "Retrying enrichment...",
+            };
             const statusEl = document.createElement("span");
             statusEl.className = "chat-tool-status";
             statusEl.textContent = statusMap[name] || "Working...";
@@ -314,7 +422,16 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
           onToolResult(name) {
             const statusEl = assistantMsg?.querySelector(".chat-tool-status");
             if (statusEl) statusEl.remove();
-            if ((name === "create_note" || name === "create_folder") && typeof onWorkspaceAction === "function") {
+            if (
+              (name === "create_note" ||
+                name === "create_folder" ||
+                name === "update_note" ||
+                name === "update_note_markdown" ||
+                name === "add_note_comment" ||
+                name === "restore_note_version" ||
+                name === "retry_note_enrichment") &&
+              typeof onWorkspaceAction === "function"
+            ) {
               onWorkspaceAction(name);
             }
           },
@@ -329,14 +446,14 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
           },
           onError() {
             removeTyping();
-            fallbackAsk(question, assistantMsg, project);
+            fallbackAsk(question || "Save this attachment to Stash.", assistantMsg, project, contextNoteId, scopePayload, attachment);
           },
         }
       );
       return true;
     } catch {
       removeTyping();
-      await fallbackAsk(question, assistantMsg, project);
+      await fallbackAsk(question || "Save this attachment to Stash.", assistantMsg, project, contextNoteId, scopePayload, attachment);
       return true;
     } finally {
       isAsking = false;
@@ -345,13 +462,26 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
   async function handleSubmit() {
     const question = (els.chatPanelInput?.value || "").trim();
-    if (!question) return;
-    await askQuestion(question);
+    const attachment = pendingAttachment.fileDataUrl ? { ...pendingAttachment } : null;
+    if (!question && !attachment) return;
+    await askQuestion(question, { attachment });
   }
 
-  async function fallbackAsk(question, msgEl, projectHint = "") {
+  async function fallbackAsk(question, msgEl, projectHint = "", contextNoteId = "", scopePayload = null, attachment = null) {
     try {
-      const result = await apiClient.ask({ question, project: projectHint || undefined });
+      const hasAttachment = Boolean(attachment?.fileDataUrl);
+      const result = await apiClient.ask({
+        question,
+        project: projectHint || undefined,
+        contextNoteId: contextNoteId || undefined,
+        scope: scopePayload?.scope || "all",
+        workingSetIds: Array.isArray(scopePayload?.workingSetIds) ? scopePayload.workingSetIds : [],
+        captureIntent: hasAttachment ? "save" : "",
+        imageDataUrl: hasAttachment && attachment.isImage ? attachment.fileDataUrl : undefined,
+        fileDataUrl: hasAttachment ? attachment.fileDataUrl : undefined,
+        fileName: hasAttachment ? attachment.fileName : undefined,
+        fileMimeType: hasAttachment ? attachment.fileMimeType : undefined,
+      });
       if (msgEl) msgEl.textContent = result.text || "No answer.";
       updateLastAssistantInStore(msgEl?.textContent || "");
       if (result.citations) {
@@ -385,6 +515,31 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     handleSubmit();
   });
 
+  addHandler(els.chatPanelAttachBtn, "click", () => {
+    els.chatPanelFileInput?.click();
+  });
+
+  addHandler(els.chatPanelAttachmentClear, "click", () => {
+    clearAttachment();
+  });
+
+  addHandler(els.chatPanelFileInput, "change", async () => {
+    const file = els.chatPanelFileInput?.files?.[0];
+    if (!file) return;
+    try {
+      const fileDataUrl = await fileToDataUrl(file);
+      pendingAttachment = {
+        fileDataUrl,
+        fileName: String(file.name || "attachment"),
+        fileMimeType: String(file.type || ""),
+        isImage: String(file.type || "").toLowerCase().startsWith("image/"),
+      };
+      refreshAttachmentUI();
+    } catch {
+      clearAttachment();
+    }
+  });
+
   // Wire suggestion chip clicks
   if (els.chatChips) {
     const chipPrompts = {
@@ -407,6 +562,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
   }
 
   rebuildFromStore();
+  refreshAttachmentUI();
 
   return {
     askQuestion,

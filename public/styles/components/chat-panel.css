@@ -246,6 +246,26 @@
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
 }
 
+.chat-panel-attach {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-bottom: 3px;
+}
+
+.chat-panel-attach:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
+}
+
 .chat-panel-input {
   flex: 1;
   border: 0;
@@ -294,6 +314,50 @@
 
 .chat-panel-send:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.chat-panel-attachment {
+  margin-top: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface-strong) 75%, transparent);
+  color: var(--ink-secondary);
+}
+
+.chat-panel-attachment.hidden {
+  display: none;
+}
+
+.chat-panel-attachment-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+}
+
+.chat-panel-attachment-clear {
+  border: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-panel-attachment-clear:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
 }
 
 /* ── Scrollbar ─────────────────────────────────────────── */

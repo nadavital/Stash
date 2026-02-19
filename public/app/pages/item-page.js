@@ -230,7 +230,35 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       sourceLinkBtn.textContent = "Open link";
       sourceLinkBtn.style.display = "none";
 
-      actionsBar.append(editBtn, moveBtn, deleteBtn, sourceLinkBtn);
+      const retryBtn = document.createElement("button");
+      retryBtn.type = "button";
+      retryBtn.className = "folder-subfolder-btn";
+      retryBtn.textContent = "Retry AI";
+      retryBtn.style.display = "none";
+      retryBtn.addEventListener("click", async () => {
+        if (!note) return;
+        const original = retryBtn.textContent;
+        retryBtn.disabled = true;
+        retryBtn.textContent = "Retrying...";
+        try {
+          const result = await apiClient.retryNoteEnrichment(note.id);
+          if (!isMounted) return;
+          if (result?.note) {
+            note = { ...note, ...result.note };
+          } else {
+            note.status = "pending";
+          }
+          toast("Enrichment retry queued");
+          renderNote();
+        } catch (err) {
+          toast(conciseTechnicalError(err, "Retry failed"), "error");
+        } finally {
+          retryBtn.disabled = false;
+          retryBtn.textContent = original;
+        }
+      });
+
+      actionsBar.append(editBtn, moveBtn, retryBtn, deleteBtn, sourceLinkBtn);
 
       function updateSourceLink() {
         const url = String(note?.sourceUrl || "").trim();
@@ -240,6 +268,8 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         } else {
           sourceLinkBtn.style.display = "none";
         }
+        const status = String(note?.status || "").toLowerCase();
+        retryBtn.style.display = status === "failed" ? "" : "none";
       }
 
       function renderNote() {

@@ -140,10 +140,14 @@ class PostgresNoteRepository {
     project,
     embedding,
     metadata,
+    rawContent,
+    markdownContent,
     updatedAt,
     workspaceId = config.defaultWorkspaceId,
   }) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
+    const hasRawContent = rawContent !== undefined;
+    const hasMarkdownContent = markdownContent !== undefined;
     await this._query(
       `
         UPDATE notes
@@ -153,8 +157,10 @@ class PostgresNoteRepository {
           project = $3,
           embedding_json = $4::jsonb,
           metadata_json = $5::jsonb,
-          updated_at = $6::timestamptz
-        WHERE id = $7 AND workspace_id = $8
+          raw_content = CASE WHEN $6::boolean THEN $7::text ELSE raw_content END,
+          markdown_content = CASE WHEN $8::boolean THEN $9::text ELSE markdown_content END,
+          updated_at = $10::timestamptz
+        WHERE id = $11 AND workspace_id = $12
       `,
       [
         summary || "",
@@ -162,6 +168,14 @@ class PostgresNoteRepository {
         project || null,
         embedding ? JSON.stringify(embedding) : null,
         JSON.stringify(metadata || {}),
+        hasRawContent,
+        hasRawContent
+          ? (rawContent === null ? null : String(rawContent))
+          : null,
+        hasMarkdownContent,
+        hasMarkdownContent
+          ? (markdownContent === null ? null : String(markdownContent))
+          : null,
         updatedAt || nowIso(),
         String(id || "").trim(),
         normalizedWorkspaceId,
@@ -222,7 +236,7 @@ class PostgresNoteRepository {
     const result = await this._query(
       `
         SELECT * FROM notes
-        WHERE workspace_id = $1 AND ($2::text IS NULL OR project = $2)
+        WHERE workspace_id = $1 AND ($2::text IS NULL OR LOWER(COALESCE(project, '')) = LOWER($2))
         ORDER BY created_at DESC, id DESC
         LIMIT $3 OFFSET $4
       `,
@@ -242,7 +256,7 @@ class PostgresNoteRepository {
         SELECT * FROM notes
         WHERE workspace_id = $1
           AND owner_user_id = $2
-          AND ($3::text IS NULL OR project = $3)
+          AND ($3::text IS NULL OR LOWER(COALESCE(project, '')) = LOWER($3))
         ORDER BY created_at DESC, id DESC
         LIMIT $4 OFFSET $5
       `,
@@ -258,7 +272,7 @@ class PostgresNoteRepository {
       `
         SELECT COUNT(*)::int AS cnt
         FROM notes
-        WHERE workspace_id = $1 AND ($2::text IS NULL OR project = $2)
+        WHERE workspace_id = $1 AND ($2::text IS NULL OR LOWER(COALESCE(project, '')) = LOWER($2))
       `,
       [normalizedWorkspaceId, normalizedProject]
     );
@@ -272,7 +286,7 @@ class PostgresNoteRepository {
     const result = await this._query(
       `
         SELECT * FROM notes
-        WHERE workspace_id = $1 AND project = $2
+        WHERE workspace_id = $1 AND LOWER(COALESCE(project, '')) = LOWER($2)
         ORDER BY created_at DESC, id DESC
       `,
       [normalizedWorkspaceId, normalizedProject]
@@ -293,7 +307,7 @@ class PostgresNoteRepository {
       `
         SELECT * FROM notes
         WHERE workspace_id = $1
-          AND ($2::text IS NULL OR project = $2)
+          AND ($2::text IS NULL OR LOWER(COALESCE(project, '')) = LOWER($2))
           AND (
             content ILIKE $3 OR
             COALESCE(summary, '') ILIKE $3 OR
@@ -373,6 +387,58 @@ class PostgresNoteRepository {
         JSON.stringify(tags || []),
         project || null,
         nowIso(),
+        String(id || "").trim(),
+        normalizedWorkspaceId,
+      ]
+    );
+    return this.getNoteById(id, normalizedWorkspaceId);
+  }
+
+  async updateAttachment({
+    id,
+    content,
+    sourceType,
+    sourceUrl,
+    imagePath,
+    fileName,
+    fileMime,
+    fileSize,
+    rawContent,
+    markdownContent,
+    metadata,
+    updatedAt,
+    workspaceId = config.defaultWorkspaceId,
+  }) {
+    const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
+    await this._query(
+      `
+        UPDATE notes
+        SET
+          content = $1,
+          source_type = $2,
+          source_url = $3,
+          image_path = $4,
+          file_name = $5,
+          file_mime = $6,
+          file_size = $7,
+          raw_content = $8,
+          markdown_content = $9,
+          metadata_json = $10::jsonb,
+          updated_at = $11::timestamptz
+        WHERE id = $12 AND workspace_id = $13
+      `,
+      [
+        String(content || ""),
+        String(sourceType || "text"),
+        sourceUrl || null,
+        imagePath || null,
+        fileName || null,
+        fileMime || null,
+        fileSize === undefined || fileSize === null ? null : Number(fileSize),
+        rawContent === undefined ? null : rawContent,
+        markdownContent === undefined ? null : markdownContent,
+        JSON.stringify(metadata || {}),
+        updatedAt || nowIso(),
         String(id || "").trim(),
         normalizedWorkspaceId,
       ]
@@ -613,10 +679,10 @@ class PostgresNoteRepository {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     const normalizedProject = String(project || "").trim();
     if (!normalizedProject) return 0;
-    const result = await this._query(`DELETE FROM notes WHERE workspace_id = $1 AND project = $2`, [
-      normalizedWorkspaceId,
-      normalizedProject,
-    ]);
+    const result = await this._query(
+      `DELETE FROM notes WHERE workspace_id = $1 AND LOWER(COALESCE(project, '')) = LOWER($2)`,
+      [normalizedWorkspaceId, normalizedProject]
+    );
     return Number(result.rowCount || 0);
   }
 }

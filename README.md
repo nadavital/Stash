@@ -27,11 +27,12 @@ AI-powered personal memory with:
 1. Create `.env` from `.env.example`.
 2. Configure Postgres:
    - `DB_PROVIDER=postgres`
-   - `DATABASE_URL=postgres://...`
+   - `DATABASE_URL=postgres://...` (or `NEON_DATABASE_URL=postgres://...`)
 3. Set `OPENAI_API_KEY` (optional).
 4. Choose auth mode:
    - Local auth (default): `AUTH_PROVIDER=local`
    - Firebase auth: `AUTH_PROVIDER=firebase` plus Firebase env vars (below)
+   - Neon auth: `AUTH_PROVIDER=neon` plus Neon auth env vars (below)
 5. Apply schema migrations:
 
 ```bash
@@ -59,6 +60,34 @@ npm run db:migrate:pg
 npm run db:verify:pg
 ```
 
+## Neon setup (recommended)
+
+1. Create a Neon project and copy the Postgres connection string.
+2. Set env vars:
+
+```bash
+export DB_PROVIDER=postgres
+export NEON_DATABASE_URL='postgres://user:pass@ep-xxxx.us-east-1.aws.neon.tech/neondb?sslmode=require'
+```
+
+3. Run setup (migrate + verify):
+
+```bash
+npm run db:setup:neon
+```
+
+For cloud Postgres (Neon/Supabase/RDS/Render, etc), set `DATABASE_URL` from your provider and enable SSL:
+
+```bash
+export DB_PROVIDER=postgres
+export DATABASE_URL='postgres://user:pass@host:5432/dbname'
+export PG_SSL_MODE=require
+# Optional: pin CA bundle for strict verification
+# export PG_SSL_CA_PATH='/absolute/path/to/ca.pem'
+npm run db:migrate:pg
+npm run db:verify:pg
+```
+
 ## Auth configuration
 
 ### Local mode (default)
@@ -79,6 +108,24 @@ FIREBASE_SERVICE_ACCOUNT_PATH=/absolute/path/to/service-account.json
 
 `FIREBASE_SERVICE_ACCOUNT_JSON` can be used instead of `FIREBASE_SERVICE_ACCOUNT_PATH`.
 With `AUTH_REQUIRE_EMAIL_VERIFICATION=true`, unverified users can sign in but cannot access app data until verified.
+
+### Neon mode
+
+Set these in `.env`:
+
+```bash
+AUTH_PROVIDER=neon
+AUTH_REQUIRE_EMAIL_VERIFICATION=true
+NEON_AUTH_BASE_URL=https://your-neon-auth-domain
+# optional, defaults to NEON_AUTH_BASE_URL
+# NEON_AUTH_ISSUER=https://your-neon-auth-domain
+# NEON_AUTH_AUDIENCE=https://your-neon-auth-domain
+```
+
+In Neon mode, this backend verifies bearer JWTs via JWKS at
+`$NEON_AUTH_BASE_URL/.well-known/jwks.json`.
+Email/password routes (`/api/auth/login`, `/api/auth/signup`, `/api/auth/password-reset`) proxy to Neon Auth.
+`/api/auth/refresh` remains Firebase-only.
 
 ## Auth (API)
 
@@ -137,12 +184,21 @@ npm run start:mcp
 
 Canonical tools:
 
+- `create_note` (text/link/image/file capture)
+- `get_note_raw_content`
+- `update_note`
+- `update_note_markdown` (edits extracted raw/markdown content)
+- `add_note_comment`
+- `list_note_versions`
+- `restore_note_version`
 - `search_notes` (BM25 ranking)
 - `get_tasks`
 - `obtain_consolidated_memory_file`
 - `complete_task`
 - `delete_note`
 - `delete_project`
+- `retry_note_enrichment`
+- `get_enrichment_queue`
 
 Example Codex MCP config snippet:
 
@@ -179,7 +235,7 @@ Manifest is at `openclaw/tools.manifest.json`.
 - `GET /api/health`
 - `POST /api/auth/signup` (body: `email`, optional `name`, `password`)
 - `POST /api/auth/login` (body: `email`, `password`)
-- `POST /api/auth/password-reset` (body: `email`)
+- `POST /api/auth/password-reset` (body: `email`, Firebase or Neon mode)
 - `POST /api/auth/email-verification/send` (Firebase mode, requires auth)
 - `POST /api/auth/password-change` (body: `currentPassword`, `newPassword`; `currentPassword` required for local mode)
 - `POST /api/auth/signout-all`

@@ -2,8 +2,17 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config, publicUploadPath } from "./config.js";
-import { noteRepo, versionRepo } from "./storage/provider.js";
+import {
+  noteRepo,
+  versionRepo,
+  enrichmentJobRepo,
+  folderRepo,
+  authRepo,
+  collaborationRepo,
+} from "./storage/provider.js";
 import { enrichmentQueue } from "./queue.js";
+import { logger } from "./logger.js";
+import { publishActivity } from "./activityBus.js";
 import {
   convertUploadToMarkdown,
   createEmbedding,
@@ -54,6 +63,12 @@ class EmbeddingCache {
 const embeddingCache = new EmbeddingCache();
 
 const SOURCE_TYPES = new Set(["text", "link", "image", "file"]);
+const MEMORY_SCOPES = new Set(["all", "workspace", "user", "project", "item"]);
+const FOLDER_ROLE_RANK = Object.freeze({
+  viewer: 1,
+  editor: 2,
+  manager: 3,
+});
 const CONSOLIDATED_SECTIONS = [
   "Projects & Work",
   "People & Relationships",
@@ -95,7 +110,13 @@ function resolveActor(actor = null, { allowServiceActor = false } = {}) {
   const role = String(actor?.role || "member")
     .trim()
     .toLowerCase();
-  return { workspaceId, userId: userId || null, role };
+  return {
+    workspaceId,
+    userId: userId || null,
+    role,
+    userName: String(actor?.userName || actor?.name || "").trim(),
+    userEmail: String(actor?.userEmail || actor?.email || "").trim(),
+  };
 }
 
 function authorizationError(message = "Forbidden") {
@@ -119,30 +140,83 @@ function noteOwnerId(note = null) {
   return metadataActor;
 }
 
-function canReadNote(note, actorContext = null) {
+function normalizeFolderMemberRole(role = "viewer") {
+  const normalized = String(role || "").trim().toLowerCase();
+  return Object.hasOwn(FOLDER_ROLE_RANK, normalized) ? normalized : "";
+}
+
+function roleAtLeast(role = "", minimumRole = "viewer") {
+  return Number(FOLDER_ROLE_RANK[normalizeFolderMemberRole(role)] || 0) >= Number(FOLDER_ROLE_RANK[minimumRole] || 0);
+}
+
+async function buildFolderAccessContext(actorContext = null) {
+  const fallback = { roleByProjectName: new Map(), roleByFolderId: new Map() };
+  if (!actorContext || isWorkspaceManager(actorContext)) return fallback;
+  const userId = String(actorContext.userId || "").trim();
+  if (!userId) return fallback;
+
+  const [memberships, folders] = await Promise.all([
+    collaborationRepo.listFolderMembershipsForUser({
+      workspaceId: actorContext.workspaceId,
+      userId,
+    }),
+    folderRepo.listAllFolders(actorContext.workspaceId),
+  ]);
+
+  const roleByFolderId = new Map();
+  for (const membership of memberships || []) {
+    const folderId = String(membership?.folderId || "").trim();
+    if (!folderId) continue;
+    roleByFolderId.set(folderId, normalizeFolderMemberRole(membership.role || "viewer"));
+  }
+
+  const roleByProjectName = new Map();
+  for (const folder of folders || []) {
+    const folderId = String(folder?.id || "").trim();
+    const role = roleByFolderId.get(folderId);
+    if (!role) continue;
+    const folderName = String(folder?.name || "").trim().toLowerCase();
+    if (!folderName) continue;
+    roleByProjectName.set(folderName, role);
+  }
+
+  return { roleByProjectName, roleByFolderId };
+}
+
+function folderRoleForNote(note = null, accessContext = null) {
+  const projectName = String(note?.project || "").trim().toLowerCase();
+  if (!projectName || !accessContext?.roleByProjectName) return "";
+  return normalizeFolderMemberRole(accessContext.roleByProjectName.get(projectName) || "");
+}
+
+function canReadNote(note, actorContext = null, accessContext = null) {
   if (!note || !actorContext) return false;
   if (isWorkspaceManager(actorContext)) return true;
   const userId = String(actorContext.userId || "").trim();
   if (!userId) return false;
-  return noteOwnerId(note) === userId;
+  if (noteOwnerId(note) === userId) return true;
+  return roleAtLeast(folderRoleForNote(note, accessContext), "viewer");
 }
 
-function assertCanReadNote(note, actorContext = null) {
-  if (!canReadNote(note, actorContext)) {
+async function assertCanReadNote(note, actorContext = null, accessContext = null) {
+  const resolvedAccessContext = accessContext || (await buildFolderAccessContext(actorContext));
+  if (!canReadNote(note, actorContext, resolvedAccessContext)) {
     throw authorizationError("Forbidden: you do not have permission to access this item");
   }
 }
 
-function canMutateNote(note, actorContext = null) {
+function canMutateNote(note, actorContext = null, accessContext = null) {
   if (!note || !actorContext) return false;
   if (isWorkspaceManager(actorContext)) return true;
   const userId = String(actorContext.userId || "").trim();
   if (!userId) return false;
-  return noteOwnerId(note) === userId;
+  if (noteOwnerId(note) === userId) return true;
+  return roleAtLeast(folderRoleForNote(note, accessContext), "editor");
 }
 
-function assertCanMutateNote(note, actorContext = null) {
-  if (!canMutateNote(note, actorContext)) {
+async function assertCanMutateNote(note, actorContext = null, accessContext = null) {
+  const resolvedAccessContext = accessContext || (await buildFolderAccessContext(actorContext));
+  if (!canMutateNote(note, actorContext, resolvedAccessContext)) {
     throw authorizationError("Forbidden: you do not have permission to modify this item");
   }
 }
@@ -153,16 +227,268 @@ function assertWorkspaceManager(actorContext = null) {
   }
 }
 
+async function resolveFolderByIdOrName(rawFolderId = "", workspaceId = config.defaultWorkspaceId) {
+  const normalized = String(rawFolderId || "").trim();
+  if (!normalized) throw new Error("Missing folder id");
+  let folder = await folderRepo.getFolder(normalized, workspaceId);
+  if (!folder) {
+    folder = await folderRepo.getFolderByName(normalized, workspaceId);
+  }
+  if (!folder && typeof folderRepo.getFolderByNameInsensitive === "function") {
+    folder = await folderRepo.getFolderByNameInsensitive(normalized, workspaceId);
+  }
+  return folder || null;
+}
+
+async function resolveCanonicalProjectName(project = "", workspaceId = config.defaultWorkspaceId) {
+  const normalizedProject = String(project || "").trim();
+  if (!normalizedProject) return "";
+
+  const byId = await folderRepo.getFolder(normalizedProject, workspaceId);
+  if (byId?.name) return String(byId.name).trim() || normalizedProject;
+
+  const byName = await folderRepo.getFolderByName(normalizedProject, workspaceId);
+  if (byName?.name) return String(byName.name).trim() || normalizedProject;
+
+  if (typeof folderRepo.getFolderByNameInsensitive === "function") {
+    const byNameInsensitive = await folderRepo.getFolderByNameInsensitive(normalizedProject, workspaceId);
+    if (byNameInsensitive?.name) return String(byNameInsensitive.name).trim() || normalizedProject;
+  }
+
+  return normalizedProject;
+}
+
+function actorDisplayName(actorContext = null) {
+  const fallback = String(actorContext?.userId || "").trim();
+  return String(actorContext?.userName || actorContext?.name || "").trim() || fallback || "Unknown user";
+}
+
+async function getActorFolderRole(folder, actorContext = null, accessContext = null) {
+  if (!folder || !actorContext) return "";
+  if (isWorkspaceManager(actorContext)) return "manager";
+  const actorUserId = String(actorContext.userId || "").trim();
+  if (!actorUserId) return "";
+  const folderId = String(folder.id || "").trim();
+  if (!folderId) return "";
+
+  if (accessContext?.roleByFolderId?.has(folderId)) {
+    return normalizeFolderMemberRole(accessContext.roleByFolderId.get(folderId) || "");
+  }
+  const role = await collaborationRepo.getFolderMemberRole({
+    workspaceId: actorContext.workspaceId,
+    folderId,
+    userId: actorUserId,
+  });
+  return normalizeFolderMemberRole(role || "");
+}
+
+async function assertCanViewFolder(folder, actorContext = null, accessContext = null) {
+  if (!folder) throw authorizationError("Folder not found");
+  if (isWorkspaceManager(actorContext)) return;
+  const role = await getActorFolderRole(folder, actorContext, accessContext);
+  if (!roleAtLeast(role, "viewer")) {
+    throw authorizationError("Forbidden: you do not have permission to access this folder");
+  }
+}
+
+async function assertCanManageFolder(folder, actorContext = null, accessContext = null) {
+  if (!folder) throw authorizationError("Folder not found");
+  if (isWorkspaceManager(actorContext)) return;
+  const role = await getActorFolderRole(folder, actorContext, accessContext);
+  if (!roleAtLeast(role, "manager")) {
+    throw authorizationError("Forbidden: you do not have permission to manage folder collaborators");
+  }
+}
+
+async function emitWorkspaceActivity({
+  actorContext,
+  eventType,
+  entityType = "workspace",
+  entityId = "",
+  folderId = null,
+  noteId = null,
+  visibilityUserId = null,
+  details = {},
+} = {}) {
+  if (!actorContext?.workspaceId || !eventType) return null;
+  try {
+    const event = await collaborationRepo.createActivityEvent({
+      workspaceId: actorContext.workspaceId,
+      actorUserId: actorContext.userId || null,
+      actorName: actorDisplayName(actorContext),
+      eventType,
+      entityType,
+      entityId,
+      folderId,
+      noteId,
+      visibilityUserId,
+      details,
+    });
+    if (event) {
+      const message = buildActivityMessage(event);
+      publishActivity({
+        type: "activity",
+        message,
+        ...event,
+      });
+    }
+    return event;
+  } catch (error) {
+    logger.warn("activity_event_write_failed", {
+      eventType,
+      workspaceId: actorContext.workspaceId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+async function resolveFolderForNoteProject(note = null, workspaceId = config.defaultWorkspaceId) {
+  const project = String(note?.project || "").trim();
+  if (!project) return null;
+  return folderRepo.getFolderByName(project, workspaceId);
+}
+
+async function emitNoteActivity({
+  actorContext,
+  note,
+  eventType,
+  details = {},
+} = {}) {
+  if (!note || !eventType) return null;
+  const folder = await resolveFolderForNoteProject(note, actorContext.workspaceId);
+  const ownerUserId = noteOwnerId(note) || null;
+  const keepNoteForeignKey = String(eventType || "").trim() !== "note.deleted";
+  return emitWorkspaceActivity({
+    actorContext,
+    eventType,
+    entityType: "note",
+    entityId: note.id,
+    folderId: folder?.id || null,
+    noteId: keepNoteForeignKey ? note.id : null,
+    visibilityUserId: folder ? null : ownerUserId,
+    details: {
+      title: String(note.summary || note.fileName || note.content || "").slice(0, 120),
+      project: String(note.project || ""),
+      ...details,
+    },
+  });
+}
+
+function buildActivityMessage(event = {}) {
+  const details = event.details || {};
+  const title = String(details.title || "").trim();
+  const role = String(details.role || "").trim();
+  switch (String(event.eventType || "").trim()) {
+    case "note.created":
+      return title ? `created "${title}"` : "created an item";
+    case "note.updated":
+      return title ? `updated "${title}"` : "updated an item";
+    case "note.deleted":
+      return title ? `deleted "${title}"` : "deleted an item";
+    case "note.comment_added":
+      return title ? `commented on "${title}"` : "added a comment";
+    case "note.version_restored":
+      return title ? `restored "${title}"` : "restored a version";
+    case "note.enrichment_retry":
+      return title ? `retried AI on "${title}"` : "retried enrichment";
+    case "folder.created":
+      return `created folder "${String(details.folderName || "").trim() || "folder"}"`;
+    case "folder.updated":
+      return `updated folder "${String(details.folderName || "").trim() || "folder"}"`;
+    case "folder.deleted":
+      return `deleted folder "${String(details.folderName || "").trim() || "folder"}"`;
+    case "folder.shared":
+      return `shared folder with ${String(details.userName || details.userEmail || "member")} (${role || "viewer"})`;
+    case "folder.unshared":
+      return `removed folder access for ${String(details.userName || details.userEmail || "member")}`;
+    default:
+      return String(details.message || "").trim() || "updated workspace";
+  }
+}
+
+function normalizeMemoryScope(value) {
+  const normalized = String(value || "all")
+    .trim()
+    .toLowerCase();
+  return MEMORY_SCOPES.has(normalized) ? normalized : "all";
+}
+
+function normalizeWorkingSetIds(rawValue, max = 50) {
+  const values = Array.isArray(rawValue)
+    ? rawValue
+    : typeof rawValue === "string"
+      ? rawValue.split(/[,\n]/)
+      : [];
+  const unique = [];
+  const seen = new Set();
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    unique.push(normalized);
+    if (unique.length >= max) break;
+  }
+  return unique;
+}
+
+function sortNotesByRecency(notes = []) {
+  return [...(Array.isArray(notes) ? notes : [])].sort((a, b) => {
+    const aTime = Date.parse(a?.updatedAt || a?.createdAt || "") || 0;
+    const bTime = Date.parse(b?.updatedAt || b?.createdAt || "") || 0;
+    return bTime - aTime;
+  });
+}
+
+async function loadWorkingSetNotesForActor(actorContext, workingSetIds = [], contextNoteId = "") {
+  const ids = normalizeWorkingSetIds([
+    ...normalizeWorkingSetIds(workingSetIds, 100),
+    String(contextNoteId || "").trim(),
+  ], 100);
+  if (ids.length === 0) return [];
+
+  const notes = await Promise.all(
+    ids.map((id) => noteRepo.getNoteById(id, actorContext.workspaceId))
+  );
+  const accessContext = await buildFolderAccessContext(actorContext);
+  return notes.filter((note) => note && canReadNote(note, actorContext, accessContext));
+}
+
 async function listVisibleNotesForActor({
   actorContext,
   project = "",
   limit = 200,
   offset = 0,
+  scope = "all",
+  workingSetIds = [],
+  contextNoteId = "",
 } = {}) {
+  const normalizedScope = normalizeMemoryScope(scope);
   const normalizedProject = String(project || "").trim();
   const boundedLimit = clampInt(limit, 1, 10000, 200);
   const boundedOffset = clampInt(offset, 0, 100000, 0);
-  if (isWorkspaceManager(actorContext)) {
+  if (normalizedScope === "item") {
+    const notes = sortNotesByRecency(
+      await loadWorkingSetNotesForActor(actorContext, workingSetIds, contextNoteId)
+    );
+    return notes.slice(boundedOffset, boundedOffset + boundedLimit);
+  }
+
+  if (normalizedScope === "project" && !normalizedProject) {
+    return [];
+  }
+
+  if (normalizedScope === "user") {
+    return noteRepo.listByProjectForUser(
+      normalizedProject || null,
+      boundedLimit,
+      boundedOffset,
+      actorContext.workspaceId,
+      actorContext.userId
+    );
+  }
+
+  if (isWorkspaceManager(actorContext) && (normalizedScope === "all" || normalizedScope === "workspace" || normalizedScope === "project")) {
     return noteRepo.listByProject(
       normalizedProject || null,
       boundedLimit,
@@ -170,17 +496,50 @@ async function listVisibleNotesForActor({
       actorContext.workspaceId
     );
   }
-  return noteRepo.listByProjectForUser(
+  const fetchLimit = Math.min(Math.max((boundedOffset + boundedLimit) * 4, boundedLimit), 5000);
+  const allWorkspaceNotes = await noteRepo.listByProject(
     normalizedProject || null,
-    boundedLimit,
-    boundedOffset,
-    actorContext.workspaceId,
-    actorContext.userId
+    fetchLimit,
+    0,
+    actorContext.workspaceId
   );
+  const accessContext = await buildFolderAccessContext(actorContext);
+  const visibleNotes = allWorkspaceNotes.filter((note) => canReadNote(note, actorContext, accessContext));
+  return visibleNotes.slice(boundedOffset, boundedOffset + boundedLimit);
 }
 
-async function listSearchCandidatesForActor(actorContext, normalizedProject = "", maxCandidates = 500) {
-  if (isWorkspaceManager(actorContext)) {
+async function listSearchCandidatesForActor({
+  actorContext,
+  project = "",
+  maxCandidates = 500,
+  scope = "all",
+  workingSetIds = [],
+  contextNoteId = "",
+} = {}) {
+  const normalizedScope = normalizeMemoryScope(scope);
+  const normalizedProject = String(project || "").trim();
+
+  if (normalizedScope === "item") {
+    return sortNotesByRecency(
+      await loadWorkingSetNotesForActor(actorContext, workingSetIds, contextNoteId)
+    ).slice(0, maxCandidates);
+  }
+
+  if (normalizedScope === "project" && !normalizedProject) {
+    return [];
+  }
+
+  if (normalizedScope === "user") {
+    return noteRepo.listByProjectForUser(
+      normalizedProject || null,
+      maxCandidates,
+      0,
+      actorContext.workspaceId,
+      actorContext.userId
+    );
+  }
+
+  if (isWorkspaceManager(actorContext) && (normalizedScope === "all" || normalizedScope === "workspace" || normalizedScope === "project")) {
     return noteRepo.listByProject(
       normalizedProject || null,
       maxCandidates,
@@ -188,13 +547,17 @@ async function listSearchCandidatesForActor(actorContext, normalizedProject = ""
       actorContext.workspaceId
     );
   }
-  return noteRepo.listByProjectForUser(
+  const candidateFetchLimit = Math.min(Math.max(maxCandidates * 4, maxCandidates), 5000);
+  const allWorkspaceNotes = await noteRepo.listByProject(
     normalizedProject || null,
-    maxCandidates,
+    candidateFetchLimit,
     0,
-    actorContext.workspaceId,
-    actorContext.userId
+    actorContext.workspaceId
   );
+  const accessContext = await buildFolderAccessContext(actorContext);
+  return allWorkspaceNotes
+    .filter((note) => canReadNote(note, actorContext, accessContext))
+    .slice(0, maxCandidates);
 }
 
 function getConsolidatedMemoryFilePath(workspaceId = config.defaultWorkspaceId) {
@@ -1049,6 +1412,22 @@ async function cleanupDeletedNotesArtifacts(notes = [], workspaceId = config.def
   await removeConsolidatedMemoryEntries(noteIds, workspaceId);
 }
 
+async function cleanupReplacedImageArtifact(previousImagePath = "", nextImagePath = "") {
+  const previousAbsolute = imagePathToAbsoluteUploadPath(previousImagePath);
+  const nextAbsolute = imagePathToAbsoluteUploadPath(nextImagePath);
+  if (!previousAbsolute || previousAbsolute === nextAbsolute) {
+    return;
+  }
+  try {
+    await fs.unlink(previousAbsolute);
+  } catch (error) {
+    const isMissing = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    if (!isMissing) {
+      // no-op: attachment updates should remain resilient
+    }
+  }
+}
+
 /**
  * Phase B: Background enrichment job for a note.
  * Loads the note, runs AI enrichment, generates embedding,
@@ -1087,14 +1466,14 @@ async function processEnrichment({
           tags: note.tags,
           project: note.project,
           embedding: null,
-        metadata: {
-          ...(note.metadata || {}),
+          metadata: {
+            ...(note.metadata || {}),
+          },
           rawContent: parsedUpload.rawContent || null,
           markdownContent: parsedUpload.markdownContent || null,
-        },
-        updatedAt: nowIso(),
-        workspaceId,
-      });
+          updatedAt: nowIso(),
+          workspaceId,
+        });
         note = await noteRepo.getNoteById(noteId, workspaceId);
       }
       uploadEnrichment = {
@@ -1135,8 +1514,15 @@ async function processEnrichment({
   }
 
   const enrichment = await buildEnrichment(note, linkPreview, uploadEnrichment);
-  const finalProject =
-    requestedProject || (normalizedSourceType === "file" ? "General" : enrichment.project);
+  // Re-read note before final write to preserve any explicit folder moves
+  // that happened while enrichment was in flight.
+  const latestNote = await noteRepo.getNoteById(noteId, workspaceId);
+  const finalProject = resolveEnrichmentProject({
+    requestedProject,
+    currentProject: latestNote?.project ?? note?.project ?? "",
+    normalizedSourceType,
+    enrichmentProject: enrichment.project,
+  });
   const embeddingText = noteTextForEmbedding(
     {
       ...note,
@@ -1187,20 +1573,118 @@ async function processEnrichment({
   return enrichedNote;
 }
 
-function enqueueEnrichmentJob(params) {
-  enrichmentQueue.enqueue({
-    id: params.noteId,
-    workspaceId: params.workspaceId,
-    visibilityUserId: String(params.visibilityUserId || "").trim() || null,
-    fn: async () => {
-      try {
-        return await processEnrichment(params);
-      } catch (error) {
-        await noteRepo.updateStatus(params.noteId, "failed", params.workspaceId).catch(() => {});
-        throw error;
-      }
-    },
+export function resolveEnrichmentProject({
+  requestedProject = "",
+  currentProject = "",
+  normalizedSourceType = "",
+  enrichmentProject = "",
+} = {}) {
+  const normalizedCurrent = String(currentProject || "").trim();
+  if (normalizedCurrent) return normalizedCurrent;
+
+  const normalizedRequested = String(requestedProject || "").trim();
+  if (normalizedRequested) return normalizedRequested;
+
+  if (String(normalizedSourceType || "").trim().toLowerCase() === "file") {
+    return "General";
+  }
+
+  return String(enrichmentProject || "").trim();
+}
+
+const ENRICH_NOTE_JOB_TYPE = "enrich_note";
+let enrichmentHandlerRegistered = false;
+
+function registerEnrichmentQueueHandler() {
+  if (enrichmentHandlerRegistered) return;
+  enrichmentQueue.registerHandler(ENRICH_NOTE_JOB_TYPE, async (payload = {}) => {
+    const params = {
+      noteId: String(payload.noteId || "").trim(),
+      workspaceId: String(payload.workspaceId || "").trim(),
+      requestedProject: String(payload.requestedProject || "").trim(),
+      normalizedSourceType: String(payload.normalizedSourceType || "").trim(),
+      normalizedSourceUrl: String(payload.normalizedSourceUrl || "").trim(),
+      hasFileUpload: Boolean(payload.hasFileUpload),
+      uploadEnrichment: payload.uploadEnrichment || null,
+      fileDataUrl: String(payload.fileDataUrl || "").trim() || null,
+      fileName: String(payload.fileName || "").trim(),
+      fileMime: String(payload.fileMime || "").trim(),
+    };
+    if (!params.noteId) {
+      throw new Error("Missing note id for enrichment job");
+    }
+    if (!params.workspaceId) {
+      throw new Error("Missing workspace id for enrichment job");
+    }
+    try {
+      return await processEnrichment(params);
+    } catch (error) {
+      await noteRepo.updateStatus(params.noteId, "failed", params.workspaceId).catch(() => {});
+      throw error;
+    }
   });
+  enrichmentHandlerRegistered = true;
+}
+
+registerEnrichmentQueueHandler();
+
+function buildEnrichmentJobParamsFromNote(note = {}, { workspaceId = "", visibilityUserId = null } = {}) {
+  return {
+    noteId: String(note.id || "").trim(),
+    workspaceId: String(workspaceId || note.workspaceId || "").trim(),
+    visibilityUserId: String(visibilityUserId || "").trim() || null,
+    requestedProject: String(note.project || "").trim(),
+    normalizedSourceType: String(note.sourceType || "text").trim() || "text",
+    normalizedSourceUrl: String(note.sourceUrl || "").trim(),
+    hasFileUpload: false,
+    uploadEnrichment: null,
+    fileDataUrl: null,
+    fileName: String(note.fileName || "").trim(),
+    fileMime: String(note.fileMime || "").trim(),
+  };
+}
+
+async function enqueueEnrichmentJob(params, { throwOnError = false } = {}) {
+  const noteId = String(params.noteId || "").trim();
+  const workspaceId = String(params.workspaceId || "").trim();
+  const visibilityUserId = String(params.visibilityUserId || "").trim() || null;
+  if (!noteId || !workspaceId) {
+    throw new Error("Missing note id or workspace id for enrichment queue job");
+  }
+
+  const payload = {
+    noteId,
+    workspaceId,
+    requestedProject: String(params.requestedProject || "").trim(),
+    normalizedSourceType: String(params.normalizedSourceType || "").trim() || "text",
+    normalizedSourceUrl: String(params.normalizedSourceUrl || "").trim(),
+    hasFileUpload: Boolean(params.hasFileUpload),
+    uploadEnrichment: params.uploadEnrichment || null,
+    fileDataUrl: String(params.fileDataUrl || "").trim() || null,
+    fileName: String(params.fileName || "").trim(),
+    fileMime: String(params.fileMime || "").trim(),
+  };
+
+  try {
+    await enrichmentQueue.enqueue({
+      type: ENRICH_NOTE_JOB_TYPE,
+      workspaceId,
+      visibilityUserId,
+      payload,
+    });
+    return true;
+  } catch (error) {
+    await noteRepo.updateStatus(noteId, "failed", workspaceId).catch(() => {});
+    logger.error("enrichment_job_enqueue_failed", {
+      noteId,
+      workspaceId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    if (throwOnError) {
+      throw error;
+    }
+    return false;
+  }
 }
 
 /**
@@ -1223,6 +1707,7 @@ export async function createMemory({
   const actorContext = resolveActor(actor);
   const requestedSourceType = normalizeSourceType(sourceType);
   const requestedProject = String(project || "").trim();
+  const canonicalRequestedProject = await resolveCanonicalProjectName(requestedProject, actorContext.workspaceId);
   const normalizedSourceUrl = String(sourceUrl || "").trim();
   let normalizedContent = String(content || "").trim();
   const normalizedFileDataUrl = String(fileDataUrl || imageDataUrl || "").trim() || null;
@@ -1316,7 +1801,7 @@ export async function createMemory({
     markdownContent,
     summary: heuristicSummary(normalizedContent),
     tags: seedTags,
-    project: requestedProject || null,
+    project: canonicalRequestedProject || null,
     createdAt,
     updatedAt: createdAt,
     embedding: null,
@@ -1334,11 +1819,11 @@ export async function createMemory({
   });
 
   // Enqueue background enrichment
-  enqueueEnrichmentJob({
+  await enqueueEnrichmentJob({
     noteId: note.id,
     workspaceId: actorContext.workspaceId,
     visibilityUserId: actorContext.userId,
-    requestedProject,
+    requestedProject: canonicalRequestedProject,
     normalizedSourceType,
     normalizedSourceUrl,
     hasFileUpload: Boolean(normalizedFileDataUrl),
@@ -1346,6 +1831,15 @@ export async function createMemory({
     fileDataUrl: normalizedFileDataUrl,
     fileName: normalizedFileName,
     fileMime: uploadMime,
+  });
+
+  await emitNoteActivity({
+    actorContext,
+    note,
+    eventType: "note.created",
+    details: {
+      sourceType: note.sourceType || normalizedSourceType,
+    },
   });
 
   return note;
@@ -1358,14 +1852,20 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
 
   const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
-  assertCanMutateNote(existing, actorContext);
+  await assertCanMutateNote(existing, actorContext);
+
+  const resolvedProject =
+    project !== undefined
+      ? await resolveCanonicalProjectName(String(project), actorContext.workspaceId)
+      : String(existing.project || "");
+  const existingProject = String(existing.project || "");
 
   // Detect changes and snapshot before editing
   const changes = [];
   if (content !== undefined && String(content) !== existing.content) changes.push("content");
   if (summary !== undefined && String(summary) !== existing.summary) changes.push("summary");
   if (tags !== undefined && JSON.stringify(tags) !== JSON.stringify(existing.tags)) changes.push("tags");
-  if (project !== undefined && String(project) !== existing.project) changes.push("project");
+  if (project !== undefined && resolvedProject !== existingProject) changes.push("project");
 
   if (changes.length > 0) {
     await versionRepo.createSnapshot({
@@ -1389,14 +1889,14 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
     content: newContent,
     summary: summary !== undefined ? String(summary) : existing.summary,
     tags: tags !== undefined ? tags : existing.tags,
-    project: project !== undefined ? String(project) : existing.project,
+    project: project !== undefined ? resolvedProject : existingProject,
     workspaceId: actorContext.workspaceId,
   });
 
   // Re-enrich if content changed
   if (contentChanged) {
     await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
-    enqueueEnrichmentJob({
+    await enqueueEnrichmentJob({
       noteId: normalizedId,
       workspaceId: actorContext.workspaceId,
       visibilityUserId: noteOwnerId(existing) || actorContext.userId,
@@ -1414,7 +1914,267 @@ export async function updateMemory({ id, content, summary, tags, project, actor 
     await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
   }
 
+  await emitNoteActivity({
+    actorContext,
+    note: updatedNote,
+    eventType: "note.updated",
+    details: {
+      changed: changes,
+    },
+  });
+
   return updatedNote;
+}
+
+export async function updateMemoryAttachment({
+  id,
+  content,
+  fileDataUrl = null,
+  imageDataUrl = null,
+  fileName = "",
+  fileMimeType = "",
+  actor = null,
+  requeueEnrichment = true,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
+  await assertCanMutateNote(existing, actorContext);
+
+  const normalizedFileDataUrl = String(fileDataUrl || imageDataUrl || "").trim() || null;
+  if (!normalizedFileDataUrl) {
+    throw new Error("Missing attachment payload");
+  }
+
+  const normalizedFileName = String(fileName || "").trim();
+  const normalizedFileMimeType = String(fileMimeType || "").trim().toLowerCase();
+  const parsedUpload = parseGenericDataUrl(normalizedFileDataUrl);
+  let uploadMime = normalizedFileMimeType || parsedUpload.mime;
+  if (!uploadMime || uploadMime === "application/octet-stream") {
+    const inferred = inferMimeFromFileName(normalizedFileName);
+    if (inferred) uploadMime = inferred;
+  }
+  const sourceType = uploadMime?.startsWith("image/") ? "image" : "file";
+  const uploadSize = parsedUpload.bytes.length;
+  const nextFileName =
+    normalizedFileName ||
+    existing.fileName ||
+    (sourceType === "image" ? `image.${mimeToExt(uploadMime || "image/png")}` : "upload.bin");
+
+  let nextImageData = null;
+  if (sourceType === "image") {
+    nextImageData = await saveImageDataUrl(normalizedFileDataUrl);
+  }
+
+  const extractedText = maybeDecodeTextUpload(normalizedFileDataUrl, uploadMime, normalizedFileName);
+  const rawContent = extractedText || null;
+  const markdownContent = extractedText || null;
+  const nextContent = content !== undefined
+    ? String(content || "")
+    : String(existing.content || "").trim() || (normalizedFileName ? `Uploaded file: ${normalizedFileName}` : "Uploaded file");
+
+  await versionRepo.createSnapshot({
+    noteId: normalizedId,
+    workspaceId: actorContext.workspaceId,
+    content: existing.content,
+    summary: existing.summary,
+    tags: existing.tags,
+    project: existing.project,
+    metadata: existing.metadata,
+    actorUserId: actorContext.userId,
+    changeSummary: "Edited attachment",
+  });
+
+  const updatedNote = await noteRepo.updateAttachment({
+    id: normalizedId,
+    content: nextContent,
+    sourceType,
+    sourceUrl: null,
+    imagePath: nextImageData?.imagePath || null,
+    fileName: nextFileName,
+    fileMime: uploadMime || existing.fileMime || null,
+    fileSize: uploadSize,
+    rawContent,
+    markdownContent,
+    metadata: {
+      ...(existing.metadata || {}),
+      imageMime: nextImageData?.imageMime || null,
+      imageSize: nextImageData?.imageSize || null,
+      fileMime: uploadMime || null,
+      fileSize: uploadSize,
+      attachmentUpdatedAt: nowIso(),
+      attachmentUpdatedBy: actorContext.userId,
+    },
+    updatedAt: nowIso(),
+    workspaceId: actorContext.workspaceId,
+  });
+
+  await cleanupReplacedImageArtifact(existing.imagePath, updatedNote.imagePath);
+
+  if (requeueEnrichment) {
+    await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
+    await enqueueEnrichmentJob({
+      noteId: normalizedId,
+      workspaceId: actorContext.workspaceId,
+      visibilityUserId: noteOwnerId(existing) || actorContext.userId,
+      requestedProject: updatedNote.project || "",
+      normalizedSourceType: updatedNote.sourceType || sourceType,
+      normalizedSourceUrl: updatedNote.sourceUrl || "",
+      hasFileUpload: true,
+      uploadEnrichment: null,
+      fileDataUrl: normalizedFileDataUrl,
+      fileName: updatedNote.fileName || nextFileName,
+      fileMime: updatedNote.fileMime || uploadMime,
+    });
+    const queued = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+    await emitNoteActivity({
+      actorContext,
+      note: queued || updatedNote,
+      eventType: "note.updated",
+      details: {
+        changed: ["attachment"],
+        sourceType: sourceType,
+        requeueEnrichment: true,
+      },
+    });
+    return queued;
+  }
+
+  await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
+  await emitNoteActivity({
+    actorContext,
+    note: updatedNote,
+    eventType: "note.updated",
+    details: {
+      changed: ["attachment"],
+      sourceType: sourceType,
+      requeueEnrichment: false,
+    },
+  });
+  return updatedNote;
+}
+
+export async function updateMemoryExtractedContent({
+  id,
+  content,
+  rawContent,
+  markdownContent,
+  actor = null,
+  requeueEnrichment = true,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const hasContent = content !== undefined;
+  const hasRawContent = rawContent !== undefined;
+  const hasMarkdownContent = markdownContent !== undefined;
+  if (!hasContent && !hasRawContent && !hasMarkdownContent) {
+    throw new Error("Nothing to update");
+  }
+
+  const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
+  await assertCanMutateNote(existing, actorContext);
+
+  const normalizedContent = hasContent ? String(content || "") : String(existing.content || "");
+  const normalizedRawContent = hasRawContent
+    ? (rawContent === null ? null : String(rawContent))
+    : undefined;
+  const normalizedMarkdownContent = hasMarkdownContent
+    ? (markdownContent === null ? null : String(markdownContent))
+    : undefined;
+
+  const contentChanged = hasContent && normalizedContent !== String(existing.content || "");
+  const rawChanged = hasRawContent && String(normalizedRawContent ?? "") !== String(existing.rawContent ?? "");
+  const markdownChanged =
+    hasMarkdownContent && String(normalizedMarkdownContent ?? "") !== String(existing.markdownContent ?? "");
+
+  if (contentChanged || rawChanged || markdownChanged) {
+    await versionRepo.createSnapshot({
+      noteId: normalizedId,
+      workspaceId: actorContext.workspaceId,
+      content: existing.content,
+      summary: existing.summary,
+      tags: existing.tags,
+      project: existing.project,
+      metadata: existing.metadata,
+      actorUserId: actorContext.userId,
+      changeSummary: "Edited extracted content",
+    });
+  }
+
+  let noteAfterContent = existing;
+  if (contentChanged) {
+    noteAfterContent = await noteRepo.updateNote({
+      id: normalizedId,
+      content: normalizedContent,
+      summary: existing.summary,
+      tags: existing.tags,
+      project: existing.project,
+      workspaceId: actorContext.workspaceId,
+    });
+  }
+
+  const noteAfterExtract = await noteRepo.updateEnrichment({
+    id: normalizedId,
+    summary: noteAfterContent.summary || "",
+    tags: Array.isArray(noteAfterContent.tags) ? noteAfterContent.tags : [],
+    project: noteAfterContent.project || "General",
+    embedding: noteAfterContent.embedding || null,
+    metadata: {
+      ...(noteAfterContent.metadata || {}),
+      extractedContentEditedAt: nowIso(),
+      extractedContentEditedBy: actorContext.userId,
+    },
+    rawContent: hasRawContent ? normalizedRawContent : undefined,
+    markdownContent: hasMarkdownContent ? normalizedMarkdownContent : undefined,
+    updatedAt: nowIso(),
+    workspaceId: actorContext.workspaceId,
+  });
+
+  if (requeueEnrichment && (contentChanged || rawChanged || markdownChanged)) {
+    await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
+    await enqueueEnrichmentJob({
+      noteId: normalizedId,
+      workspaceId: actorContext.workspaceId,
+      visibilityUserId: noteOwnerId(existing) || actorContext.userId,
+      requestedProject: noteAfterExtract.project || "",
+      normalizedSourceType: noteAfterExtract.sourceType || "text",
+      normalizedSourceUrl: noteAfterExtract.sourceUrl || "",
+      hasFileUpload: false,
+      uploadEnrichment: null,
+      fileDataUrl: null,
+      fileName: noteAfterExtract.fileName || "",
+      fileMime: noteAfterExtract.fileMime || "",
+    });
+    const queued = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+    await emitNoteActivity({
+      actorContext,
+      note: queued || noteAfterExtract,
+      eventType: "note.updated",
+      details: {
+        changed: ["extracted_content"],
+        requeueEnrichment: true,
+      },
+    });
+    return queued;
+  }
+
+  await updateConsolidatedMemoryFile(noteAfterExtract, actorContext.workspaceId);
+  await emitNoteActivity({
+    actorContext,
+    note: noteAfterExtract,
+    eventType: "note.updated",
+    details: {
+      changed: ["extracted_content"],
+      requeueEnrichment: false,
+    },
+  });
+  return noteAfterExtract;
 }
 
 export async function listMemoryVersions({ id, actor = null } = {}) {
@@ -1424,6 +2184,7 @@ export async function listMemoryVersions({ id, actor = null } = {}) {
 
   const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
+  await assertCanReadNote(existing, actorContext);
 
   const items = await versionRepo.listVersions(normalizedId, actorContext.workspaceId);
   return { items, count: items.length };
@@ -1436,7 +2197,7 @@ export async function restoreMemoryVersion({ id, versionNumber, actor = null } =
 
   const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
-  assertCanMutateNote(existing, actorContext);
+  await assertCanMutateNote(existing, actorContext);
 
   const version = await versionRepo.getVersion(normalizedId, versionNumber, actorContext.workspaceId);
   if (!version) throw new Error(`Version ${versionNumber} not found`);
@@ -1467,7 +2228,7 @@ export async function restoreMemoryVersion({ id, versionNumber, actor = null } =
 
   if (contentChanged) {
     await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
-    enqueueEnrichmentJob({
+    await enqueueEnrichmentJob({
       noteId: normalizedId,
       workspaceId: actorContext.workspaceId,
       visibilityUserId: noteOwnerId(existing) || actorContext.userId,
@@ -1484,7 +2245,128 @@ export async function restoreMemoryVersion({ id, versionNumber, actor = null } =
     await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
   }
 
+  await emitNoteActivity({
+    actorContext,
+    note: updatedNote,
+    eventType: "note.version_restored",
+    details: {
+      versionNumber,
+    },
+  });
+
   return updatedNote;
+}
+
+export async function retryMemoryEnrichment({ id, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+
+  const note = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!note) throw new Error(`Memory not found: ${normalizedId}`);
+  await assertCanMutateNote(note, actorContext);
+
+  if (await enrichmentJobRepo.hasInFlightJobForNote({
+    workspaceId: actorContext.workspaceId,
+    noteId: normalizedId,
+  })) {
+    const updated = await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
+    await emitNoteActivity({
+      actorContext,
+      note: updated || note,
+      eventType: "note.enrichment_retry",
+      details: {
+        source: "existing_inflight",
+      },
+    });
+    return {
+      note: updated,
+      queued: false,
+      source: "existing_inflight",
+    };
+  }
+
+  const visibilityUserId = noteOwnerId(note) || actorContext.userId;
+  const retriedJob = await enrichmentJobRepo.retryFailedJobForNote({
+    workspaceId: actorContext.workspaceId,
+    noteId: normalizedId,
+    visibilityUserId,
+  });
+
+  await noteRepo.updateStatus(normalizedId, "pending", actorContext.workspaceId);
+  if (retriedJob) {
+    enrichmentQueue.kick();
+    await enrichmentQueue.refreshCounts().catch(() => {});
+    const refreshedNote = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+    await emitNoteActivity({
+      actorContext,
+      note: refreshedNote || note,
+      eventType: "note.enrichment_retry",
+      details: {
+        source: "failed_job_requeued",
+      },
+    });
+    return {
+      note: refreshedNote,
+      queued: true,
+      source: "failed_job_requeued",
+      jobId: retriedJob.id,
+    };
+  }
+
+  const enqueued = await enqueueEnrichmentJob(
+    buildEnrichmentJobParamsFromNote(note, {
+      workspaceId: actorContext.workspaceId,
+      visibilityUserId,
+    }),
+    { throwOnError: true }
+  );
+  if (!enqueued) {
+    throw new Error("Failed to queue enrichment retry");
+  }
+  const refreshedNote = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  await emitNoteActivity({
+    actorContext,
+    note: refreshedNote || note,
+    eventType: "note.enrichment_retry",
+    details: {
+      source: "new_job_enqueued",
+    },
+  });
+  return {
+    note: refreshedNote,
+    queued: true,
+    source: "new_job_enqueued",
+  };
+}
+
+export async function getEnrichmentQueueStats({ actor = null, failedLimit = 20 } = {}) {
+  const actorContext = resolveActor(actor);
+  assertWorkspaceManager(actorContext);
+
+  const counts = await enrichmentJobRepo.getQueueCounts({
+    workspaceId: actorContext.workspaceId,
+  });
+  const failedJobs = await enrichmentJobRepo.listFailedJobs({
+    workspaceId: actorContext.workspaceId,
+    limit: clampInt(failedLimit, 1, 100, 20),
+  });
+  return {
+    counts,
+    failedJobs: failedJobs.map((job) => ({
+      id: job.id,
+      type: job.type,
+      workspaceId: job.workspaceId,
+      noteId: String(job.payload?.noteId || "").trim(),
+      visibilityUserId: job.visibilityUserId || null,
+      status: job.status,
+      attemptCount: job.attemptCount,
+      maxAttempts: job.maxAttempts,
+      lastError: job.lastError || "",
+      updatedAt: job.updatedAt,
+      createdAt: job.createdAt,
+    })),
+  };
 }
 
 function normalizeNoteComments(rawComments = []) {
@@ -1509,7 +2391,7 @@ export async function addMemoryComment({ id, text, actor = null } = {}) {
 
   const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
-  assertCanMutateNote(existing, actorContext);
+  await assertCanReadNote(existing, actorContext);
 
   const comment = {
     id: crypto.randomUUID(),
@@ -1537,6 +2419,15 @@ export async function addMemoryComment({ id, text, actor = null } = {}) {
   });
 
   await updateConsolidatedMemoryFile(updatedNote, actorContext.workspaceId);
+  await emitNoteActivity({
+    actorContext,
+    note: updatedNote,
+    eventType: "note.comment_added",
+    details: {
+      commentId: comment.id,
+      commentPreview: normalizedText.slice(0, 120),
+    },
+  });
   return {
     note: updatedNote,
     comment,
@@ -1558,9 +2449,14 @@ export async function deleteMemory({ id, actor = null } = {}) {
     };
   }
 
-  assertCanMutateNote(note, actorContext);
+  await assertCanMutateNote(note, actorContext);
   await noteRepo.deleteNote(normalizedId, actorContext.workspaceId);
   await cleanupDeletedNotesArtifacts([note], actorContext.workspaceId);
+  await emitNoteActivity({
+    actorContext,
+    note,
+    eventType: "note.deleted",
+  });
   return {
     id: normalizedId,
     deleted: true,
@@ -1603,8 +2499,11 @@ export async function batchDeleteMemories({ ids, actor = null } = {}) {
     normalizedIds.map((id) => noteRepo.getNoteById(id, actorContext.workspaceId))
   )).filter(Boolean);
 
+  const accessContext = await buildFolderAccessContext(actorContext);
   for (const note of notes) {
-    assertCanMutateNote(note, actorContext);
+    if (!canMutateNote(note, actorContext, accessContext)) {
+      throw authorizationError("Forbidden: you do not have permission to modify one or more selected items");
+    }
   }
 
   const deleted = await noteRepo.batchDelete(normalizedIds, actorContext.workspaceId);
@@ -1616,25 +2515,303 @@ export async function batchMoveMemories({ ids, project = "", actor = null } = {}
   const actorContext = resolveActor(actor);
   const normalizedIds = Array.isArray(ids) ? ids.map((id) => String(id || "").trim()).filter(Boolean) : [];
   if (!normalizedIds.length) return { moved: 0 };
+  const targetProject = await resolveCanonicalProjectName(String(project || ""), actorContext.workspaceId);
 
   const notes = (await Promise.all(
     normalizedIds.map((id) => noteRepo.getNoteById(id, actorContext.workspaceId))
   )).filter(Boolean);
 
+  const accessContext = await buildFolderAccessContext(actorContext);
   for (const note of notes) {
-    assertCanMutateNote(note, actorContext);
+    if (!canMutateNote(note, actorContext, accessContext)) {
+      throw authorizationError("Forbidden: you do not have permission to modify one or more selected items");
+    }
   }
 
-  const moved = await noteRepo.batchMove(normalizedIds, String(project || ""), actorContext.workspaceId);
+  const moved = await noteRepo.batchMove(normalizedIds, targetProject, actorContext.workspaceId);
+  if (moved > 0) {
+    await emitWorkspaceActivity({
+      actorContext,
+      eventType: "note.updated",
+      entityType: "workspace",
+      details: {
+        movedCount: moved,
+        targetProject,
+      },
+    });
+  }
   return { moved };
 }
 
-export async function listRecentMemories(limit = 20, offset = 0, actor = null) {
+export async function getMemoryById({ id, actor = null } = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing id");
+  const note = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
+  if (!note) throw new Error(`Memory not found: ${normalizedId}`);
+  await assertCanReadNote(note, actorContext);
+  return note;
+}
+
+export async function createWorkspaceFolder({
+  name,
+  description = "",
+  color = "green",
+  symbol = "DOC",
+  parentId = null,
+  actor = null,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const folder = await folderRepo.createFolder({
+    name,
+    description,
+    color,
+    symbol,
+    parentId,
+    workspaceId: actorContext.workspaceId,
+  });
+  if (actorContext.userId) {
+    await collaborationRepo.upsertFolderMember({
+      workspaceId: actorContext.workspaceId,
+      folderId: folder.id,
+      userId: actorContext.userId,
+      role: "manager",
+      createdByUserId: actorContext.userId,
+    });
+  }
+  await emitWorkspaceActivity({
+    actorContext,
+    eventType: "folder.created",
+    entityType: "folder",
+    entityId: folder.id,
+    folderId: folder.id,
+    details: {
+      folderName: folder.name,
+    },
+  });
+  return folder;
+}
+
+export async function updateWorkspaceFolder({
+  id,
+  patch = {},
+  actor = null,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing folder id");
+  const existing = await resolveFolderByIdOrName(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error("Folder not found");
+  const updated = await folderRepo.updateFolder(existing.id, patch, actorContext.workspaceId);
+  await emitWorkspaceActivity({
+    actorContext,
+    eventType: "folder.updated",
+    entityType: "folder",
+    entityId: updated.id,
+    folderId: updated.id,
+    details: {
+      folderName: updated.name,
+    },
+  });
+  return updated;
+}
+
+export async function deleteWorkspaceFolder({
+  id,
+  actor = null,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("Missing folder id");
+  const existing = await resolveFolderByIdOrName(normalizedId, actorContext.workspaceId);
+  if (!existing) throw new Error("Folder not found");
+  const result = await folderRepo.deleteFolder(existing.id, actorContext.workspaceId);
+  await emitWorkspaceActivity({
+    actorContext,
+    eventType: "folder.deleted",
+    entityType: "folder",
+    entityId: existing.id,
+    details: {
+      folderName: existing.name,
+    },
+  });
+  return result;
+}
+
+export async function listFolderCollaborators({
+  folderId,
+  actor = null,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const folder = await resolveFolderByIdOrName(folderId, actorContext.workspaceId);
+  if (!folder) throw new Error("Folder not found");
+  const accessContext = await buildFolderAccessContext(actorContext);
+  await assertCanViewFolder(folder, actorContext, accessContext);
+  const items = await collaborationRepo.listFolderMembers({
+    workspaceId: actorContext.workspaceId,
+    folderId: folder.id,
+  });
+  return { folder, items, count: items.length };
+}
+
+export async function setFolderCollaboratorRole({
+  folderId,
+  userId,
+  role = "viewer",
+  actor = null,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const folder = await resolveFolderByIdOrName(folderId, actorContext.workspaceId);
+  if (!folder) throw new Error("Folder not found");
+  await assertCanManageFolder(folder, actorContext);
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) throw new Error("Missing user id");
+
+  const workspaceMembers = await authRepo.listWorkspaceMembers(actorContext.workspaceId, { limit: 1000 });
+  const targetMember = workspaceMembers.find((entry) => String(entry.userId || "").trim() === normalizedUserId);
+  if (!targetMember) {
+    throw new Error("User is not a member of this workspace");
+  }
+
+  const normalizedRole = normalizeFolderMemberRole(role);
+  const roleToSet = normalizedRole || "viewer";
+  const collaborator = await collaborationRepo.upsertFolderMember({
+    workspaceId: actorContext.workspaceId,
+    folderId: folder.id,
+    userId: normalizedUserId,
+    role: roleToSet,
+    createdByUserId: actorContext.userId,
+  });
+
+  await emitWorkspaceActivity({
+    actorContext,
+    eventType: "folder.shared",
+    entityType: "folder",
+    entityId: folder.id,
+    folderId: folder.id,
+    details: {
+      folderName: folder.name,
+      role: roleToSet,
+      userId: targetMember.userId,
+      userEmail: targetMember.email,
+      userName: targetMember.name,
+    },
+  });
+
+  return collaborator;
+}
+
+export async function removeFolderCollaborator({
+  folderId,
+  userId,
+  actor = null,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const folder = await resolveFolderByIdOrName(folderId, actorContext.workspaceId);
+  if (!folder) throw new Error("Folder not found");
+  await assertCanManageFolder(folder, actorContext);
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) throw new Error("Missing user id");
+
+  const beforeMembers = await collaborationRepo.listFolderMembers({
+    workspaceId: actorContext.workspaceId,
+    folderId: folder.id,
+  });
+  const target = beforeMembers.find((entry) => String(entry.userId || "").trim() === normalizedUserId);
+  if (!target) {
+    return { removed: 0 };
+  }
+  if (target.role === "manager") {
+    const managerCount = beforeMembers.filter((entry) => entry.role === "manager").length;
+    if (managerCount <= 1) {
+      throw new Error("Folder must retain at least one manager");
+    }
+  }
+
+  const removed = await collaborationRepo.removeFolderMember({
+    workspaceId: actorContext.workspaceId,
+    folderId: folder.id,
+    userId: normalizedUserId,
+  });
+  if (removed > 0) {
+    await emitWorkspaceActivity({
+      actorContext,
+      eventType: "folder.unshared",
+      entityType: "folder",
+      entityId: folder.id,
+      folderId: folder.id,
+      details: {
+        folderName: folder.name,
+        role: target.role,
+        userId: target.userId,
+        userEmail: target.userEmail,
+        userName: target.userName,
+      },
+    });
+  }
+  return { removed };
+}
+
+export async function listWorkspaceActivity({
+  actor = null,
+  folderId = "",
+  noteId = "",
+  limit = 60,
+} = {}) {
+  const actorContext = resolveActor(actor);
+  const boundedLimit = clampInt(limit, 1, 200, 60);
+  let resolvedFolderId = "";
+  if (String(folderId || "").trim()) {
+    const folder = await resolveFolderByIdOrName(folderId, actorContext.workspaceId);
+    if (!folder) throw new Error("Folder not found");
+    await assertCanViewFolder(folder, actorContext);
+    resolvedFolderId = folder.id;
+  }
+  const events = await collaborationRepo.listActivityEvents({
+    workspaceId: actorContext.workspaceId,
+    folderId: resolvedFolderId,
+    noteId: String(noteId || "").trim(),
+    limit: Math.min(500, boundedLimit * 4),
+  });
+
+  let visibleEvents = events;
+  if (!isWorkspaceManager(actorContext)) {
+    const accessContext = await buildFolderAccessContext(actorContext);
+    const actorUserId = String(actorContext.userId || "").trim();
+    visibleEvents = events.filter((event) => {
+      const visibilityUserId = String(event.visibilityUserId || "").trim();
+      if (visibilityUserId) {
+        return visibilityUserId === actorUserId;
+      }
+      const eventFolderId = String(event.folderId || "").trim();
+      if (eventFolderId) {
+        return accessContext.roleByFolderId.has(eventFolderId);
+      }
+      return true;
+    });
+  }
+
+  const items = visibleEvents.slice(0, boundedLimit).map((event) => ({
+    ...event,
+    actorName: String(event.actorName || "").trim() || "Unknown user",
+    message: buildActivityMessage(event),
+  }));
+  return {
+    items,
+    count: items.length,
+  };
+}
+
+export async function listRecentMemories(limit = 20, offset = 0, actor = null, options = {}) {
   const actorContext = resolveActor(actor);
   return await listVisibleNotesForActor({
     actorContext,
     limit: clampInt(limit, 1, 200, 20),
     offset: clampInt(offset, 0, 100000, 0),
+    scope: options.scope || "all",
+    workingSetIds: options.workingSetIds || [],
+    contextNoteId: options.contextNoteId || "",
+    project: options.project || "",
   });
 }
 
@@ -1649,7 +2826,7 @@ export async function getMemoryRawContent({ id, includeMarkdown = true, maxChars
   if (!note) {
     throw new Error(`Memory not found: ${normalizedId}`);
   }
-  assertCanReadNote(note, actorContext);
+  await assertCanReadNote(note, actorContext);
 
   const boundedMax = clampInt(maxChars, 200, 200000, 12000);
   return {
@@ -1664,7 +2841,16 @@ export async function getMemoryRawContent({ id, includeMarkdown = true, maxChars
   };
 }
 
-export async function searchRawMemories({ query = "", project = "", limit = 8, includeMarkdown = true, actor = null } = {}) {
+export async function searchRawMemories({
+  query = "",
+  project = "",
+  limit = 8,
+  includeMarkdown = true,
+  actor = null,
+  scope = "all",
+  workingSetIds = [],
+  contextNoteId = "",
+} = {}) {
   const actorContext = resolveActor(actor);
   const normalizedQuery = String(query || "").trim();
   if (!normalizedQuery) {
@@ -1673,7 +2859,14 @@ export async function searchRawMemories({ query = "", project = "", limit = 8, i
 
   const boundedLimit = clampInt(limit, 1, 100, 8);
   const normalizedProject = String(project || "").trim();
-  const candidates = await listSearchCandidatesForActor(actorContext, normalizedProject, 500);
+  const candidates = await listSearchCandidatesForActor({
+    actorContext,
+    project: normalizedProject,
+    maxCandidates: 500,
+    scope,
+    workingSetIds,
+    contextNoteId,
+  });
   const tokenizedQuery = tokenize(normalizedQuery);
   const bm25Index = buildBm25Index(candidates, (note) => `${note.rawContent || ""}\n${note.markdownContent || ""}\n${note.content || ""}`);
   const scored = candidates
@@ -1756,10 +2949,34 @@ export async function listProjects(actor = null) {
   if (isWorkspaceManager(actorContext)) {
     return noteRepo.listProjects(actorContext.workspaceId);
   }
-  return noteRepo.listProjectsForUser(actorContext.workspaceId, actorContext.userId);
+  const [ownedProjects, membershipRows, allFolders] = await Promise.all([
+    noteRepo.listProjectsForUser(actorContext.workspaceId, actorContext.userId),
+    collaborationRepo.listFolderMembershipsForUser({
+      workspaceId: actorContext.workspaceId,
+      userId: actorContext.userId,
+    }),
+    folderRepo.listAllFolders(actorContext.workspaceId),
+  ]);
+  const folderRoleById = new Map(
+    membershipRows.map((entry) => [String(entry.folderId || "").trim(), normalizeFolderMemberRole(entry.role || "viewer")])
+  );
+  const sharedProjects = allFolders
+    .filter((folder) => roleAtLeast(folderRoleById.get(String(folder.id || "").trim()) || "", "viewer"))
+    .map((folder) => String(folder.name || "").trim())
+    .filter(Boolean);
+  return [...new Set([...(ownedProjects || []), ...sharedProjects])].sort((a, b) => a.localeCompare(b));
 }
 
-export async function searchNotesBm25({ query = "", project = "", limit = 8, includeMarkdown = false, actor = null } = {}) {
+export async function searchNotesBm25({
+  query = "",
+  project = "",
+  limit = 8,
+  includeMarkdown = false,
+  actor = null,
+  scope = "all",
+  workingSetIds = [],
+  contextNoteId = "",
+} = {}) {
   const actorContext = resolveActor(actor);
   const normalizedQuery = String(query || "").trim();
   if (!normalizedQuery) {
@@ -1768,7 +2985,14 @@ export async function searchNotesBm25({ query = "", project = "", limit = 8, inc
 
   const boundedLimit = clampInt(limit, 1, 100, 8);
   const normalizedProject = String(project || "").trim();
-  const notes = await listSearchCandidatesForActor(actorContext, normalizedProject, 500);
+  const notes = await listSearchCandidatesForActor({
+    actorContext,
+    project: normalizedProject,
+    maxCandidates: 500,
+    scope,
+    workingSetIds,
+    contextNoteId,
+  });
   if (notes.length === 0) return [];
 
   const queryTokens = tokenize(normalizedQuery);
@@ -1809,23 +3033,45 @@ export async function searchNotesBm25({ query = "", project = "", limit = 8, inc
   }));
 }
 
-export async function searchMemories({ query = "", project = "", limit = 15, actor = null } = {}) {
+export async function searchMemories({
+  query = "",
+  project = "",
+  limit = 15,
+  offset = 0,
+  actor = null,
+  scope = "all",
+  workingSetIds = [],
+  contextNoteId = "",
+} = {}) {
   const actorContext = resolveActor(actor);
   const boundedLimit = clampInt(limit, 1, 100, 15);
   const normalizedQuery = String(query || "").trim();
   const normalizedProject = String(project || "").trim();
+  const normalizedScope = normalizeMemoryScope(scope);
+  const normalizedWorkingSetIds = normalizeWorkingSetIds(workingSetIds, 100);
+  const workingSetIdSet = new Set(normalizedWorkingSetIds);
 
   if (!normalizedQuery) {
     const notes = await listVisibleNotesForActor({
       actorContext,
       project: normalizedProject,
       limit: boundedLimit,
-      offset: 0,
+      offset: clampInt(offset, 0, 100000, 0),
+      scope: normalizedScope,
+      workingSetIds: normalizedWorkingSetIds,
+      contextNoteId,
     });
     return notes.map((note, index) => materializeCitation(note, 1 - index * 0.001, index + 1));
   }
 
-  const notes = await listSearchCandidatesForActor(actorContext, normalizedProject, 500);
+  const notes = await listSearchCandidatesForActor({
+    actorContext,
+    project: normalizedProject,
+    maxCandidates: 500,
+    scope: normalizedScope,
+    workingSetIds: normalizedWorkingSetIds,
+    contextNoteId,
+  });
   if (notes.length === 0) return [];
 
   const queryTokens = tokenize(normalizedQuery);
@@ -1851,7 +3097,8 @@ export async function searchMemories({ query = "", project = "", limit = 15, act
     const bm25 = bm25ScoreFromIndex(bm25Index, docIndex, queryTokens);
     const phraseBoost = `${note.content || ""}\n${note.rawContent || ""}\n${note.markdownContent || ""}`.toLowerCase().includes(normalizedQuery.toLowerCase()) ? 0.05 : 0;
     const freshnessBoost = Math.max(0, 1 - (Date.now() - new Date(note.createdAt).getTime()) / (1000 * 60 * 60 * 24 * 30)) * 0.05;
-    return { note, semantic, lexical, bm25, phraseBoost, freshnessBoost };
+    const workingSetBoost = workingSetIdSet.has(String(note.id || "").trim()) ? 0.08 : 0;
+    return { note, semantic, lexical, bm25, phraseBoost, freshnessBoost, workingSetBoost };
   });
 
   const semanticNormalized = normalizeScores(ranked, (item) => item.semantic);
@@ -1864,7 +3111,8 @@ export async function searchMemories({ query = "", project = "", limit = 15, act
       (bm25Normalized.get(item) || 0) * 0.5 +
       item.lexical * 0.15 +
       item.phraseBoost +
-      item.freshnessBoost * 0.4,
+      item.freshnessBoost * 0.4 +
+      item.workingSetBoost,
   }));
 
   combined.sort((a, b) => b.score - a.score);
@@ -1934,7 +3182,13 @@ export function buildCitationBlock(citations) {
     .join("\n\n");
 }
 
-export async function findRelatedMemories({ id, limit = 5, actor = null } = {}) {
+export async function findRelatedMemories({
+  id,
+  limit = 5,
+  actor = null,
+  scope = "all",
+  workingSetIds = [],
+} = {}) {
   const actorContext = resolveActor(actor);
   const normalizedId = String(id || "").trim();
   if (!normalizedId) throw new Error("Missing id");
@@ -1942,9 +3196,16 @@ export async function findRelatedMemories({ id, limit = 5, actor = null } = {}) 
   const boundedLimit = clampInt(limit, 1, 20, 5);
   const sourceNote = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!sourceNote) throw new Error(`Memory not found: ${normalizedId}`);
-  assertCanReadNote(sourceNote, actorContext);
+  await assertCanReadNote(sourceNote, actorContext);
 
-  const candidates = await listSearchCandidatesForActor(actorContext, "", 500);
+  const candidates = await listSearchCandidatesForActor({
+    actorContext,
+    project: "",
+    maxCandidates: 500,
+    scope,
+    workingSetIds,
+    contextNoteId: normalizedId,
+  });
   if (candidates.length <= 1) return [];
 
   const sourceEmbedding = Array.isArray(sourceNote.embedding)
@@ -1967,13 +3228,29 @@ export async function findRelatedMemories({ id, limit = 5, actor = null } = {}) 
   return scored.map((entry, index) => materializeCitation(entry.note, entry.score, index + 1));
 }
 
-export async function askMemories({ question, project = "", limit = 6, contextNoteId = "", actor = null }) {
+export async function askMemories({
+  question,
+  project = "",
+  limit = 6,
+  contextNoteId = "",
+  actor = null,
+  scope = "all",
+  workingSetIds = [],
+}) {
   const normalizedQuestion = String(question || "").trim();
   if (!normalizedQuestion) {
     throw new Error("Missing question");
   }
 
-  let citations = await searchMemories({ query: normalizedQuestion, project, limit, actor });
+  let citations = await searchMemories({
+    query: normalizedQuestion,
+    project,
+    limit,
+    actor,
+    scope,
+    workingSetIds,
+    contextNoteId,
+  });
 
   // If contextNoteId provided, prepend that note as primary citation
   const normalizedContextId = String(contextNoteId || "").trim();
@@ -1981,7 +3258,8 @@ export async function askMemories({ question, project = "", limit = 6, contextNo
     const actorContext = resolveActor(actor);
     try {
       const contextNote = await noteRepo.getNoteById(normalizedContextId, actorContext.workspaceId);
-      if (contextNote && canReadNote(contextNote, actorContext)) {
+      const accessContext = await buildFolderAccessContext(actorContext);
+      if (contextNote && canReadNote(contextNote, actorContext, accessContext)) {
         const contextCitation = materializeCitation(contextNote, 1.0, 0);
         // Deduplicate if note already in results
         citations = citations.filter((c) => c.note?.id !== normalizedContextId);
@@ -2054,9 +3332,25 @@ export async function askMemories({ question, project = "", limit = 6, contextNo
   }
 }
 
-export async function buildProjectContext({ task, project = "", limit = 8, actor = null }) {
+export async function buildProjectContext({
+  task,
+  project = "",
+  limit = 8,
+  actor = null,
+  scope = "all",
+  workingSetIds = [],
+  contextNoteId = "",
+}) {
   const normalizedTask = String(task || "").trim();
-  const citations = await searchMemories({ query: normalizedTask || project || "recent", project, limit, actor });
+  const citations = await searchMemories({
+    query: normalizedTask || project || "recent",
+    project,
+    limit,
+    actor,
+    scope,
+    workingSetIds,
+    contextNoteId,
+  });
   if (citations.length === 0) {
     return {
       context: "No project context found yet.",

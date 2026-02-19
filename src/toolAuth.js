@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import { authRepo } from "./storage/provider.js";
 import { verifyFirebaseIdToken } from "./firebaseAuthLazy.js";
+import { mapNeonClaimsToIdentity, verifyNeonAccessToken } from "./neonAuth.js";
 
 function authError(message, status = 401) {
   const error = new Error(message);
@@ -46,6 +47,35 @@ export async function buildActorFromToolArgs(args = {}) {
       return {
         token: sessionToken,
         provider: "firebase",
+        ...actor,
+      };
+    } catch (error) {
+      if (Number(error?.status) === 403) {
+        throw error;
+      }
+      throw authError("Unauthorized: invalid or expired session token");
+    }
+  }
+  if (config.authProvider === "neon") {
+    try {
+      const claims = await verifyNeonAccessToken(sessionToken);
+      const identity = mapNeonClaimsToIdentity(claims);
+      const user = await authRepo.upsertProviderUser({
+        provider: "neon",
+        subject: identity.subject,
+        email: identity.email,
+        name: identity.name,
+      });
+      const actor = await authRepo.buildActorForUser(user, {
+        preferredWorkspaceId,
+        emailVerified: identity.emailVerified,
+      });
+      if (config.authRequireEmailVerification && !actor.emailVerified) {
+        throw authError("Email verification required before accessing memory tools", 403);
+      }
+      return {
+        token: sessionToken,
+        provider: "neon",
         ...actor,
       };
     } catch (error) {

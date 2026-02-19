@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 let tokenize;
 let buildBm25Index;
 let lexicalScore;
+let resolveEnrichmentProject;
 
 before(async () => {
   process.env.DB_PROVIDER = process.env.DB_PROVIDER || "postgres";
@@ -12,6 +13,7 @@ before(async () => {
   tokenize = memoryService.tokenize;
   buildBm25Index = memoryService.buildBm25Index;
   lexicalScore = memoryService.lexicalScore;
+  resolveEnrichmentProject = memoryService.resolveEnrichmentProject;
 });
 
 describe("tokenize", () => {
@@ -121,5 +123,47 @@ describe("lexicalScore", () => {
     const note = makeNote({ project: "myproject" });
     const score = lexicalScore(note, ["myproject"]);
     assert.equal(score, 1);
+  });
+});
+
+describe("resolveEnrichmentProject", () => {
+  it("prefers the note's current project when present", () => {
+    const result = resolveEnrichmentProject({
+      requestedProject: "Requested Folder",
+      currentProject: "Current Folder",
+      normalizedSourceType: "text",
+      enrichmentProject: "AI Folder",
+    });
+    assert.equal(result, "Current Folder");
+  });
+
+  it("falls back to requested project when current project is missing", () => {
+    const result = resolveEnrichmentProject({
+      requestedProject: "Requested Folder",
+      currentProject: "",
+      normalizedSourceType: "text",
+      enrichmentProject: "AI Folder",
+    });
+    assert.equal(result, "Requested Folder");
+  });
+
+  it("defaults file uploads to General when no explicit project is set", () => {
+    const result = resolveEnrichmentProject({
+      requestedProject: "",
+      currentProject: "",
+      normalizedSourceType: "file",
+      enrichmentProject: "AI Folder",
+    });
+    assert.equal(result, "General");
+  });
+
+  it("uses enrichment project only when no explicit project exists", () => {
+    const result = resolveEnrichmentProject({
+      requestedProject: "",
+      currentProject: "",
+      normalizedSourceType: "text",
+      enrichmentProject: "AI Folder",
+    });
+    assert.equal(result, "AI Folder");
   });
 });

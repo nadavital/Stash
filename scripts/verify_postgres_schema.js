@@ -11,6 +11,9 @@ const REQUIRED_TABLES = [
   "sessions",
   "workspace_invites",
   "auth_events",
+  "enrichment_jobs",
+  "folder_memberships",
+  "activity_events",
 ];
 
 const REQUIRED_INDEXES = [
@@ -20,6 +23,9 @@ const REQUIRED_INDEXES = [
   "idx_sessions_expires",
   "idx_workspace_invites_workspace",
   "idx_auth_events_workspace",
+  "idx_enrichment_jobs_status_available",
+  "idx_folder_memberships_workspace_folder",
+  "idx_activity_events_workspace_created",
 ];
 
 async function verifySchema() {

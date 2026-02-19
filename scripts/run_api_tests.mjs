@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { resolveDatabaseUrl } from "../src/databaseUrl.js";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,12 +37,13 @@ async function stopProcess(child, timeoutMs = 3000) {
 }
 
 function ensureDatabaseUrl() {
-  const databaseUrl = String(process.env.DATABASE_URL || "").trim();
+  const databaseUrl = resolveDatabaseUrl(process.env);
   if (!databaseUrl) {
     throw new Error(
-      "DATABASE_URL is required for API tests. Example: DATABASE_URL=postgres://user:pass@localhost:5432/stash npm test"
+      "DATABASE_URL (or NEON_DATABASE_URL) is required for API tests. Example: DATABASE_URL=postgres://user:pass@localhost:5432/stash npm test"
     );
   }
+  process.env.DATABASE_URL = databaseUrl;
   return databaseUrl;
 }
 

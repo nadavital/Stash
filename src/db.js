@@ -286,21 +286,21 @@ class NoteRepository {
 
     this.listByProjectStmt = this.db.prepare(`
       SELECT * FROM notes
-      WHERE workspace_id = ? AND (? IS NULL OR project = ?)
+      WHERE workspace_id = ? AND (? IS NULL OR lower(ifnull(project, '')) = lower(?))
       ORDER BY datetime(created_at) DESC
       LIMIT ?
     `);
 
     this.listByProjectForOwnerStmt = this.db.prepare(`
       SELECT * FROM notes
-      WHERE workspace_id = ? AND owner_user_id = ? AND (? IS NULL OR project = ?)
+      WHERE workspace_id = ? AND owner_user_id = ? AND (? IS NULL OR lower(ifnull(project, '')) = lower(?))
       ORDER BY datetime(created_at) DESC
       LIMIT ?
     `);
 
     this.listExactProjectStmt = this.db.prepare(`
       SELECT * FROM notes
-      WHERE workspace_id = ? AND project = ?
+      WHERE workspace_id = ? AND lower(ifnull(project, '')) = lower(?)
       ORDER BY datetime(created_at) DESC
     `);
 
@@ -308,7 +308,7 @@ class NoteRepository {
       SELECT * FROM notes
       WHERE
         workspace_id = ?
-        AND (? IS NULL OR project = ?)
+        AND (? IS NULL OR lower(ifnull(project, '')) = lower(?))
         AND (
           content LIKE ? OR
           summary LIKE ? OR
@@ -354,7 +354,7 @@ class NoteRepository {
     this.ftsSearchProjectStmt = this.db.prepare(`
       SELECT note_id
       FROM notes_fts
-      WHERE notes_fts MATCH ? AND workspace_id = ? AND project = ?
+      WHERE notes_fts MATCH ? AND workspace_id = ? AND lower(ifnull(project, '')) = lower(?)
       ORDER BY rank LIMIT ?
     `);
 
@@ -374,28 +374,30 @@ class NoteRepository {
 
     this.listByProjectWithOffsetStmt = this.db.prepare(`
       SELECT * FROM notes
-      WHERE workspace_id = ? AND (? IS NULL OR project = ?)
+      WHERE workspace_id = ? AND (? IS NULL OR lower(ifnull(project, '')) = lower(?))
       ORDER BY datetime(created_at) DESC
       LIMIT ? OFFSET ?
     `);
 
     this.listByProjectWithOffsetForOwnerStmt = this.db.prepare(`
       SELECT * FROM notes
-      WHERE workspace_id = ? AND owner_user_id = ? AND (? IS NULL OR project = ?)
+      WHERE workspace_id = ? AND owner_user_id = ? AND (? IS NULL OR lower(ifnull(project, '')) = lower(?))
       ORDER BY datetime(created_at) DESC
       LIMIT ? OFFSET ?
     `);
 
     this.countAllStmt = this.db.prepare(`SELECT COUNT(*) as cnt FROM notes WHERE workspace_id = ?`);
     this.countByProjectStmt = this.db.prepare(`
-      SELECT COUNT(*) as cnt FROM notes WHERE workspace_id = ? AND (? IS NULL OR project = ?)
+      SELECT COUNT(*) as cnt FROM notes WHERE workspace_id = ? AND (? IS NULL OR lower(ifnull(project, '')) = lower(?))
     `);
     this.countAllForOwnerStmt = this.db.prepare(`
       SELECT COUNT(*) as cnt FROM notes WHERE workspace_id = ? AND owner_user_id = ?
     `);
 
     this.deleteStmt = this.db.prepare(`DELETE FROM notes WHERE id = ? AND workspace_id = ?`);
-    this.deleteByProjectStmt = this.db.prepare(`DELETE FROM notes WHERE workspace_id = ? AND project = ?`);
+    this.deleteByProjectStmt = this.db.prepare(
+      `DELETE FROM notes WHERE workspace_id = ? AND lower(ifnull(project, '')) = lower(?)`
+    );
 
     this.updateNoteStmt = this.db.prepare(`
       UPDATE notes

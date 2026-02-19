@@ -218,9 +218,20 @@ export function adaptHealthResponse(payload) {
     openaiConfigured = rawConfigured === "true";
   }
 
+  const queue = isRecord(source.queue) ? source.queue : {};
   return {
     ok: source.ok !== false,
     openaiConfigured,
+    queue: {
+      pending: Math.max(0, Math.floor(toFiniteNumber(queue.pending, 0))),
+      running: Math.max(0, Math.floor(toFiniteNumber(queue.running, 0))),
+      failed: Math.max(0, Math.floor(toFiniteNumber(queue.failed, 0))),
+      queued: Math.max(0, Math.floor(toFiniteNumber(queue.queued, 0))),
+      retry: Math.max(0, Math.floor(toFiniteNumber(queue.retry, 0))),
+      completed: Math.max(0, Math.floor(toFiniteNumber(queue.completed, 0))),
+      delayed: Math.max(0, Math.floor(toFiniteNumber(queue.delayed, 0))),
+      total: Math.max(0, Math.floor(toFiniteNumber(queue.total, 0))),
+    },
   };
 }
 

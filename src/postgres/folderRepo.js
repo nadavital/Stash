@@ -104,6 +104,16 @@ class PostgresFolderRepository {
     return mapRow(result.rows[0]);
   }
 
+  async getFolderByNameInsensitive(name, workspaceId = config.defaultWorkspaceId) {
+    const normalizedName = String(name || "").trim();
+    if (!normalizedName) return null;
+    const result = await this._query(
+      `SELECT * FROM folders WHERE workspace_id = $1 AND LOWER(name) = LOWER($2) ORDER BY created_at ASC LIMIT 1`,
+      [normalizeWorkspaceId(workspaceId), normalizedName]
+    );
+    return mapRow(result.rows[0]);
+  }
+
   async listFolders(parentId = null, workspaceId = config.defaultWorkspaceId) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     if (parentId === undefined || parentId === null) {

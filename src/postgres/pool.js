@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { Pool } from "pg";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
@@ -6,6 +7,70 @@ let cachedPool = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function normalizeSslMode(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (["disable", "disabled", "off"].includes(normalized)) return "disable";
+  if (["require", "required", "allow", "prefer"].includes(normalized)) return "require";
+  if (["no-verify", "no_verify", "insecure"].includes(normalized)) return "no-verify";
+  if (["verify-ca", "verify_ca"].includes(normalized)) return "verify-ca";
+  if (["verify-full", "verify_full"].includes(normalized)) return "verify-full";
+  return "";
+}
+
+function inferSslModeFromConnectionString(connectionString = "") {
+  try {
+    const parsed = new URL(connectionString);
+    return normalizeSslMode(parsed.searchParams.get("sslmode") || "");
+  } catch {
+    return "";
+  }
+}
+
+function buildSslConfig(connectionString) {
+  const envMode =
+    normalizeSslMode(process.env.PG_SSL_MODE || "") ||
+    normalizeSslMode(process.env.PGSSLMODE || "");
+  const inferredMode = inferSslModeFromConnectionString(connectionString);
+  const sslMode =
+    envMode ||
+    (parseBoolean(process.env.PG_SSL, false) ? "require" : "") ||
+    inferredMode;
+
+  if (!sslMode || sslMode === "disable") {
+    return null;
+  }
+
+  const caPath = String(process.env.PG_SSL_CA_PATH || "").trim();
+  const ssl = {
+    rejectUnauthorized: sslMode === "verify-ca" || sslMode === "verify-full",
+  };
+
+  if (sslMode === "no-verify") {
+    ssl.rejectUnauthorized = false;
+  }
+
+  if (caPath) {
+    try {
+      ssl.ca = fs.readFileSync(caPath, "utf8");
+      ssl.rejectUnauthorized = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`PG_SSL_CA_PATH could not be read: ${message}`);
+    }
+  }
+
+  return ssl;
 }
 
 export function createPostgresPool({
@@ -19,8 +84,11 @@ export function createPostgresPool({
     throw new Error("DATABASE_URL is required for Postgres operations");
   }
 
+  const sslConfig = buildSslConfig(connectionString);
+
   return new Pool({
     connectionString,
+    ...(sslConfig ? { ssl: sslConfig } : {}),
     max: Number.isFinite(max) ? max : 10,
     connectionTimeoutMillis: Number.isFinite(connectionTimeoutMs) ? connectionTimeoutMs : 5000,
     idleTimeoutMillis: Number.isFinite(idleTimeoutMs) ? idleTimeoutMs : 30000,

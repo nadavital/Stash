@@ -88,6 +88,46 @@ async function getSecondaryToken() {
   return SECONDARY_TOKEN;
 }
 
+async function ensureSecondaryInPrimaryWorkspace() {
+  const secondToken = await getSecondaryToken();
+  assert.ok(secondToken);
+
+  if (!PRIMARY_WORKSPACE_ID) {
+    const session = await jsonFetch("/api/auth/session");
+    assert.equal(session.status, 200);
+    PRIMARY_WORKSPACE_ID = session.body?.actor?.workspaceId || "";
+  }
+  assert.ok(PRIMARY_WORKSPACE_ID);
+
+  const existingWorkspaces = await jsonFetch("/api/workspaces", { authToken: secondToken });
+  assert.equal(existingWorkspaces.status, 200);
+  const alreadyMember = (existingWorkspaces.body.items || []).some((item) => item?.id === PRIMARY_WORKSPACE_ID);
+  if (alreadyMember) {
+    return secondToken;
+  }
+
+  const created = await jsonFetch("/api/workspaces/invites", {
+    method: "POST",
+    body: {
+      email: SECONDARY_EMAIL,
+      role: "member",
+    },
+  });
+  if (created.status === 201 && created.body?.invite?.token) {
+    const accepted = await jsonFetch(
+      `/api/workspaces/invites/${encodeURIComponent(created.body.invite.token)}/accept`,
+      { method: "POST", authToken: secondToken }
+    );
+    assert.equal(accepted.status, 200);
+  }
+
+  const refreshed = await jsonFetch("/api/workspaces", { authToken: secondToken });
+  assert.equal(refreshed.status, 200);
+  const hasPrimary = (refreshed.body.items || []).some((item) => item?.id === PRIMARY_WORKSPACE_ID);
+  assert.equal(hasPrimary, true);
+  return secondToken;
+}
+
 describe("API Integration", () => {
   // These tests assume a running server at TEST_BASE_URL (or localhost:8787 by default).
 
@@ -168,6 +208,20 @@ describe("API Integration", () => {
     assert.equal(status, 200);
     assert.ok(Array.isArray(body.items));
     assert.ok(body.items.length >= 1);
+  });
+
+  it("GET /api/workspaces/members returns workspace users", async () => {
+    const secondToken = await ensureSecondaryInPrimaryWorkspace();
+    assert.ok(secondToken);
+
+    const { status, body } = await jsonFetch("/api/workspaces/members?limit=20");
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.items));
+    assert.ok(body.items.length >= 2);
+    const hasPrimary = (body.items || []).some((entry) => entry?.email === "integration@example.com");
+    const hasSecondary = (body.items || []).some((entry) => entry?.email === SECONDARY_EMAIL);
+    assert.equal(hasPrimary, true);
+    assert.equal(hasSecondary, true);
   });
 
   it("GET /api/auth/audit returns auth events for workspace manager", async () => {
@@ -296,18 +350,37 @@ describe("API Integration", () => {
         role: "member",
       },
     });
-    assert.equal(created.status, 201);
-    assert.ok(created.body?.invite?.token);
+    assert.ok(created.status === 201 || created.status === 409);
 
-    const accepted = await jsonFetch(
-      `/api/workspaces/invites/${encodeURIComponent(created.body.invite.token)}/accept`,
-      {
-        method: "POST",
+    if (created.status === 201 && created.body?.invite?.token) {
+      const accepted = await jsonFetch(
+        `/api/workspaces/invites/${encodeURIComponent(created.body.invite.token)}/accept`,
+        {
+          method: "POST",
+          authToken: secondToken,
+        }
+      );
+      assert.equal(accepted.status, 200);
+      assert.equal(accepted.body?.invite?.status, "accepted");
+    } else {
+      const incoming = await jsonFetch("/api/workspaces/invites/incoming", {
         authToken: secondToken,
+      });
+      assert.equal(incoming.status, 200);
+      const pendingForPrimary = (incoming.body.items || []).find(
+        (item) => item?.workspaceId === PRIMARY_WORKSPACE_ID && item?.status === "pending" && item?.token
+      );
+      if (pendingForPrimary?.token) {
+        const accepted = await jsonFetch(
+          `/api/workspaces/invites/${encodeURIComponent(pendingForPrimary.token)}/accept`,
+          {
+            method: "POST",
+            authToken: secondToken,
+          }
+        );
+        assert.equal(accepted.status, 200);
       }
-    );
-    assert.equal(accepted.status, 200);
-    assert.equal(accepted.body?.invite?.status, "accepted");
+    }
 
     const workspaces = await jsonFetch("/api/workspaces", {
       authToken: secondToken,
@@ -315,6 +388,74 @@ describe("API Integration", () => {
     assert.equal(workspaces.status, 200);
     const hasPrimary = (workspaces.body.items || []).some((item) => item?.id === PRIMARY_WORKSPACE_ID);
     assert.equal(hasPrimary, true);
+  });
+
+  it("supports folder collaborator role management and folder activity", async () => {
+    const secondToken = await ensureSecondaryInPrimaryWorkspace();
+    assert.ok(secondToken);
+
+    const folderName = `Collab-${Date.now()}`;
+    const createdFolder = await jsonFetch("/api/folders", {
+      method: "POST",
+      body: {
+        name: folderName,
+        description: "Folder collaboration integration test",
+        color: "blue",
+      },
+    });
+    assert.equal(createdFolder.status, 201);
+    const folderId = createdFolder.body?.folder?.id;
+    assert.ok(folderId);
+
+    try {
+      const members = await jsonFetch("/api/workspaces/members?limit=100");
+      assert.equal(members.status, 200);
+      const secondaryMember = (members.body.items || []).find((item) => item?.email === SECONDARY_EMAIL);
+      assert.ok(secondaryMember?.userId);
+
+      const initialCollaborators = await jsonFetch(`/api/folders/${encodeURIComponent(folderId)}/collaborators`);
+      assert.equal(initialCollaborators.status, 200);
+      const hasManager = (initialCollaborators.body.items || []).some(
+        (entry) => entry?.userId && entry?.role === "manager"
+      );
+      assert.equal(hasManager, true);
+
+      const setRole = await jsonFetch(
+        `/api/folders/${encodeURIComponent(folderId)}/collaborators/${encodeURIComponent(secondaryMember.userId)}`,
+        {
+          method: "PUT",
+          body: { role: "editor" },
+        }
+      );
+      assert.equal(setRole.status, 200);
+      assert.equal(setRole.body?.collaborator?.role, "editor");
+
+      const afterSet = await jsonFetch(`/api/folders/${encodeURIComponent(folderId)}/collaborators`);
+      assert.equal(afterSet.status, 200);
+      const collaborator = (afterSet.body.items || []).find((entry) => entry?.userId === secondaryMember.userId);
+      assert.equal(collaborator?.role, "editor");
+
+      const activity = await jsonFetch(`/api/activity?folderId=${encodeURIComponent(folderId)}&limit=20`);
+      assert.equal(activity.status, 200);
+      assert.ok(Array.isArray(activity.body.items));
+      const eventTypes = (activity.body.items || []).map((entry) => entry?.eventType).filter(Boolean);
+      assert.ok(eventTypes.includes("folder.created"));
+      assert.ok(eventTypes.includes("folder.shared"));
+
+      const removed = await jsonFetch(
+        `/api/folders/${encodeURIComponent(folderId)}/collaborators/${encodeURIComponent(secondaryMember.userId)}`,
+        { method: "DELETE" }
+      );
+      assert.equal(removed.status, 200);
+      assert.equal(removed.body.removed, 1);
+
+      const afterRemove = await jsonFetch(`/api/folders/${encodeURIComponent(folderId)}/collaborators`);
+      assert.equal(afterRemove.status, 200);
+      const stillPresent = (afterRemove.body.items || []).some((entry) => entry?.userId === secondaryMember.userId);
+      assert.equal(stillPresent, false);
+    } finally {
+      await jsonFetch(`/api/folders/${encodeURIComponent(folderId)}`, { method: "DELETE" });
+    }
   });
 
   it("GET /api/export returns data", async () => {
@@ -473,6 +614,137 @@ describe("API Integration", () => {
 
     // Cleanup
     await jsonFetch("/api/notes/batch-delete", { method: "POST", body: { ids } });
+  });
+
+  it("GET /api/notes supports item scope with working set ids", async () => {
+    const project = `ScopeItem-${Date.now()}`;
+    const createdIds = [];
+    try {
+      const first = await jsonFetch("/api/notes", {
+        method: "POST",
+        body: { content: "Scope item note A", sourceType: "text", project },
+      });
+      const second = await jsonFetch("/api/notes", {
+        method: "POST",
+        body: { content: "Scope item note B", sourceType: "text", project },
+      });
+      assert.equal(first.status, 201);
+      assert.equal(second.status, 201);
+      createdIds.push(first.body.note.id, second.body.note.id);
+
+      const path = `/api/notes?scope=item&limit=10&workingSetIds=${encodeURIComponent(first.body.note.id)}`;
+      const { status, body } = await jsonFetch(path);
+      assert.equal(status, 200);
+      const resultIds = (body.items || []).map((entry) => entry?.note?.id).filter(Boolean);
+      assert.deepEqual(resultIds, [first.body.note.id]);
+    } finally {
+      if (createdIds.length) {
+        await jsonFetch("/api/notes/batch-delete", { method: "POST", body: { ids: createdIds } });
+      }
+    }
+  });
+
+  it("GET /api/recent enforces project scope rules", async () => {
+    const project = `ScopeProject-${Date.now()}`;
+    let createdId = "";
+    try {
+      const created = await jsonFetch("/api/notes", {
+        method: "POST",
+        body: { content: `Project scope note ${project}`, sourceType: "text", project },
+      });
+      assert.equal(created.status, 201);
+      createdId = created.body.note.id;
+
+      const emptyScoped = await jsonFetch("/api/recent?scope=project&limit=5");
+      assert.equal(emptyScoped.status, 200);
+      assert.equal(emptyScoped.body.count, 0);
+
+      const scoped = await jsonFetch(`/api/recent?scope=project&project=${encodeURIComponent(project)}&limit=10`);
+      assert.equal(scoped.status, 200);
+      const ids = (scoped.body.items || []).map((entry) => entry?.id).filter(Boolean);
+      assert.ok(ids.includes(createdId));
+    } finally {
+      if (createdId) {
+        await jsonFetch(`/api/notes/${encodeURIComponent(createdId)}`, { method: "DELETE" });
+      }
+    }
+  });
+
+  it("POST /api/context supports item scope and working set ids", async () => {
+    const marker = `context-scope-${Date.now()}`;
+    const project = `ScopeContext-${Date.now()}`;
+    const createdIds = [];
+    try {
+      const focus = await jsonFetch("/api/notes", {
+        method: "POST",
+        body: { content: `Focus note ${marker}`, sourceType: "text", project },
+      });
+      const distractor = await jsonFetch("/api/notes", {
+        method: "POST",
+        body: { content: "Distractor note for scope test", sourceType: "text", project },
+      });
+      assert.equal(focus.status, 201);
+      assert.equal(distractor.status, 201);
+      createdIds.push(focus.body.note.id, distractor.body.note.id);
+
+      const { status, body } = await jsonFetch("/api/context", {
+        method: "POST",
+        body: {
+          task: marker,
+          scope: "item",
+          workingSetIds: [focus.body.note.id],
+          limit: 6,
+        },
+      });
+      assert.equal(status, 200);
+      const citationIds = (body.citations || []).map((entry) => entry?.note?.id).filter(Boolean);
+      assert.ok(citationIds.includes(focus.body.note.id));
+      assert.equal(citationIds.includes(distractor.body.note.id), false);
+    } finally {
+      if (createdIds.length) {
+        await jsonFetch("/api/notes/batch-delete", { method: "POST", body: { ids: createdIds } });
+      }
+    }
+  });
+
+  it("POST /api/chat keeps context note first for item scope", async () => {
+    const marker = `chat-scope-${Date.now()}`;
+    const project = `ScopeChat-${Date.now()}`;
+    const createdIds = [];
+    try {
+      const focus = await jsonFetch("/api/notes", {
+        method: "POST",
+        body: { content: `Primary context ${marker}`, sourceType: "text", project },
+      });
+      const extra = await jsonFetch("/api/notes", {
+        method: "POST",
+        body: { content: `Secondary context ${marker}`, sourceType: "text", project },
+      });
+      assert.equal(focus.status, 201);
+      assert.equal(extra.status, 201);
+      createdIds.push(focus.body.note.id, extra.body.note.id);
+
+      const { status, body } = await jsonFetch("/api/chat", {
+        method: "POST",
+        body: {
+          question: `Summarize this: ${marker}`,
+          scope: "item",
+          contextNoteId: focus.body.note.id,
+          workingSetIds: [focus.body.note.id],
+          limit: 5,
+        },
+      });
+      assert.equal(status, 200);
+      assert.ok(Array.isArray(body.citations));
+      assert.ok(body.citations.length >= 1);
+      const citationIds = body.citations.map((entry) => entry?.note?.id).filter(Boolean);
+      assert.equal(citationIds[0], focus.body.note.id);
+      assert.equal(citationIds.every((id) => id === focus.body.note.id), true);
+    } finally {
+      if (createdIds.length) {
+        await jsonFetch("/api/notes/batch-delete", { method: "POST", body: { ids: createdIds } });
+      }
+    }
   });
 
   // --- SSE ---

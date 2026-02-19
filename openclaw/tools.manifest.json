@@ -1,10 +1,161 @@
 {
   "name": "stash-tools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenClaw command tools backed by local Stash database",
   "command": "node",
   "args": ["openclaw/bridge.js"],
   "tools": [
+    {
+      "name": "create_note",
+      "description": "Create a note, link, image, or file-backed item",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "content": { "type": "string" },
+          "sourceType": { "type": "string", "enum": ["text", "link", "image", "file"] },
+          "sourceUrl": { "type": "string" },
+          "project": { "type": "string" },
+          "imageDataUrl": { "type": "string" },
+          "fileDataUrl": { "type": "string" },
+          "fileName": { "type": "string" },
+          "fileMimeType": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "get_note_raw_content",
+      "description": "Read extracted raw/markdown content for a note",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "id": { "type": "string" },
+          "includeMarkdown": { "type": "boolean" },
+          "maxChars": { "type": "number" }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "update_note",
+      "description": "Update note content/summary/tags/project",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "id": { "type": "string" },
+          "content": { "type": "string" },
+          "summary": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "project": { "type": "string" }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "update_note_markdown",
+      "description": "Edit extracted raw/markdown content with optional re-enrichment",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "id": { "type": "string" },
+          "content": { "type": "string" },
+          "rawContent": { "type": "string" },
+          "markdownContent": { "type": "string" },
+          "requeueEnrichment": { "type": "boolean" }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "add_note_comment",
+      "description": "Add a contextual comment to a note",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "id": { "type": "string" },
+          "text": { "type": "string" }
+        },
+        "required": ["id", "text"]
+      }
+    },
+    {
+      "name": "list_note_versions",
+      "description": "List note version history",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "id": { "type": "string" }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "restore_note_version",
+      "description": "Restore note to a previous version",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "id": { "type": "string" },
+          "versionNumber": { "type": "number" }
+        },
+        "required": ["id", "versionNumber"]
+      }
+    },
     {
       "name": "search_notes",
       "description": "Search notes using BM25 ranking",
@@ -21,6 +172,8 @@
           },
           "query": { "type": "string" },
           "project": { "type": "string" },
+          "scope": { "type": "string", "enum": ["all", "workspace", "user", "project", "item"] },
+          "workingSetIds": { "type": "array", "items": { "type": "string" } },
           "includeMarkdown": { "type": "boolean" },
           "limit": { "type": "number" }
         },
@@ -58,6 +211,7 @@
             "type": "string",
             "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
           },
+          "filePath": { "type": "string" },
           "maxChars": { "type": "number" }
         }
       }
@@ -117,6 +271,43 @@
           "project": { "type": "string" }
         },
         "required": ["project"]
+      }
+    },
+    {
+      "name": "retry_note_enrichment",
+      "description": "Retry enrichment for a note id",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "id": { "type": "string" }
+        },
+        "required": ["id"]
+      }
+    },
+    {
+      "name": "get_enrichment_queue",
+      "description": "Get enrichment queue counts and failed jobs (owner/admin only)",
+      "arguments_schema": {
+        "type": "object",
+        "properties": {
+          "sessionToken": {
+            "type": "string",
+            "description": "Auth token (optional when STASH_SESSION_TOKEN is set for the bridge process)"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace id override (or set STASH_WORKSPACE_ID for the bridge process)"
+          },
+          "failedLimit": { "type": "number" }
+        }
       }
     }
   ]

@@ -16,9 +16,25 @@ import {
   initFolderModalHandlers,
 } from "../components/folder-modal/folder-modal.js";
 import {
+  renderFolderShareModalHTML,
+  queryFolderShareModalEls,
+  initFolderShareModal,
+  setFolderShareModalFolderName,
+  setFolderShareModalMembers,
+  setFolderShareModalCollaborators,
+  setFolderShareModalError,
+  setFolderShareModalBusy,
+} from "../components/folder-share-modal/folder-share-modal.js";
+import {
   renderMoveModalHTML,
   queryMoveModalEls,
 } from "../components/move-modal/move-modal.js";
+import {
+  renderActivityFeedHTML,
+  queryActivityFeedEls,
+  initActivityFeed,
+  renderActivityFeedItems,
+} from "../components/activity-feed/activity-feed.js";
 import { createMoveDialogController } from "../services/move-dialog.js";
 import {
   renderSaveModalHTML,
@@ -76,6 +92,7 @@ function renderFolderPageContent(folderMeta) {
           folderColor: folderMeta.color,
           folderSymbol: folderMeta.symbol,
         })}
+        ${renderActivityFeedHTML({ title: "Live activity" })}
         <div id="subfolders-section" class="subfolders-section hidden">
           <div class="subfolders-head">
             <p class="subfolders-title">Folders</p>
@@ -97,6 +114,8 @@ function renderFolderPageContent(folderMeta) {
 
     ${renderFolderModalHTML()}
 
+    ${renderFolderShareModalHTML()}
+
     ${renderMoveModalHTML()}
 
     ${renderSaveModalHTML()}
@@ -106,19 +125,24 @@ function renderFolderPageContent(folderMeta) {
 function queryPageElements(mountNode) {
   const itemModalEls = queryItemModalEls(mountNode);
   const folderModalEls = queryFolderModalEls(mountNode);
+  const folderShareModalEls = queryFolderShareModalEls(mountNode);
   const moveModalEls = queryMoveModalEls(mountNode);
   const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
+  const activityFeedEls = queryActivityFeedEls(mountNode);
 
   return {
     ...itemModalEls,
     ...folderModalEls,
+    ...folderShareModalEls,
     ...moveModalEls,
     ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
+    ...activityFeedEls,
     deleteFolderBtn: mountNode.querySelector("#delete-folder-btn"),
+    shareFolderBtn: mountNode.querySelector("#share-folder-btn"),
     editFolderBtn: mountNode.querySelector("#edit-folder-btn"),
     editFolderMenu: mountNode.querySelector("#edit-folder-menu"),
     editSelectBtn: mountNode.querySelector("#edit-select-btn"),
@@ -159,6 +183,10 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
       let currentOffset = 0;
       const PAGE_SIZE = 20;
       let dbFolderMeta = null;
+      let activityItems = [];
+      let workspaceMembers = [];
+      let folderCollaborators = [];
+      let selectedShareUserId = "";
 
       function normalizeRuntimeFolderMeta(candidate, fallbackName = folderMeta.name) {
         const normalizedName = String(candidate?.name || fallbackName || "").trim() || "General";
@@ -196,7 +224,59 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         }
       }
 
+      function openShareModal() {
+        els.folderShareModal?.classList.remove("hidden");
+        setFolderShareModalError(els, "");
+      }
+
+      function closeShareModal() {
+        els.folderShareModal?.classList.add("hidden");
+        setFolderShareModalError(els, "");
+      }
+
+      function renderShareModal() {
+        setFolderShareModalFolderName(els, folderMeta.name);
+        setFolderShareModalMembers(els, workspaceMembers, selectedShareUserId);
+        setFolderShareModalCollaborators(els, folderCollaborators);
+      }
+
+      async function refreshCollaborators() {
+        const folderId = String(dbFolderMeta?.id || "").trim();
+        if (!folderId) return;
+        const [membersResult, collaboratorsResult] = await Promise.all([
+          apiClient.fetchWorkspaceMembers({ limit: 400 }),
+          apiClient.fetchFolderCollaborators(folderId),
+        ]);
+        workspaceMembers = Array.isArray(membersResult?.items) ? membersResult.items : [];
+        folderCollaborators = Array.isArray(collaboratorsResult?.items) ? collaboratorsResult.items : [];
+        if (!selectedShareUserId && workspaceMembers.length > 0) {
+          selectedShareUserId = String(workspaceMembers[0]?.userId || "").trim();
+        }
+        const existingRole = folderCollaborators.find((entry) => String(entry?.userId || "") === selectedShareUserId)?.role;
+        if (existingRole && els.folderShareRoleSelect) {
+          els.folderShareRoleSelect.value = existingRole;
+        }
+        renderShareModal();
+      }
+
+      async function refreshActivityFeed() {
+        const folderId = String(dbFolderMeta?.id || "").trim();
+        if (!folderId) {
+          activityItems = [];
+          renderActivityFeedItems(els, activityItems);
+          return;
+        }
+        const result = await apiClient.fetchActivity({
+          folderId,
+          limit: 40,
+        });
+        activityItems = Array.isArray(result?.items) ? result.items : [];
+        renderActivityFeedItems(els, activityItems);
+      }
+
       syncFolderHeader(folderMeta);
+      renderActivityFeedItems(els, activityItems);
+      renderShareModal();
 
       function on(target, eventName, handler, options) {
         if (!target) return;
@@ -266,6 +346,15 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
       shell.setOnWorkspaceAction(() => {
         refreshNotes();
       });
+
+      const cleanupActivityFeed = initActivityFeed(els, {
+        onRefresh() {
+          refreshActivityFeed().catch(() => {
+            toast("Failed to refresh activity", "error");
+          });
+        },
+      });
+      disposers.push(cleanupActivityFeed);
       // Search toggle
       on(els.toolbarSearchToggle, "click", () => {
         const searchWrap = mountNode.querySelector(".inline-search");
@@ -502,6 +591,10 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
             if (dbFolderMeta.parentId) {
               updateBreadcrumb({ ...dbFolderMeta, color: folderMeta.color }, mountNode);
             }
+            await refreshActivityFeed().catch(() => {});
+            if (els.folderShareModal && !els.folderShareModal.classList.contains("hidden")) {
+              await refreshCollaborators().catch(() => {});
+            }
           }
 
           renderView();
@@ -637,6 +730,23 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         openFolderModal(els);
       });
 
+      on(els.shareFolderBtn, "click", async () => {
+        const folderId = String(dbFolderMeta?.id || "").trim();
+        if (!folderId) {
+          toast("Save folder metadata first, then share", "error");
+          return;
+        }
+        try {
+          setFolderShareModalBusy(els, true);
+          await refreshCollaborators();
+          openShareModal();
+        } catch (error) {
+          toast(conciseTechnicalError(error, "Failed to load collaborators"), "error");
+        } finally {
+          setFolderShareModalBusy(els, false);
+        }
+      });
+
       // Folder modal handlers via extracted component
       const cleanupFolderModal = initFolderModalHandlers(els, {
         onClose() {
@@ -645,6 +755,50 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         onColorSelect() {},
       });
       disposers.push(cleanupFolderModal);
+
+      const cleanupFolderShareModal = initFolderShareModal(els, {
+        onClose() {
+          closeShareModal();
+        },
+        onSelectMember(userId) {
+          selectedShareUserId = String(userId || "").trim();
+          const existingRole = folderCollaborators.find((entry) => String(entry?.userId || "").trim() === selectedShareUserId)?.role;
+          if (existingRole && els.folderShareRoleSelect) {
+            els.folderShareRoleSelect.value = String(existingRole || "viewer");
+          }
+        },
+        async onSubmit({ userId, role }) {
+          const folderId = String(dbFolderMeta?.id || "").trim();
+          if (!folderId || !userId) return;
+          try {
+            setFolderShareModalBusy(els, true);
+            setFolderShareModalError(els, "");
+            await apiClient.setFolderCollaborator(folderId, userId, role);
+            await refreshCollaborators();
+            await refreshActivityFeed().catch(() => {});
+          } catch (error) {
+            setFolderShareModalError(els, conciseTechnicalError(error, "Failed to update access"));
+          } finally {
+            setFolderShareModalBusy(els, false);
+          }
+        },
+        async onRemove(userId) {
+          const folderId = String(dbFolderMeta?.id || "").trim();
+          if (!folderId || !userId) return;
+          try {
+            setFolderShareModalBusy(els, true);
+            setFolderShareModalError(els, "");
+            await apiClient.removeFolderCollaborator(folderId, userId);
+            await refreshCollaborators();
+            await refreshActivityFeed().catch(() => {});
+          } catch (error) {
+            setFolderShareModalError(els, conciseTechnicalError(error, "Failed to remove access"));
+          } finally {
+            setFolderShareModalBusy(els, false);
+          }
+        },
+      });
+      disposers.push(cleanupFolderShareModal);
 
       on(els.folderForm, "submit", async (event) => {
         event.preventDefault();
@@ -694,6 +848,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
           els.editFolderMenu?.classList.add("hidden");
           closeItemModal(els);
           closeFolderModal(els);
+          closeShareModal();
           moveDialog.cleanup();
         },
       });
@@ -717,6 +872,14 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         setNotes: (next) => { recentNotes = next; setState({ notes: recentNotes }); renderView(); },
         isMounted: () => isMounted,
         shouldAccept: (enrichedNote) => enrichedNote.project === folderMeta.name,
+        onEvent(event) {
+          if (event?.type !== "activity") return;
+          const eventFolderId = String(event.folderId || "").trim();
+          if (!eventFolderId || eventFolderId !== String(dbFolderMeta?.id || "").trim()) return;
+          const nextItems = [event, ...activityItems].slice(0, 40);
+          activityItems = nextItems;
+          renderActivityFeedItems(els, activityItems);
+        },
       });
 
       return () => {
@@ -734,6 +897,7 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         }
         closeItemModal(els);
         closeFolderModal(els);
+        closeShareModal();
         document.body.classList.remove("batch-mode-active");
         // Clear shell callbacks
         shell.setToast(null);

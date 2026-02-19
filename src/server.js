@@ -17,22 +17,45 @@ import {
   deleteProjectMemories,
   exportMemories,
   findRelatedMemories,
+  getMemoryById,
   getMemoryStats,
+  getEnrichmentQueueStats,
+  getMemoryRawContent,
   listMemoryVersions,
   listProjects,
   listRecentMemories,
+  listWorkspaceActivity,
+  listFolderCollaborators,
   listTags,
+  retryMemoryEnrichment,
+  setFolderCollaboratorRole,
+  removeFolderCollaborator,
   restoreMemoryVersion,
   searchMemories,
+  createWorkspaceFolder,
+  updateWorkspaceFolder,
+  deleteWorkspaceFolder,
   updateMemory,
+  updateMemoryAttachment,
+  updateMemoryExtractedContent,
 } from "./memoryService.js";
 import { createStreamingResponse } from "./openai.js";
-import { noteRepo, taskRepo, folderRepo, authRepo, providerName, storageBridgeMode } from "./storage/provider.js";
+import {
+  noteRepo,
+  taskRepo,
+  folderRepo,
+  authRepo,
+  collaborationRepo,
+  providerName,
+  storageBridgeMode,
+} from "./storage/provider.js";
 import { enrichmentQueue } from "./queue.js";
+import { createAgentToolHarness } from "./agentHarness.js";
 import { logger, requestLogger } from "./logger.js";
 import { createRateLimiter } from "./rateLimit.js";
 import { validateNotePayload, validateBatchPayload } from "./validate.js";
 import { extractSessionTokenFromHeaders } from "./authHeaders.js";
+import { subscribeActivity } from "./activityBus.js";
 import {
   deleteFirebaseUser,
   firebaseChangePassword,
@@ -45,6 +68,14 @@ import {
   revokeFirebaseUserSessions,
   verifyFirebaseIdToken,
 } from "./firebaseAuthLazy.js";
+import {
+  isNeonConfigured,
+  mapNeonClaimsToIdentity,
+  neonSendPasswordResetEmail,
+  neonSignInWithEmailPassword,
+  neonSignUpWithEmailPassword,
+  verifyNeonAccessToken,
+} from "./neonAuth.js";
 
 const checkRate = createRateLimiter();
 const checkAuthRate = createRateLimiter({ windowMs: 10 * 60 * 1000, maxRequests: 50 });
@@ -86,12 +117,15 @@ function sendText(res, statusCode, text) {
 }
 
 function sendUnauthorized(res) {
+  let hint = "Sign in via POST /api/auth/login, then send Authorization: Bearer <token>";
+  if (config.authProvider === "firebase") {
+    hint = "Sign in via Firebase auth endpoint, then send Authorization: Bearer <id_token>";
+  } else if (config.authProvider === "neon") {
+    hint = "Sign in via POST /api/auth/login (Neon-backed), then send Authorization: Bearer <access_token>";
+  }
   sendJson(res, 401, {
     error: "Unauthorized",
-    hint:
-      config.authProvider === "firebase"
-        ? "Sign in via Firebase auth endpoint, then send Authorization: Bearer <id_token>"
-        : "Sign in via POST /api/auth/login, then send Authorization: Bearer <token>",
+    hint,
   });
 }
 
@@ -111,6 +145,15 @@ function getRequestIp(req) {
     req.socket?.remoteAddress ||
     "unknown"
   );
+}
+
+function getRequestOrigin(req) {
+  const explicitOrigin = String(req.headers.origin || "").trim();
+  if (explicitOrigin) return explicitOrigin;
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "http";
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  if (!host) return "";
+  return `${proto}://${host}`;
 }
 
 const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
@@ -221,6 +264,32 @@ function buildFirebaseSessionPayload(firebaseAuthResult, actor) {
   });
 }
 
+function buildNeonSessionPayload(neonAuthResult, actor) {
+  return buildSessionResponseFromActor({
+    actor,
+    token: String(neonAuthResult?.token || "").trim(),
+    refreshToken: String(neonAuthResult?.refreshToken || "").trim(),
+    createdAt: new Date().toISOString(),
+    expiresAt: String(neonAuthResult?.expiresAt || "").trim(),
+    provider: "neon",
+  });
+}
+
+async function resolveNeonActorFromToken(token, { preferredWorkspaceId = "" } = {}) {
+  const claims = await verifyNeonAccessToken(token);
+  const identity = mapNeonClaimsToIdentity(claims);
+  const user = await authRepo.upsertProviderUser({
+    provider: "neon",
+    subject: identity.subject,
+    email: identity.email,
+    name: identity.name,
+  });
+  return authRepo.buildActorForUser(user, {
+    preferredWorkspaceId,
+    emailVerified: identity.emailVerified,
+  });
+}
+
 async function buildActorFromRequest(req, { url = null, allowQueryToken = false } = {}) {
   const token = extractSessionTokenFromHeaders(req.headers);
   const tokenFromQuery = allowQueryToken ? url?.searchParams?.get("sessionToken") || "" : "";
@@ -237,6 +306,18 @@ async function buildActorFromRequest(req, { url = null, allowQueryToken = false 
       return {
         token: finalToken,
         provider: "firebase",
+        ...actor,
+      };
+    } catch {
+      return null;
+    }
+  }
+  if (config.authProvider === "neon") {
+    try {
+      const actor = await resolveNeonActorFromToken(finalToken, { preferredWorkspaceId });
+      return {
+        token: finalToken,
+        provider: "neon",
         ...actor,
       };
     } catch {
@@ -275,6 +356,23 @@ async function readJsonBody(req, maxBytes = 15 * 1024 * 1024) {
   } catch {
     throw new Error("Invalid JSON body");
   }
+}
+
+function parseWorkingSetIds(rawValue, max = 50) {
+  const inputValues = Array.isArray(rawValue) ? rawValue : [rawValue];
+  const values = [];
+  const seen = new Set();
+  for (const rawEntry of inputValues) {
+    const parts = String(rawEntry || "").split(/[,\n]/);
+    for (const part of parts) {
+      const normalized = String(part || "").trim();
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      values.push(normalized);
+      if (values.length >= max) return values;
+    }
+  }
+  return values;
 }
 
 function sanitizePath(baseDir, requestedPath) {
@@ -342,6 +440,32 @@ function sanitizeQueueEventForStream(event = null) {
   return payload;
 }
 
+async function canActorReceiveActivityEvent(actor = null, event = null) {
+  if (!actor || !event) return false;
+  if (String(event.workspaceId || "").trim() !== String(actor.workspaceId || "").trim()) {
+    return false;
+  }
+  if (isWorkspaceManager(actor)) return true;
+  const actorUserId = String(actor.userId || "").trim();
+  if (!actorUserId) return false;
+
+  const visibilityUserId = String(event.visibilityUserId || "").trim();
+  if (visibilityUserId) {
+    return visibilityUserId === actorUserId;
+  }
+
+  const folderId = String(event.folderId || "").trim();
+  if (folderId) {
+    const role = await collaborationRepo.getFolderMemberRole({
+      workspaceId: actor.workspaceId,
+      folderId,
+      userId: actorUserId,
+    });
+    return Boolean(role);
+  }
+  return true;
+}
+
 function handleSSE(req, res, actor) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -376,26 +500,72 @@ function handleSSE(req, res, actor) {
     res.write(`event: ${eventType}\ndata: ${JSON.stringify(payload)}\n\n`);
   });
 
+  const unsubscribeActivity = subscribeActivity((event) => {
+    Promise.resolve(canActorReceiveActivityEvent(actor, event))
+      .then((allowed) => {
+        if (!allowed) return;
+        if (!event || typeof event !== "object") return;
+        const payload = { ...event };
+        delete payload.visibilityUserId;
+        res.write(`event: activity\ndata: ${JSON.stringify(payload)}\n\n`);
+      })
+      .catch(() => {});
+  });
+
   // Cleanup on client disconnect
   req.on("close", () => {
     clearInterval(keepalive);
     unsubscribe();
+    unsubscribeActivity();
   });
+}
+
+const FOLDER_MEMBER_ROLES = new Set(["viewer", "editor", "manager"]);
+
+function normalizeFolderMemberRole(role = "viewer") {
+  const normalized = String(role || "").trim().toLowerCase();
+  return FOLDER_MEMBER_ROLES.has(normalized) ? normalized : "viewer";
+}
+
+async function resolveWorkspaceMemberForAgent(actor, { userId = "", email = "" } = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!normalizedUserId && !normalizedEmail) {
+    throw new Error("Missing collaborator identifier");
+  }
+  const members = await authRepo.listWorkspaceMembers(actor.workspaceId, { limit: 1000 });
+  const resolved = members.find((member) => {
+    const memberUserId = String(member.userId || "").trim();
+    const memberEmail = String(member.email || "").trim().toLowerCase();
+    if (normalizedUserId && memberUserId === normalizedUserId) return true;
+    if (normalizedEmail && memberEmail === normalizedEmail) return true;
+    return false;
+  });
+  if (!resolved) {
+    throw new Error("Workspace member not found");
+  }
+  return resolved;
 }
 
 const CHAT_TOOLS = [
   {
     type: "function",
     name: "create_note",
-    description: "Save a new note or link. Use when the user wants to save content, a URL, or create a new note.",
+    description:
+      "Save a new note, link, image, or file-backed item. Use when the user wants to save content or an attachment.",
     parameters: {
       type: "object",
       properties: {
-        content: { type: "string", description: "The note content or URL to save" },
+        content: { type: "string", description: "The note content or URL to save (optional when attachment is present)" },
         project: { type: "string", description: "Folder to save into (optional)" },
-        sourceType: { type: "string", enum: ["url", "text", "manual"], description: "Type of content" },
+        sourceType: { type: "string", enum: ["url", "link", "text", "manual", "file", "image"], description: "Type of content" },
+        sourceUrl: { type: "string", description: "Optional source URL" },
+        imageDataUrl: { type: "string", description: "Optional image data URL" },
+        fileDataUrl: { type: "string", description: "Optional file data URL" },
+        fileName: { type: "string", description: "Optional file name for attachment uploads" },
+        fileMimeType: { type: "string", description: "Optional mime type for attachment uploads" },
       },
-      required: ["content"],
+      required: [],
     },
   },
   {
@@ -414,6 +584,74 @@ const CHAT_TOOLS = [
   },
   {
     type: "function",
+    name: "list_workspace_members",
+    description: "List workspace members so you can pick collaborators by id/email.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Optional filter against name/email/id" },
+        limit: { type: "number", description: "Optional max members to return (default 50)" },
+      },
+      required: [],
+    },
+  },
+  {
+    type: "function",
+    name: "list_folder_collaborators",
+    description: "List collaborators for a folder, including their roles.",
+    parameters: {
+      type: "object",
+      properties: {
+        folderId: { type: "string", description: "Folder id or folder name" },
+      },
+      required: ["folderId"],
+    },
+  },
+  {
+    type: "function",
+    name: "set_folder_collaborator",
+    description: "Share a folder by setting a collaborator role (viewer/editor/manager).",
+    parameters: {
+      type: "object",
+      properties: {
+        folderId: { type: "string", description: "Folder id or folder name" },
+        userId: { type: "string", description: "Workspace user id (preferred)" },
+        email: { type: "string", description: "Workspace member email (fallback)" },
+        role: { type: "string", enum: ["viewer", "editor", "manager"], description: "Collaborator role" },
+      },
+      required: ["folderId"],
+    },
+  },
+  {
+    type: "function",
+    name: "remove_folder_collaborator",
+    description: "Unshare a folder by removing a collaborator.",
+    parameters: {
+      type: "object",
+      properties: {
+        folderId: { type: "string", description: "Folder id or folder name" },
+        userId: { type: "string", description: "Workspace user id (preferred)" },
+        email: { type: "string", description: "Workspace member email (fallback)" },
+      },
+      required: ["folderId"],
+    },
+  },
+  {
+    type: "function",
+    name: "list_activity",
+    description: "List recent workspace activity, optionally filtered to a folder or note.",
+    parameters: {
+      type: "object",
+      properties: {
+        folderId: { type: "string", description: "Optional folder id or name filter" },
+        noteId: { type: "string", description: "Optional note id filter" },
+        limit: { type: "number", description: "Optional max events to return (default 30)" },
+      },
+      required: [],
+    },
+  },
+  {
+    type: "function",
     name: "search_notes",
     description: "Search through saved notes. Use when the user asks about their saved content.",
     parameters: {
@@ -421,42 +659,287 @@ const CHAT_TOOLS = [
       properties: {
         query: { type: "string", description: "Search query" },
         project: { type: "string", description: "Filter to specific folder (optional)" },
+        scope: { type: "string", enum: ["all", "workspace", "user", "project", "item"], description: "Memory scope" },
+        workingSetIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional note ids for focused search context",
+        },
       },
       required: ["query"],
     },
   },
+  {
+    type: "function",
+    name: "get_note_raw_content",
+    description: "Read extracted raw and markdown content for a note.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        includeMarkdown: { type: "boolean", description: "Include markdownContent in response" },
+        maxChars: { type: "number", description: "Maximum characters to return" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "update_note",
+    description: "Update note content/summary/tags/folder.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        content: { type: "string", description: "Updated note content" },
+        summary: { type: "string", description: "Updated summary" },
+        tags: { type: "array", items: { type: "string" }, description: "Updated tags" },
+        project: { type: "string", description: "Updated folder name" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "update_note_attachment",
+    description: "Replace a note attachment (file/image) and re-run enrichment.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        fileDataUrl: { type: "string", description: "Optional file data URL" },
+        imageDataUrl: { type: "string", description: "Optional image data URL" },
+        fileName: { type: "string", description: "Optional file name for attachment" },
+        fileMimeType: { type: "string", description: "Optional mime type for attachment" },
+        content: { type: "string", description: "Optional note content override" },
+        requeueEnrichment: { type: "boolean", description: "Requeue enrichment after attachment update" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "update_note_markdown",
+    description: "Update extracted raw/markdown content on a note, with optional re-enrichment.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        content: { type: "string", description: "Optional top-level content override" },
+        rawContent: { type: "string", description: "Updated extracted raw text" },
+        markdownContent: { type: "string", description: "Updated extracted markdown text" },
+        requeueEnrichment: { type: "boolean", description: "Requeue enrichment after edit" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "add_note_comment",
+    description: "Add a contextual comment to a note.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        text: { type: "string", description: "Comment text" },
+      },
+      required: ["id", "text"],
+    },
+  },
+  {
+    type: "function",
+    name: "list_note_versions",
+    description: "List version history for a note.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "restore_note_version",
+    description: "Restore a note to a previous version number.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        versionNumber: { type: "number", description: "Version number to restore" },
+      },
+      required: ["id", "versionNumber"],
+    },
+  },
+  {
+    type: "function",
+    name: "retry_note_enrichment",
+    description: "Retry enrichment for a failed or stuck note by id.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id to retry enrichment for" },
+      },
+      required: ["id"],
+    },
+  },
 ];
 
-const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links, create notes, make folders, and search existing content. When the user wants to save or create something, use the appropriate tool. When answering questions, use the provided context or search first, then answer using the results. Be concise and helpful.";
+const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links/files/images, create notes and folders, search notes, read extracted markdown/raw content, update note fields, update markdown/raw extracted content, add note comments, list/restore versions, retry failed enrichment, list workspace members, share/unshare folders, list folder collaborators, and list workspace activity. When the user asks to save, edit, or organize memory items, use tools directly. Keep responses concise and grounded in saved notes.";
 
-async function executeChatToolCall(name, args, actor) {
+async function executeChatToolCall(name, args, actor, { chatAttachment = null } = {}) {
   switch (name) {
     case "create_note": {
       const content = String(args.content || "").trim();
-      let sourceType = args.sourceType || "text";
-      let sourceUrl = "";
-      if (!args.sourceType && /^https?:\/\//i.test(content)) {
-        sourceType = "url";
+      const sourceUrlArg = String(args.sourceUrl || "").trim();
+      const attachment = chatAttachment && (chatAttachment.fileDataUrl || chatAttachment.imageDataUrl)
+        ? chatAttachment
+        : {
+            imageDataUrl: String(args.imageDataUrl || "").trim() || null,
+            fileDataUrl: String(args.fileDataUrl || "").trim() || null,
+            fileName: String(args.fileName || ""),
+            fileMimeType: String(args.fileMimeType || ""),
+          };
+      const attachmentPresent = Boolean(attachment?.fileDataUrl || attachment?.imageDataUrl);
+      const requestedSourceType = String(args.sourceType || "").trim().toLowerCase();
+      let sourceType = "text";
+      if (attachmentPresent) {
+        sourceType = attachment?.fileMimeType?.toLowerCase().startsWith("image/") ? "image" : "file";
+      } else if (requestedSourceType === "url" || requestedSourceType === "link") {
+        sourceType = "link";
+      } else if (requestedSourceType === "file" || requestedSourceType === "image") {
+        sourceType = requestedSourceType;
+      }
+      let sourceUrl = sourceUrlArg;
+      if (!requestedSourceType && /^https?:\/\//i.test(content)) {
+        sourceType = "link";
         sourceUrl = content;
+      } else if ((requestedSourceType === "url" || requestedSourceType === "link") && /^https?:\/\//i.test(content)) {
+        sourceUrl = content;
+      } else if (sourceUrlArg && /^https?:\/\//i.test(sourceUrlArg)) {
+        sourceType = "link";
+      }
+      if (!content && !attachmentPresent) {
+        throw new Error("create_note requires content or an attachment");
       }
       const note = await createMemory({
         content,
         sourceType,
         sourceUrl,
+        imageDataUrl: attachment?.imageDataUrl || null,
+        fileDataUrl: attachment?.fileDataUrl || null,
+        fileName: attachment?.fileName || "",
+        fileMimeType: attachment?.fileMimeType || "",
         project: args.project || "",
         metadata: { createdFrom: "chat-agent", actorUserId: actor.userId },
         actor,
       });
-      return { noteId: note.id, title: note.summary || content.slice(0, 80) || "New note" };
+      return {
+        noteId: note.id,
+        title: note.summary || content.slice(0, 80) || note.fileName || "New note",
+        sourceType: note.sourceType,
+      };
     }
     case "create_folder": {
-      const folder = await folderRepo.createFolder({
+      const folder = await createWorkspaceFolder({
         name: args.name,
         description: args.description || "",
         color: args.color || "",
-        workspaceId: actor.workspaceId,
+        actor,
       });
       return { folderId: folder.id, name: folder.name };
+    }
+    case "list_workspace_members": {
+      const query = String(args.query || "").trim().toLowerCase();
+      const limit = Math.min(Math.max(Number(args.limit) || 50, 1), 200);
+      const members = await authRepo.listWorkspaceMembers(actor.workspaceId, { limit: Math.max(limit * 2, 100) });
+      const filtered = query
+        ? members.filter((member) => {
+            const haystack = `${member.userId || ""} ${member.email || ""} ${member.name || ""}`.toLowerCase();
+            return haystack.includes(query);
+          })
+        : members;
+      return {
+        members: filtered.slice(0, limit).map((member) => ({
+          userId: String(member.userId || ""),
+          email: String(member.email || ""),
+          name: String(member.name || ""),
+          role: String(member.role || "member"),
+        })),
+      };
+    }
+    case "list_folder_collaborators": {
+      const result = await listFolderCollaborators({
+        folderId: String(args.folderId || "").trim(),
+        actor,
+      });
+      return {
+        folder: {
+          id: result.folder?.id || "",
+          name: result.folder?.name || "",
+        },
+        collaborators: (result.items || []).map((item) => ({
+          userId: String(item.userId || ""),
+          userEmail: String(item.userEmail || ""),
+          userName: String(item.userName || ""),
+          role: String(item.role || "viewer"),
+        })),
+      };
+    }
+    case "set_folder_collaborator": {
+      const target = await resolveWorkspaceMemberForAgent(actor, {
+        userId: args.userId,
+        email: args.email,
+      });
+      const collaborator = await setFolderCollaboratorRole({
+        folderId: String(args.folderId || "").trim(),
+        userId: target.userId,
+        role: normalizeFolderMemberRole(args.role),
+        actor,
+      });
+      return {
+        folderId: String(collaborator.folderId || ""),
+        userId: String(collaborator.userId || ""),
+        userEmail: String(collaborator.userEmail || ""),
+        userName: String(collaborator.userName || ""),
+        role: String(collaborator.role || "viewer"),
+      };
+    }
+    case "remove_folder_collaborator": {
+      const target = await resolveWorkspaceMemberForAgent(actor, {
+        userId: args.userId,
+        email: args.email,
+      });
+      const result = await removeFolderCollaborator({
+        folderId: String(args.folderId || "").trim(),
+        userId: target.userId,
+        actor,
+      });
+      return {
+        folderId: String(args.folderId || "").trim(),
+        userId: String(target.userId || ""),
+        removed: Number(result.removed || 0),
+      };
+    }
+    case "list_activity": {
+      const result = await listWorkspaceActivity({
+        actor,
+        folderId: String(args.folderId || "").trim(),
+        noteId: String(args.noteId || "").trim(),
+        limit: Math.min(Math.max(Number(args.limit) || 30, 1), 200),
+      });
+      return {
+        items: (result.items || []).map((item) => ({
+          id: item.id,
+          eventType: item.eventType,
+          folderId: item.folderId || "",
+          folderName: item.folderName || "",
+          noteId: item.noteId || "",
+          actorName: item.actorName || "",
+          message: item.message || "",
+          createdAt: item.createdAt,
+        })),
+      };
     }
     case "search_notes": {
       const results = await searchMemories({
@@ -464,6 +947,8 @@ async function executeChatToolCall(name, args, actor) {
         project: args.project || "",
         limit: 6,
         actor,
+        scope: String(args.scope || "all"),
+        workingSetIds: args.workingSetIds,
       });
       return {
         results: results.slice(0, 6).map((r) => ({
@@ -471,6 +956,108 @@ async function executeChatToolCall(name, args, actor) {
           title: r.note?.summary || String(r.note?.content || "").slice(0, 80),
           project: r.note?.project || "",
         })),
+      };
+    }
+    case "get_note_raw_content": {
+      return getMemoryRawContent({
+        id: String(args.id || "").trim(),
+        includeMarkdown: args.includeMarkdown !== false,
+        maxChars: Number(args.maxChars || 12000),
+        actor,
+      });
+    }
+    case "update_note": {
+      const note = await updateMemory({
+        id: String(args.id || "").trim(),
+        content: args.content,
+        summary: args.summary,
+        tags: Array.isArray(args.tags)
+          ? args.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
+          : undefined,
+        project: args.project,
+        actor,
+      });
+      return { noteId: note.id, title: note.summary || String(note.content || "").slice(0, 80) || "Updated note" };
+    }
+    case "update_note_attachment": {
+      const attachment = chatAttachment && (chatAttachment.fileDataUrl || chatAttachment.imageDataUrl)
+        ? chatAttachment
+        : {
+            imageDataUrl: String(args.imageDataUrl || "").trim() || null,
+            fileDataUrl: String(args.fileDataUrl || "").trim() || null,
+            fileName: String(args.fileName || ""),
+            fileMimeType: String(args.fileMimeType || ""),
+          };
+      const note = await updateMemoryAttachment({
+        id: String(args.id || "").trim(),
+        content: args.content,
+        fileDataUrl: attachment.fileDataUrl,
+        imageDataUrl: attachment.imageDataUrl,
+        fileName: attachment.fileName,
+        fileMimeType: attachment.fileMimeType,
+        requeueEnrichment: args.requeueEnrichment !== false,
+        actor,
+      });
+      return {
+        noteId: note.id,
+        sourceType: note.sourceType || "",
+        fileName: note.fileName || "",
+        status: note.status || "",
+      };
+    }
+    case "update_note_markdown": {
+      const note = await updateMemoryExtractedContent({
+        id: String(args.id || "").trim(),
+        content: args.content,
+        rawContent: args.rawContent,
+        markdownContent: args.markdownContent,
+        requeueEnrichment: args.requeueEnrichment !== false,
+        actor,
+      });
+      return { noteId: note.id, status: note.status || "" };
+    }
+    case "add_note_comment": {
+      const result = await addMemoryComment({
+        id: String(args.id || "").trim(),
+        text: String(args.text || ""),
+        actor,
+      });
+      return {
+        noteId: result.note?.id || String(args.id || "").trim(),
+        commentId: result.comment?.id || "",
+      };
+    }
+    case "list_note_versions": {
+      const result = await listMemoryVersions({
+        id: String(args.id || "").trim(),
+        actor,
+      });
+      return {
+        noteId: String(args.id || "").trim(),
+        versions: (result.items || []).slice(0, 20).map((item) => ({
+          versionNumber: item.versionNumber,
+          createdAt: item.createdAt,
+          changeSummary: item.changeSummary || "",
+        })),
+      };
+    }
+    case "restore_note_version": {
+      const note = await restoreMemoryVersion({
+        id: String(args.id || "").trim(),
+        versionNumber: Number(args.versionNumber || 0),
+        actor,
+      });
+      return { noteId: note.id, status: note.status || "" };
+    }
+    case "retry_note_enrichment": {
+      const result = await retryMemoryEnrichment({
+        id: String(args.id || "").trim(),
+        actor,
+      });
+      return {
+        noteId: result.note?.id || String(args.id || "").trim(),
+        queued: result.queued === true,
+        source: result.source || "",
       };
     }
     default:
@@ -499,6 +1086,7 @@ async function handleApi(req, res, url) {
       auth: {
         provider: config.authProvider,
         firebaseConfigured: await isFirebaseConfigured(),
+        neonConfigured: isNeonConfigured(),
       },
       dbProvider: providerName,
       dbBridgeMode: storageBridgeMode,
@@ -510,12 +1098,19 @@ async function handleApi(req, res, url) {
       queue: {
         pending: enrichmentQueue.pending ?? 0,
         running: enrichmentQueue.active ?? 0,
+        failed: enrichmentQueue.stats?.failed ?? 0,
+        queued: enrichmentQueue.stats?.queued ?? 0,
+        retry: enrichmentQueue.stats?.retry ?? 0,
+        completed: enrichmentQueue.stats?.completed ?? 0,
+        delayed: enrichmentQueue.stats?.delayed ?? 0,
+        total: enrichmentQueue.stats?.total ?? 0,
       },
     });
     return;
   }
 
   const requestIp = getRequestIp(req);
+  const requestOrigin = getRequestOrigin(req);
   const authWritePaths = new Set([
     "/api/auth/login",
     "/api/auth/signup",
@@ -553,7 +1148,19 @@ async function handleApi(req, res, url) {
     }
     try {
       let session;
-      if (config.authProvider === "firebase") {
+      if (config.authProvider === "neon") {
+        const neonResult = await neonSignInWithEmailPassword({
+          email: body.email,
+          password: body.password,
+          origin: requestOrigin,
+        });
+        const actor = await resolveNeonActorFromToken(neonResult.token);
+        session = buildNeonSessionPayload(neonResult, actor);
+        session.user.emailVerified = Boolean(actor.emailVerified);
+        if (config.authRequireEmailVerification && !actor.emailVerified) {
+          session.requiresEmailVerification = true;
+        }
+      } else if (config.authProvider === "firebase") {
         const firebaseResult = await firebaseSignInWithEmailPassword({
           email: body.email,
           password: body.password,
@@ -570,7 +1177,8 @@ async function handleApi(req, res, url) {
           }
           session.requiresEmailVerification = true;
         }
-      } else {
+      }
+      else {
         session = await authRepo.loginAndIssueSession({
           email: body.email,
           password: body.password,
@@ -619,7 +1227,20 @@ async function handleApi(req, res, url) {
     }
     try {
       let session;
-      if (config.authProvider === "firebase") {
+      if (config.authProvider === "neon") {
+        const neonResult = await neonSignUpWithEmailPassword({
+          email: body.email,
+          password: body.password,
+          name: body.name || "",
+          origin: requestOrigin,
+        });
+        const actor = await resolveNeonActorFromToken(neonResult.token);
+        session = buildNeonSessionPayload(neonResult, actor);
+        session.user.emailVerified = Boolean(actor.emailVerified);
+        if (config.authRequireEmailVerification && !actor.emailVerified) {
+          session.requiresEmailVerification = true;
+        }
+      } else if (config.authProvider === "firebase") {
         const firebaseResult = await firebaseSignUpWithEmailPassword({
           email: body.email,
           password: body.password,
@@ -674,6 +1295,37 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/auth/password-reset") {
     const body = await readJsonBody(req);
+    if (config.authProvider === "neon") {
+      try {
+        await neonSendPasswordResetEmail({
+          email: body.email,
+          origin: requestOrigin,
+        });
+        clearAuthFailures(requestIp);
+        recordAuthEvent({
+          eventType: "auth.password_reset.request",
+          outcome: "success",
+          provider: "neon",
+          email: body.email || "",
+          ip: requestIp,
+        });
+        sendJson(res, 200, { ok: true });
+      } catch (error) {
+        const failure = registerAuthFailure(requestIp);
+        recordAuthEvent({
+          eventType: "auth.password_reset.request",
+          outcome: "failure",
+          provider: "neon",
+          email: body.email || "",
+          ip: requestIp,
+          reason: error instanceof Error ? error.message : "Password reset failed",
+          metadata: failure,
+        });
+        const statusCode = resolveErrorStatus(error, 400);
+        sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Password reset failed" });
+      }
+      return;
+    }
     if (config.authProvider !== "firebase") {
       sendJson(res, 400, { error: "Password reset via API is only available with Firebase auth provider" });
       return;
@@ -708,6 +1360,12 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/auth/refresh") {
     const body = await readJsonBody(req);
+    if (config.authProvider === "neon") {
+      sendJson(res, 400, {
+        error: "Token refresh via API is not available in Neon auth mode. Use the Neon Auth client session flow.",
+      });
+      return;
+    }
     if (config.authProvider !== "firebase") {
       sendJson(res, 400, { error: "Token refresh is only available with Firebase auth provider" });
       return;
@@ -740,7 +1398,7 @@ async function handleApi(req, res, url) {
   }
 
   const requiresEmailVerification =
-    config.authProvider === "firebase" &&
+    (config.authProvider === "firebase" || config.authProvider === "neon") &&
     config.authRequireEmailVerification &&
     !actor.emailVerified;
 
@@ -776,7 +1434,29 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === "GET" && url.pathname === "/api/enrichment/queue") {
+    try {
+      if (!isWorkspaceManager(actor)) {
+        sendJson(res, 403, { error: "Forbidden: only workspace owners/admins can view queue diagnostics" });
+        return;
+      }
+      const failedLimit = Number(url.searchParams.get("failedLimit") || "20");
+      const stats = await getEnrichmentQueueStats({ actor, failedLimit });
+      sendJson(res, 200, stats);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Failed to fetch queue stats" });
+    }
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/auth/email-verification/send") {
+    if (config.authProvider === "neon") {
+      sendJson(res, 400, {
+        error: "Email verification send endpoint is not available in Neon auth mode. Use Neon Auth email verification flow.",
+      });
+      return;
+    }
     if (config.authProvider !== "firebase") {
       sendJson(res, 400, { error: "Email verification endpoint is only available with Firebase auth provider" });
       return;
@@ -825,6 +1505,11 @@ async function handleApi(req, res, url) {
         const session = buildFirebaseSessionPayload(updated, updatedActor);
         session.user.emailVerified = Boolean(updatedActor.emailVerified);
         sendJson(res, 200, { ok: true, session });
+      } else if (config.authProvider === "neon") {
+        sendJson(res, 400, {
+          error: "Password change via API is not available in Neon auth mode. Use Neon Auth password update flow.",
+        });
+        return;
       } else {
         await authRepo.changeLocalPassword({
           userId: actor.userId,
@@ -941,6 +1626,13 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/workspaces/members") {
+    const limit = Number(url.searchParams.get("limit") || "200");
+    const items = await authRepo.listWorkspaceMembers(actor.workspaceId, { limit });
+    sendJson(res, 200, { items, count: items.length });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/workspaces/invites/incoming") {
     const items = await authRepo.listIncomingWorkspaceInvites(
       actor.userEmail,
@@ -1043,6 +1735,22 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/activity") {
+    try {
+      const result = await listWorkspaceActivity({
+        actor,
+        folderId: url.searchParams.get("folderId") || "",
+        noteId: url.searchParams.get("noteId") || "",
+        limit: Number(url.searchParams.get("limit") || "60"),
+      });
+      sendJson(res, 200, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Failed to fetch activity" });
+    }
+    return;
+  }
+
   // GET /api/notes/:id/related — find semantically related notes
   if (req.method === "GET" && url.pathname.match(/^\/api\/notes\/[^/]+\/related$/)) {
     const suffix = "/related";
@@ -1063,6 +1771,25 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  // POST /api/notes/:id/retry-enrichment — retry enrichment for failed/stuck notes
+  if (req.method === "POST" && url.pathname.match(/^\/api\/notes\/[^/]+\/retry-enrichment$/)) {
+    const suffix = "/retry-enrichment";
+    const encodedId = url.pathname.slice("/api/notes/".length, -suffix.length);
+    const id = decodeURIComponent(encodedId || "").trim();
+    if (!id) {
+      sendJson(res, 400, { error: "Missing id" });
+      return;
+    }
+    try {
+      const result = await retryMemoryEnrichment({ id, actor });
+      sendJson(res, 200, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Retry failed" });
+    }
+    return;
+  }
+
   // GET /api/notes/:id — fetch single note by id
   if (req.method === "GET" && url.pathname.match(/^\/api\/notes\/[^/]+$/) && !url.pathname.endsWith("/batch-delete") && !url.pathname.endsWith("/batch-move")) {
     const encodedId = url.pathname.slice("/api/notes/".length);
@@ -1072,14 +1799,11 @@ async function handleApi(req, res, url) {
       return;
     }
     try {
-      const note = await noteRepo.getNoteById(id, actor.workspaceId);
-      if (!note) {
-        sendJson(res, 404, { error: `Note not found: ${id}` });
-        return;
-      }
+      const note = await getMemoryById({ id, actor });
       sendJson(res, 200, { note });
     } catch (error) {
-      const statusCode = resolveErrorStatus(error, 400);
+      const msg = error instanceof Error ? error.message : "Fetch failed";
+      const statusCode = resolveErrorStatus(error, msg.includes("not found") ? 404 : 400);
       sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Fetch failed" });
     }
     return;
@@ -1130,10 +1854,16 @@ async function handleApi(req, res, url) {
     const project = url.searchParams.get("project") || "";
     const limit = Number(url.searchParams.get("limit") || "20");
     const offset = Number(url.searchParams.get("offset") || "0");
+    const scope = url.searchParams.get("scope") || "all";
+    const workingSetIds = parseWorkingSetIds(url.searchParams.getAll("workingSetIds"));
 
-    const hasScopedSearch = Boolean(query.trim()) || Boolean(project.trim());
+    const hasScopedSearch =
+      Boolean(query.trim()) ||
+      Boolean(project.trim()) ||
+      String(scope || "").trim().toLowerCase() !== "all" ||
+      workingSetIds.length > 0;
     const results = hasScopedSearch
-      ? await searchMemories({ query, project, limit, actor })
+      ? await searchMemories({ query, project, limit, offset, actor, scope, workingSetIds })
       : (await listRecentMemories(limit, offset, actor)).map((note, index) => ({
           rank: index + 1,
           score: 1,
@@ -1153,7 +1883,16 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/recent") {
     const limit = Number(url.searchParams.get("limit") || "20");
     const offset = Number(url.searchParams.get("offset") || "0");
-    const notes = await listRecentMemories(limit, offset, actor);
+    const scope = url.searchParams.get("scope") || "all";
+    const project = url.searchParams.get("project") || "";
+    const contextNoteId = url.searchParams.get("contextNoteId") || "";
+    const workingSetIds = parseWorkingSetIds(url.searchParams.getAll("workingSetIds"));
+    const notes = await listRecentMemories(limit, offset, actor, {
+      scope,
+      project,
+      contextNoteId,
+      workingSetIds,
+    });
     sendJson(res, 200, {
       items: notes,
       count: notes.length,
@@ -1199,10 +1938,19 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/chat") {
     const body = await readJsonBody(req);
     const wantsStream = (req.headers.accept || "").includes("text/event-stream");
+    const scope = String(body.scope || "all");
+    const workingSetIds = parseWorkingSetIds(body.workingSetIds);
+    const chatAttachment = {
+      imageDataUrl: String(body.imageDataUrl || "").trim() || null,
+      fileDataUrl: String(body.fileDataUrl || "").trim() || null,
+      fileName: String(body.fileName || "").trim(),
+      fileMimeType: String(body.fileMimeType || "").trim(),
+    };
+    const hasAttachment = Boolean(chatAttachment.imageDataUrl || chatAttachment.fileDataUrl);
 
     if (wantsStream) {
       // Streaming agent path: search for context, then stream with tools
-      const question = String(body.question || "").trim();
+      const question = String(body.question || "").trim() || (hasAttachment ? "Save this attachment to Stash." : "");
       if (!question) {
         sendJson(res, 400, { error: "Missing question" });
         return;
@@ -1214,6 +1962,9 @@ async function handleApi(req, res, url) {
         project: body.project || "",
         limit: Number(body.limit || 6),
         actor,
+        scope,
+        workingSetIds,
+        contextNoteId: String(body.contextNoteId || "").trim(),
       });
 
       const contextNoteId = String(body.contextNoteId || "").trim();
@@ -1239,8 +1990,22 @@ async function handleApi(req, res, url) {
       try {
         const context = citations.length ? buildCitationBlock(citations) : "";
         let systemPrompt = CHAT_SYSTEM_PROMPT;
+        const scopeHints = [];
+        if (scope !== "all") {
+          scopeHints.push(`Active memory scope is "${scope}".`);
+        }
         if (body.project) {
+          scopeHints.push(`Project context is "${body.project}".`);
           systemPrompt = `The user is working in folder "${body.project}". Consider this context.\n\n${systemPrompt}`;
+        }
+        if (workingSetIds.length > 0) {
+          scopeHints.push(`Prioritize these note ids when searching: ${workingSetIds.slice(0, 12).join(", ")}.`);
+        }
+        if (scopeHints.length > 0) {
+          systemPrompt = `${scopeHints.join(" ")}\n\n${systemPrompt}`;
+        }
+        if (hasAttachment) {
+          systemPrompt = `A file/image attachment is included with this request. When the user asks to save a new item, call create_note. When the user asks to replace an existing note's attachment, call update_note_attachment. Attachment payload is supplied server-side and should not be reconstructed.\n\n${systemPrompt}`;
         }
 
         const questionText = context
@@ -1254,6 +2019,25 @@ async function handleApi(req, res, url) {
         let currentPreviousId = undefined;
         let toolRounds = 0;
         const MAX_TOOL_ROUNDS = 3;
+        const harness = createAgentToolHarness({
+          actor,
+          requestId: String(req.headers["x-request-id"] || "").trim(),
+          executeTool: (name, args, toolActor) => {
+            if (name !== "search_notes") {
+              return executeChatToolCall(name, args, toolActor, { chatAttachment: hasAttachment ? chatAttachment : null });
+            }
+            const scopedArgs = {
+              ...args,
+              scope: String(args?.scope || scope || "all"),
+              project: String(args?.project || body.project || ""),
+              workingSetIds:
+                Array.isArray(args?.workingSetIds) && args.workingSetIds.length > 0
+                  ? args.workingSetIds
+                  : workingSetIds,
+            };
+            return executeChatToolCall(name, scopedArgs, toolActor, { chatAttachment: hasAttachment ? chatAttachment : null });
+          },
+        });
 
         while (toolRounds <= MAX_TOOL_ROUNDS) {
           const streamResponse = await createStreamingResponse({
@@ -1307,24 +2091,28 @@ async function handleApi(req, res, url) {
           const toolOutputs = [];
           for (const tc of pendingToolCalls) {
             res.write(`event: tool_call\ndata: ${JSON.stringify({ name: tc.name, status: "executing" })}\n\n`);
-            try {
-              const parsedArgs = JSON.parse(tc.args);
-              const result = await executeChatToolCall(tc.name, parsedArgs, actor);
-              res.write(`event: tool_result\ndata: ${JSON.stringify({ name: tc.name, result })}\n\n`);
-              toolOutputs.push({
-                type: "function_call_output",
-                call_id: tc.callId,
-                output: JSON.stringify(result),
-              });
-            } catch (err) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              res.write(`event: tool_result\ndata: ${JSON.stringify({ name: tc.name, error: errMsg })}\n\n`);
-              toolOutputs.push({
-                type: "function_call_output",
-                call_id: tc.callId,
-                output: JSON.stringify({ error: errMsg }),
-              });
-            }
+            const execution = await harness.runToolCall({
+              name: tc.name,
+              rawArgs: tc.args,
+              callId: tc.callId,
+              round: toolRounds,
+            });
+            res.write(`event: tool_result\ndata: ${JSON.stringify({
+              name: tc.name,
+              ...(execution.ok
+                ? { result: execution.result }
+                : { error: execution.error || "Tool call failed" }),
+              traceId: execution.trace?.traceId || "",
+              cacheHit: Boolean(execution.trace?.cacheHit),
+              durationMs: Number(execution.trace?.durationMs || 0),
+            })}\n\n`);
+            res.write(`event: tool_trace\ndata: ${JSON.stringify(execution.trace || null)}\n\n`);
+
+            toolOutputs.push({
+              type: "function_call_output",
+              call_id: tc.callId,
+              output: JSON.stringify(execution.ok ? execution.result : { error: execution.error || "Tool call failed" }),
+            });
           }
 
           // Continue conversation with tool outputs
@@ -1334,6 +2122,10 @@ async function handleApi(req, res, url) {
           toolRounds++;
         }
 
+        res.write(`event: tool_trace\ndata: ${JSON.stringify({
+          requestId: harness.requestId,
+          traces: harness.traces,
+        })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch {
@@ -1349,12 +2141,35 @@ async function handleApi(req, res, url) {
       return;
     }
 
+    if (hasAttachment && String(body.captureIntent || "").trim().toLowerCase() === "save") {
+      const note = await createMemory({
+        content: String(body.question || "").trim(),
+        sourceType: chatAttachment.fileMimeType.startsWith("image/") ? "image" : "file",
+        sourceUrl: "",
+        imageDataUrl: chatAttachment.imageDataUrl,
+        fileDataUrl: chatAttachment.fileDataUrl,
+        fileName: chatAttachment.fileName,
+        fileMimeType: chatAttachment.fileMimeType,
+        project: String(body.project || ""),
+        metadata: { createdFrom: "chat-agent-fallback", actorUserId: actor.userId },
+        actor,
+      });
+      sendJson(res, 200, {
+        answer: `Saved "${note.fileName || note.summary || "attachment"}".`,
+        citations: [{ rank: 1, score: 1, note }],
+        mode: "direct-save",
+      });
+      return;
+    }
+
     const result = await askMemories({
       question: body.question,
       project: body.project,
       limit: Number(body.limit || 6),
       contextNoteId: body.contextNoteId || "",
       actor,
+      scope,
+      workingSetIds,
     });
     sendJson(res, 200, result);
     return;
@@ -1362,11 +2177,16 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/context") {
     const body = await readJsonBody(req);
+    const scope = String(body.scope || "all");
+    const workingSetIds = parseWorkingSetIds(body.workingSetIds);
     const result = await buildProjectContext({
       task: body.task,
       project: body.project,
       limit: Number(body.limit || 8),
       actor,
+      scope,
+      workingSetIds,
+      contextNoteId: body.contextNoteId || "",
     });
     sendJson(res, 200, result);
     return;
@@ -1383,17 +2203,92 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/folders") {
     const body = await readJsonBody(req);
     try {
-      const folder = await folderRepo.createFolder({
+      const folder = await createWorkspaceFolder({
         name: body.name,
         description: body.description,
         color: body.color,
         symbol: body.symbol,
         parentId: body.parentId,
-        workspaceId: actor.workspaceId,
+        actor,
       });
       sendJson(res, 201, { folder });
     } catch (err) {
       sendJson(res, 400, { error: err instanceof Error ? err.message : "Create failed" });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.match(/^\/api\/folders\/[^/]+\/collaborators$/)) {
+    const suffix = "/collaborators";
+    const encodedId = url.pathname.slice("/api/folders/".length, -suffix.length);
+    const folderId = decodeURIComponent(encodedId || "").trim();
+    if (!folderId) {
+      sendJson(res, 400, { error: "Missing folder id" });
+      return;
+    }
+    try {
+      const result = await listFolderCollaborators({
+        folderId,
+        actor,
+      });
+      sendJson(res, 200, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Failed to list collaborators" });
+    }
+    return;
+  }
+
+  if (req.method === "PUT" && url.pathname.match(/^\/api\/folders\/[^/]+\/collaborators\/[^/]+$/)) {
+    const prefix = "/api/folders/";
+    const marker = "/collaborators/";
+    const markerIndex = url.pathname.indexOf(marker);
+    const encodedFolderId = url.pathname.slice(prefix.length, markerIndex);
+    const encodedUserId = url.pathname.slice(markerIndex + marker.length);
+    const folderId = decodeURIComponent(encodedFolderId || "").trim();
+    const userId = decodeURIComponent(encodedUserId || "").trim();
+    if (!folderId || !userId) {
+      sendJson(res, 400, { error: "Missing folder id or user id" });
+      return;
+    }
+    const body = await readJsonBody(req);
+    try {
+      const collaborator = await setFolderCollaboratorRole({
+        folderId,
+        userId,
+        role: body.role || "viewer",
+        actor,
+      });
+      sendJson(res, 200, { collaborator });
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Failed to update collaborator role" });
+    }
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.match(/^\/api\/folders\/[^/]+\/collaborators\/[^/]+$/)) {
+    const prefix = "/api/folders/";
+    const marker = "/collaborators/";
+    const markerIndex = url.pathname.indexOf(marker);
+    const encodedFolderId = url.pathname.slice(prefix.length, markerIndex);
+    const encodedUserId = url.pathname.slice(markerIndex + marker.length);
+    const folderId = decodeURIComponent(encodedFolderId || "").trim();
+    const userId = decodeURIComponent(encodedUserId || "").trim();
+    if (!folderId || !userId) {
+      sendJson(res, 400, { error: "Missing folder id or user id" });
+      return;
+    }
+    try {
+      const result = await removeFolderCollaborator({
+        folderId,
+        userId,
+        actor,
+      });
+      sendJson(res, 200, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Failed to remove collaborator" });
     }
     return;
   }
@@ -1438,17 +2333,17 @@ async function handleApi(req, res, url) {
     }
     const body = await readJsonBody(req);
     try {
-      const folder = await folderRepo.updateFolder(
+      const folder = await updateWorkspaceFolder({
         id,
-        {
+        patch: {
           name: body.name,
           description: body.description,
           color: body.color,
           symbol: body.symbol,
           parentId: body.parentId,
         },
-        actor.workspaceId
-      );
+        actor,
+      });
       sendJson(res, 200, { folder });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Update failed";
@@ -1465,7 +2360,7 @@ async function handleApi(req, res, url) {
       return;
     }
     try {
-      const result = await folderRepo.deleteFolder(id, actor.workspaceId);
+      const result = await deleteWorkspaceFolder({ id, actor });
       sendJson(res, 200, result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Delete failed";
@@ -1681,7 +2576,36 @@ async function handleApi(req, res, url) {
   // GET /api/stats — dashboard statistics
   if (req.method === "GET" && url.pathname === "/api/stats") {
     const stats = await getMemoryStats(actor);
-    sendJson(res, 200, stats);
+    let queue = {
+      pending: enrichmentQueue.pending ?? 0,
+      running: enrichmentQueue.active ?? 0,
+      failed: enrichmentQueue.stats?.failed ?? 0,
+      queued: enrichmentQueue.stats?.queued ?? 0,
+      retry: enrichmentQueue.stats?.retry ?? 0,
+      completed: enrichmentQueue.stats?.completed ?? 0,
+      delayed: enrichmentQueue.stats?.delayed ?? 0,
+      total: enrichmentQueue.stats?.total ?? 0,
+    };
+    if (isWorkspaceManager(actor)) {
+      try {
+        const queueStats = await getEnrichmentQueueStats({ actor, failedLimit: 1 });
+        if (queueStats?.counts) {
+          queue = {
+            pending: Number(queueStats.counts.pending || 0),
+            running: Number(queueStats.counts.running || 0),
+            failed: Number(queueStats.counts.failed || 0),
+            queued: Number(queueStats.counts.queued || 0),
+            retry: Number(queueStats.counts.retry || 0),
+            completed: Number(queueStats.counts.completed || 0),
+            delayed: Number(queueStats.counts.delayed || 0),
+            total: Number(queueStats.counts.total || 0),
+          };
+        }
+      } catch {
+        // no-op: stats endpoint should remain best-effort
+      }
+    }
+    sendJson(res, 200, { ...stats, queue });
     return;
   }
 
@@ -1811,6 +2735,7 @@ const server = http.createServer(async (req, res) => {
 async function startServer() {
   const { ensurePostgresReady } = await import("./postgres/runtime.js");
   await ensurePostgresReady();
+  await enrichmentQueue.start();
 
   server.listen(config.port, () => {
     logger.info("server_start", {

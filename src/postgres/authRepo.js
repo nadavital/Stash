@@ -459,6 +459,43 @@ class PostgresAuthRepository {
     }));
   }
 
+  async listWorkspaceMembers(workspaceId, { limit = 200 } = {}) {
+    const normalizedWorkspaceId = String(workspaceId || "").trim();
+    if (!normalizedWorkspaceId) return [];
+    const boundedLimit = Math.min(Math.max(Number(limit) || 100, 1), 1000);
+    const result = await this._query(
+      `
+        SELECT
+          m.user_id,
+          m.workspace_id,
+          m.role,
+          m.created_at,
+          u.email,
+          u.display_name
+        FROM workspace_memberships m
+        JOIN users u ON u.id = m.user_id
+        WHERE m.workspace_id = $1
+        ORDER BY
+          CASE m.role
+            WHEN 'owner' THEN 1
+            WHEN 'admin' THEN 2
+            ELSE 3
+          END ASC,
+          m.created_at ASC
+        LIMIT $2
+      `,
+      [normalizedWorkspaceId, boundedLimit]
+    );
+    return result.rows.map((row) => ({
+      userId: row.user_id,
+      workspaceId: row.workspace_id,
+      role: normalizeWorkspaceRole(row.role || "member"),
+      email: row.email || "",
+      name: row.display_name || "",
+      joinedAt: toIso(row.created_at),
+    }));
+  }
+
   async _resolveWorkspaceForUser(userId, preferredWorkspaceId = "") {
     const preferred = String(preferredWorkspaceId || "").trim();
     if (preferred) {

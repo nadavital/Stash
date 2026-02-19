@@ -80,6 +80,9 @@ class FolderRepository {
 
     this.getByIdStmt = this.db.prepare(`SELECT * FROM folders WHERE id = ? AND workspace_id = ?`);
     this.getByNameStmt = this.db.prepare(`SELECT * FROM folders WHERE name = ? AND workspace_id = ? LIMIT 1`);
+    this.getByNameInsensitiveStmt = this.db.prepare(
+      `SELECT * FROM folders WHERE workspace_id = ? AND name = ? COLLATE NOCASE ORDER BY datetime(created_at) ASC LIMIT 1`
+    );
 
     this.listByParentStmt = this.db.prepare(`
       SELECT * FROM folders
@@ -133,6 +136,12 @@ class FolderRepository {
     const normalizedName = String(name || "").trim();
     if (!normalizedName) return null;
     return mapRow(this.getByNameStmt.get(normalizedName, normalizeWorkspaceId(workspaceId)));
+  }
+
+  getFolderByNameInsensitive(name, workspaceId = config.defaultWorkspaceId) {
+    const normalizedName = String(name || "").trim();
+    if (!normalizedName) return null;
+    return mapRow(this.getByNameInsensitiveStmt.get(normalizeWorkspaceId(workspaceId), normalizedName));
   }
 
   listFolders(parentId = null, workspaceId = config.defaultWorkspaceId) {

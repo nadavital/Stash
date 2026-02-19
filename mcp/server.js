@@ -3,15 +3,182 @@ import { config } from "../src/config.js";
 import { taskRepo } from "../src/storage/provider.js";
 import { buildActorFromToolArgs } from "../src/toolAuth.js";
 import {
+  addMemoryComment,
+  createMemory,
   deleteMemory,
   deleteProjectMemories,
+  getEnrichmentQueueStats,
+  getMemoryRawContent,
+  listMemoryVersions,
   readExtractedMarkdownMemory,
+  retryMemoryEnrichment,
+  restoreMemoryVersion,
   searchNotesBm25,
+  updateMemory,
+  updateMemoryExtractedContent,
 } from "../src/memoryService.js";
 
 const PROTOCOL_VERSION = "2024-11-05";
 
 const TOOL_DEFS = [
+  {
+    name: "create_note",
+    description: "Create a note, link, image, or file-backed item.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "Primary text content (optional for file-only capture)" },
+        sourceType: { type: "string", enum: ["text", "link", "image", "file"], default: "text" },
+        sourceUrl: { type: "string", description: "Optional source URL" },
+        project: { type: "string", description: "Optional folder/project" },
+        imageDataUrl: { type: "string", description: "Image data URL payload" },
+        fileDataUrl: { type: "string", description: "File data URL payload" },
+        fileName: { type: "string", description: "Original file name" },
+        fileMimeType: { type: "string", description: "Original file MIME type" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_note_raw_content",
+    description: "Get extracted raw/markdown content for a note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        includeMarkdown: { type: "boolean", description: "Include markdownContent", default: true },
+        maxChars: { type: "number", description: "Maximum characters to return", default: 12000 },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_note",
+    description: "Update note content/summary/tags/project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        content: { type: "string", description: "Updated content" },
+        summary: { type: "string", description: "Updated summary" },
+        tags: { type: "array", items: { type: "string" }, description: "Updated tags" },
+        project: { type: "string", description: "Updated project/folder" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_note_markdown",
+    description: "Edit extracted raw/markdown content fields, with optional re-enrichment.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        content: { type: "string", description: "Optional top-level note content override" },
+        rawContent: { type: "string", description: "Updated extracted raw text" },
+        markdownContent: { type: "string", description: "Updated extracted markdown text" },
+        requeueEnrichment: { type: "boolean", description: "Re-run enrichment after edit", default: true },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_note_comment",
+    description: "Add a contextual comment to a note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        text: { type: "string", description: "Comment text" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      required: ["id", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_note_versions",
+    description: "List version history for a note.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "restore_note_version",
+    description: "Restore note to a previous version number.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        versionNumber: { type: "number", description: "Version number to restore" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      required: ["id", "versionNumber"],
+      additionalProperties: false,
+    },
+  },
   {
     name: "search_notes",
     description: "Search notes using BM25 ranking.",
@@ -20,6 +187,17 @@ const TOOL_DEFS = [
       properties: {
         query: { type: "string", description: "Search query" },
         project: { type: "string", description: "Optional project filter" },
+        scope: {
+          type: "string",
+          enum: ["all", "workspace", "user", "project", "item"],
+          description: "Memory scope selector",
+          default: "all",
+        },
+        workingSetIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional note ids to treat as a focused working set",
+        },
         includeMarkdown: { type: "boolean", description: "Include markdown content in results", default: false },
         limit: { type: "number", description: "Max results", default: 8 },
         sessionToken: {
@@ -59,6 +237,7 @@ const TOOL_DEFS = [
     inputSchema: {
       type: "object",
       properties: {
+        filePath: { type: "string", description: "Optional absolute path override" },
         maxChars: { type: "number", description: "Maximum characters to return", default: 30000 },
         sessionToken: {
           type: "string",
@@ -132,6 +311,45 @@ const TOOL_DEFS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "retry_note_enrichment",
+    description: "Retry enrichment for a note id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Note id" },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_enrichment_queue",
+    description: "Get enrichment queue counts and failed jobs (workspace owners/admins only).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        failedLimit: { type: "number", description: "Max failed jobs to include", default: 20 },
+        sessionToken: {
+          type: "string",
+          description: "Auth token (optional when STASH_SESSION_TOKEN env var is set on the MCP server)",
+        },
+        workspaceId: {
+          type: "string",
+          description: "Optional workspace id override (or set STASH_WORKSPACE_ID on MCP server)",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function sendMessage(payload) {
@@ -163,10 +381,78 @@ function sendResult(id, result) {
 async function callTool(name, args = {}) {
   const actor = await buildActorFromToolArgs(args);
   switch (name) {
+    case "create_note": {
+      const note = await createMemory({
+        content: String(args.content || ""),
+        sourceType: String(args.sourceType || "text"),
+        sourceUrl: String(args.sourceUrl || ""),
+        imageDataUrl: String(args.imageDataUrl || "").trim() || null,
+        fileDataUrl: String(args.fileDataUrl || "").trim() || null,
+        fileName: String(args.fileName || ""),
+        fileMimeType: String(args.fileMimeType || ""),
+        project: String(args.project || ""),
+        metadata: { createdFrom: "mcp-tool", actorUserId: actor.userId },
+        actor,
+      });
+      return { note };
+    }
+    case "get_note_raw_content": {
+      return getMemoryRawContent({
+        id: String(args.id || ""),
+        includeMarkdown: args.includeMarkdown !== false,
+        maxChars: Number(args.maxChars || 12000),
+        actor,
+      });
+    }
+    case "update_note": {
+      const note = await updateMemory({
+        id: String(args.id || ""),
+        content: args.content,
+        summary: args.summary,
+        tags: Array.isArray(args.tags) ? args.tags.map((tag) => String(tag || "").trim()).filter(Boolean) : undefined,
+        project: args.project,
+        actor,
+      });
+      return { note };
+    }
+    case "update_note_markdown": {
+      const note = await updateMemoryExtractedContent({
+        id: String(args.id || ""),
+        content: args.content,
+        rawContent: args.rawContent,
+        markdownContent: args.markdownContent,
+        requeueEnrichment: args.requeueEnrichment !== false,
+        actor,
+      });
+      return { note };
+    }
+    case "add_note_comment": {
+      return addMemoryComment({
+        id: String(args.id || ""),
+        text: String(args.text || ""),
+        actor,
+      });
+    }
+    case "list_note_versions": {
+      return listMemoryVersions({
+        id: String(args.id || ""),
+        actor,
+      });
+    }
+    case "restore_note_version": {
+      const note = await restoreMemoryVersion({
+        id: String(args.id || ""),
+        versionNumber: Number(args.versionNumber || 0),
+        actor,
+      });
+      return { note };
+    }
     case "search_notes": {
       const results = await searchNotesBm25({
         query: String(args.query || ""),
         project: String(args.project || ""),
+        scope: String(args.scope || "all"),
+        workingSetIds: args.workingSetIds,
         includeMarkdown: args.includeMarkdown === true,
         limit: Number(args.limit || 8),
         actor,
@@ -175,6 +461,7 @@ async function callTool(name, args = {}) {
     }
     case "obtain_consolidated_memory_file": {
       const memoryFile = await readExtractedMarkdownMemory({
+        filePath: String(args.filePath || ""),
         maxChars: Number(args.maxChars || 30000),
         actor,
       });
@@ -201,6 +488,18 @@ async function callTool(name, args = {}) {
         actor,
       });
       return result;
+    }
+    case "retry_note_enrichment": {
+      return retryMemoryEnrichment({
+        id: String(args.id || ""),
+        actor,
+      });
+    }
+    case "get_enrichment_queue": {
+      return getEnrichmentQueueStats({
+        actor,
+        failedLimit: Number(args.failedLimit || 20),
+      });
     }
     default:
       throw new Error(`Unknown tool: ${name}`);

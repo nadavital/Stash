@@ -3,6 +3,8 @@ import { createPostgresTaskRepo } from "../postgres/taskRepo.js";
 import { createPostgresFolderRepo } from "../postgres/folderRepo.js";
 import { createPostgresAuthRepo } from "../postgres/authRepo.js";
 import { createPostgresVersionRepo } from "../postgres/versionRepo.js";
+import { createPostgresEnrichmentJobRepo } from "../postgres/enrichmentJobRepo.js";
+import { createPostgresCollaborationRepo } from "../postgres/collaborationRepo.js";
 import { getPostgresPool } from "../postgres/pool.js";
 
 export function createPostgresProvider({ databaseUrl = "" } = {}) {
@@ -19,6 +21,8 @@ export function createPostgresProvider({ databaseUrl = "" } = {}) {
     folderRepo: createPostgresFolderRepo(pool),
     authRepo: createPostgresAuthRepo(pool),
     versionRepo: createPostgresVersionRepo(pool),
+    enrichmentJobRepo: createPostgresEnrichmentJobRepo(pool),
+    collaborationRepo: createPostgresCollaborationRepo(pool),
     providerName: "postgres",
     storageBridgeMode: "none",
   };

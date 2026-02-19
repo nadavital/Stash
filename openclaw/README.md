@@ -24,12 +24,21 @@ node openclaw/bridge.js search_notes '{"query":"launch risks"}'
 
 ## Included tool names
 
+- `create_note`
+- `get_note_raw_content`
+- `update_note`
+- `update_note_markdown`
+- `add_note_comment`
+- `list_note_versions`
+- `restore_note_version`
 - `search_notes`
 - `get_tasks`
 - `obtain_consolidated_memory_file`
 - `complete_task`
 - `delete_note`
 - `delete_project`
+- `retry_note_enrichment`
+- `get_enrichment_queue`
 
 ## Manifest
 

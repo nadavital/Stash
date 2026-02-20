@@ -497,6 +497,39 @@ describe("API Integration", () => {
     await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
   });
 
+  it("PUT /api/notes/:id returns 409 for stale baseRevision", async () => {
+    const { body: created } = await jsonFetch("/api/notes", {
+      method: "POST",
+      body: { content: "Revision test", sourceType: "text", project: "TestRevision" },
+    });
+    const id = created.note.id;
+    const initialRevision = Number(created.note?.revision || 1);
+
+    const firstUpdate = await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: {
+        content: "Revision test v2",
+        baseRevision: initialRevision,
+      },
+    });
+    assert.equal(firstUpdate.status, 200);
+    assert.equal(Number(firstUpdate.body.note?.revision || 0), initialRevision + 1);
+
+    const staleUpdate = await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: {
+        content: "Revision test stale write",
+        baseRevision: initialRevision,
+      },
+    });
+    assert.equal(staleUpdate.status, 409);
+    assert.equal(Number(staleUpdate.body?.conflict?.baseRevision || 0), initialRevision);
+    assert.equal(Number(staleUpdate.body?.conflict?.currentRevision || 0), initialRevision + 1);
+    assert.equal(String(staleUpdate.body?.conflict?.currentNote?.id || ""), id);
+
+    await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  });
+
   it("PUT /api/notes/:id/extracted updates markdown/raw content", async () => {
     const fileDataUrl = "data:text/markdown;base64,IyBUZXN0IEZpbGUK";
     const { body: created } = await jsonFetch("/api/notes", {
@@ -526,6 +559,53 @@ describe("API Integration", () => {
     assert.equal(body.note.content, nextMarkdown);
     assert.equal(body.note.rawContent, nextMarkdown);
     assert.equal(body.note.markdownContent, nextMarkdown);
+
+    await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  });
+
+  it("PUT /api/notes/:id/extracted returns 409 for stale baseRevision", async () => {
+    const fileDataUrl = "data:text/markdown;base64,IyBSZXZpc2lvbiBUZXN0IEZpbGUK";
+    const { body: created } = await jsonFetch("/api/notes", {
+      method: "POST",
+      body: {
+        content: "Uploaded file: revision-test.md",
+        sourceType: "file",
+        fileDataUrl,
+        fileName: "revision-test.md",
+        fileMimeType: "text/markdown",
+        project: "TestExtractedRevision",
+      },
+    });
+    const id = created.note.id;
+    const initialRevision = Number(created.note?.revision || 1);
+
+    const firstUpdate = await jsonFetch(`/api/notes/${encodeURIComponent(id)}/extracted`, {
+      method: "PUT",
+      body: {
+        content: "# Revision v2",
+        rawContent: "# Revision v2",
+        markdownContent: "# Revision v2",
+        baseRevision: initialRevision,
+        requeueEnrichment: false,
+      },
+    });
+    assert.equal(firstUpdate.status, 200);
+    assert.equal(Number(firstUpdate.body.note?.revision || 0), initialRevision + 1);
+
+    const staleUpdate = await jsonFetch(`/api/notes/${encodeURIComponent(id)}/extracted`, {
+      method: "PUT",
+      body: {
+        content: "# stale write",
+        rawContent: "# stale write",
+        markdownContent: "# stale write",
+        baseRevision: initialRevision,
+        requeueEnrichment: false,
+      },
+    });
+    assert.equal(staleUpdate.status, 409);
+    assert.equal(Number(staleUpdate.body?.conflict?.baseRevision || 0), initialRevision);
+    assert.equal(Number(staleUpdate.body?.conflict?.currentRevision || 0), initialRevision + 1);
+    assert.equal(String(staleUpdate.body?.conflict?.currentNote?.id || ""), id);
 
     await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
   });

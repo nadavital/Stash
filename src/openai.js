@@ -108,7 +108,14 @@ async function extractDocxTextViaTextutil(fileDataUrl, fileName) {
   }
 }
 
-export async function createResponse({ input, instructions, model = config.openaiChatModel, temperature = 0.2 }) {
+export async function createResponse({
+  input,
+  instructions,
+  model = config.openaiChatModel,
+  temperature = 0.2,
+  tools = null,
+  include = null,
+}) {
   if (!hasOpenAI()) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
@@ -119,6 +126,8 @@ export async function createResponse({ input, instructions, model = config.opena
     instructions,
     temperature,
   };
+  if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
+  if (Array.isArray(include) && include.length > 0) payload.include = include;
 
   const response = await fetch(`${config.openaiBaseUrl}/responses`, {
     method: "POST",
@@ -138,7 +147,15 @@ export async function createResponse({ input, instructions, model = config.opena
   };
 }
 
-export async function createStreamingResponse({ input, instructions, model = config.openaiChatModel, temperature = 0.2, tools, previousResponseId }) {
+export async function createStreamingResponse({
+  input,
+  instructions,
+  model = config.openaiChatModel,
+  temperature = 0.2,
+  tools,
+  include,
+  previousResponseId,
+}) {
   if (!hasOpenAI()) {
     throw new Error("OPENAI_API_KEY is not configured");
   }
@@ -151,6 +168,7 @@ export async function createStreamingResponse({ input, instructions, model = con
   };
   if (instructions) payload.instructions = instructions;
   if (tools?.length) payload.tools = tools;
+  if (Array.isArray(include) && include.length > 0) payload.include = include;
   if (previousResponseId) payload.previous_response_id = previousResponseId;
 
   const response = await fetch(`${config.openaiBaseUrl}/responses`, {
@@ -165,6 +183,135 @@ export async function createStreamingResponse({ input, instructions, model = con
   }
 
   return response;
+}
+
+function normalizeDomainCandidate(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  const strippedScheme = raw.replace(/^https?:\/\//, "");
+  const host = strippedScheme.split("/")[0].split("?")[0].split("#")[0];
+  if (!host) return "";
+  if (host.includes(" ")) return "";
+  if (host === "localhost") return "";
+  if (host.endsWith(".")) return host.slice(0, -1);
+  return host;
+}
+
+export function extractDomainFromUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return normalizeDomainCandidate(parsed.hostname);
+  } catch {
+    return "";
+  }
+}
+
+export function extractDomainsFromText(text, max = 8) {
+  const matches = String(text || "").match(/https?:\/\/[^\s)]+/gi) || [];
+  const domains = [];
+  const seen = new Set();
+  for (const entry of matches) {
+    const domain = extractDomainFromUrl(entry);
+    if (!domain || seen.has(domain)) continue;
+    seen.add(domain);
+    domains.push(domain);
+    if (domains.length >= max) break;
+  }
+  return domains;
+}
+
+export function buildWebSearchTool({
+  allowedDomains = [],
+  searchContextSize = "medium",
+  userLocation = null,
+  externalWebAccess = true,
+  type = "web_search",
+} = {}) {
+  const toolType = String(type || "").trim() || "web_search";
+  const contextSize = ["low", "medium", "high"].includes(String(searchContextSize || "").toLowerCase())
+    ? String(searchContextSize || "").toLowerCase()
+    : "medium";
+  const normalizedDomains = [...new Set(
+    (Array.isArray(allowedDomains) ? allowedDomains : [])
+      .map((domain) => normalizeDomainCandidate(domain))
+      .filter(Boolean)
+  )]
+    .slice(0, 100);
+
+  const tool = {
+    type: toolType,
+    search_context_size: contextSize,
+  };
+
+  if (toolType === "web_search" && normalizedDomains.length > 0) {
+    tool.filters = { allowed_domains: normalizedDomains };
+  }
+  if (toolType === "web_search") {
+    tool.external_web_access = externalWebAccess !== false;
+  }
+
+  const location = userLocation && typeof userLocation === "object" ? userLocation : {};
+  const country = String(location.country || "").trim().toUpperCase();
+  const city = String(location.city || "").trim();
+  const region = String(location.region || "").trim();
+  const timezone = String(location.timezone || "").trim();
+  if (country || city || region || timezone) {
+    tool.user_location = {
+      type: "approximate",
+      ...(country ? { country } : {}),
+      ...(city ? { city } : {}),
+      ...(region ? { region } : {}),
+      ...(timezone ? { timezone } : {}),
+    };
+  }
+
+  return tool;
+}
+
+export function extractOutputUrlCitations(payload, max = 16) {
+  const limit = Number.isFinite(Number(max)) ? Math.max(1, Math.floor(Number(max))) : 16;
+  const items = Array.isArray(payload?.output) ? payload.output : [];
+  const sources = [];
+  const seen = new Set();
+  function pushSource(rawUrl, rawTitle = "") {
+    const url = String(rawUrl || "").trim();
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    sources.push({
+      url,
+      title: String(rawTitle || "").trim(),
+    });
+  }
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const content = Array.isArray(item.content) ? item.content : [];
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const annotations = Array.isArray(part.annotations) ? part.annotations : [];
+      for (const annotation of annotations) {
+        if (!annotation || typeof annotation !== "object") continue;
+        if (annotation.type !== "url_citation") continue;
+        pushSource(annotation.url, annotation.title || "");
+        if (sources.length >= limit) return sources;
+      }
+    }
+  }
+
+  for (const item of items) {
+    if (!item || typeof item !== "object" || item.type !== "web_search_call") continue;
+    const action = item.action && typeof item.action === "object" ? item.action : {};
+    const sourceList = Array.isArray(action.sources) ? action.sources : [];
+    for (const source of sourceList) {
+      if (!source || typeof source !== "object") continue;
+      pushSource(source.url, source.title || "");
+      if (sources.length >= limit) return sources;
+    }
+  }
+
+  return sources;
 }
 
 export async function createEmbedding(input, model = config.openaiEmbeddingModel) {

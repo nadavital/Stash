@@ -7,8 +7,20 @@ const MAX_MESSAGES = 100;
 export function renderChatPanelHTML() {
   const attachIcon = renderIcon("attach", { size: 15 });
   const sendIcon = renderIcon("arrow-up", { size: 16 });
+  const newChatIcon = renderIcon("square-pen", { size: 15, strokeWidth: 1.9 });
   return `
     <div id="chat-panel" class="chat-panel" aria-label="Chat with your notes">
+      <div class="chat-panel-header">
+        <button
+          id="chat-panel-new-chat"
+          class="chat-panel-header-btn"
+          type="button"
+          aria-label="New chat"
+          title="New chat"
+        >
+          ${newChatIcon}
+        </button>
+      </div>
       <div id="chat-empty-state" class="chat-empty-state">
         <p class="chat-empty-heading">What would you like to do?</p>
         <div class="chat-empty-chips">
@@ -20,9 +32,10 @@ export function renderChatPanelHTML() {
       </div>
       <div id="chat-panel-messages" class="chat-panel-messages"></div>
       <div class="chat-panel-citations hidden" id="chat-panel-citations"></div>
+      <div class="chat-panel-citations hidden" id="chat-panel-web-sources"></div>
       <div id="chat-context-header" class="chat-context-chip hidden"></div>
       <form id="chat-panel-form" class="chat-panel-form">
-        <div class="chat-panel-input-wrap">
+        <div id="chat-panel-input-wrap" class="chat-panel-input-wrap">
           <button id="chat-panel-attach-btn" class="chat-panel-attach" type="button" aria-label="Attach file">
             ${attachIcon}
           </button>
@@ -32,6 +45,7 @@ export function renderChatPanelHTML() {
             ${sendIcon}
           </button>
         </div>
+        <div id="chat-panel-pending" class="chat-panel-pending hidden" role="status" aria-live="polite"></div>
         <div id="chat-panel-attachment" class="chat-panel-attachment hidden">
           <span id="chat-panel-attachment-name" class="chat-panel-attachment-name"></span>
           <button id="chat-panel-attachment-clear" class="chat-panel-attachment-clear" type="button" aria-label="Remove attachment">&times;</button>
@@ -44,11 +58,15 @@ export function renderChatPanelHTML() {
 export function queryChatPanelEls(root) {
   return {
     chatPanel: root.querySelector("#chat-panel"),
+    chatPanelNewChat: root.querySelector("#chat-panel-new-chat"),
     chatContextHeader: root.querySelector("#chat-context-header"),
     chatEmptyState: root.querySelector("#chat-empty-state"),
     chatPanelMessages: root.querySelector("#chat-panel-messages"),
     chatPanelCitations: root.querySelector("#chat-panel-citations"),
+    chatPanelWebSources: root.querySelector("#chat-panel-web-sources"),
     chatPanelForm: root.querySelector("#chat-panel-form"),
+    chatPanelInputWrap: root.querySelector("#chat-panel-input-wrap"),
+    chatPanelPending: root.querySelector("#chat-panel-pending"),
     chatPanelInput: root.querySelector("#chat-panel-input"),
     chatPanelSend: root.querySelector("#chat-panel-send"),
     chatPanelAttachBtn: root.querySelector("#chat-panel-attach-btn"),
@@ -100,6 +118,50 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       els.chatPanelFileInput.value = "";
     }
     refreshAttachmentUI();
+  }
+
+  function clearDraftInput() {
+    if (els.chatPanelInput) {
+      els.chatPanelInput.value = "";
+      els.chatPanelInput.style.height = "";
+    }
+    clearAttachment();
+  }
+
+  function setPendingState(pending, statusText = "") {
+    const isPending = Boolean(pending);
+    const text = String(statusText || "").trim();
+    if (els.chatPanel) {
+      els.chatPanel.setAttribute("aria-busy", isPending ? "true" : "false");
+    }
+    if (els.chatPanelInputWrap) {
+      els.chatPanelInputWrap.classList.toggle("is-pending", isPending);
+    }
+    const interactiveControls = [
+      els.chatPanelInput,
+      els.chatPanelSend,
+      els.chatPanelAttachBtn,
+      els.chatPanelAttachmentClear,
+      els.chatPanelFileInput,
+      els.chatPanelNewChat,
+    ];
+    interactiveControls.forEach((control) => {
+      if (!control) return;
+      control.disabled = isPending;
+    });
+    if (els.chatChips) {
+      els.chatChips.forEach((chip) => {
+        chip.disabled = isPending;
+      });
+    }
+    if (!els.chatPanelPending) return;
+    if (isPending) {
+      els.chatPanelPending.textContent = text || "Generating response...";
+      els.chatPanelPending.classList.remove("hidden");
+      return;
+    }
+    els.chatPanelPending.textContent = "";
+    els.chatPanelPending.classList.add("hidden");
   }
 
   function updateContextHeader() {
@@ -234,6 +296,10 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     const citations = state.chatCitations || [];
     if (citations.length) {
       renderCitations(citations);
+      renderWebSources([]);
+    } else {
+      renderCitations([]);
+      renderWebSources([]);
     }
   }
 
@@ -299,6 +365,82 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       item.append(title, meta, preview, actions);
       els.chatPanelCitations.appendChild(item);
     });
+  }
+
+  function renderWebSources(sources = []) {
+    if (!els.chatPanelWebSources) return;
+    const normalized = Array.isArray(sources)
+      ? sources
+          .map((entry) => ({
+            url: String(entry?.url || "").trim(),
+            title: String(entry?.title || "").trim(),
+          }))
+          .filter((entry) => entry.url)
+          .slice(0, 8)
+      : [];
+    els.chatPanelWebSources.innerHTML = "";
+    if (!normalized.length) {
+      els.chatPanelWebSources.classList.add("hidden");
+      return;
+    }
+
+    els.chatPanelWebSources.classList.remove("hidden");
+    const heading = document.createElement("p");
+    heading.className = "chat-citations-heading";
+    heading.textContent = "Web sources";
+    els.chatPanelWebSources.appendChild(heading);
+
+    normalized.forEach((entry) => {
+      const item = document.createElement("div");
+      item.className = "chat-citation-item";
+
+      const title = document.createElement("span");
+      title.className = "chat-citation-title";
+      title.textContent = entry.title || entry.url;
+
+      const meta = document.createElement("span");
+      meta.className = "chat-citation-meta";
+      meta.textContent = "Web";
+
+      const preview = document.createElement("span");
+      preview.className = "chat-citation-preview";
+      preview.textContent = entry.url;
+
+      const actions = document.createElement("div");
+      actions.className = "chat-citation-actions";
+
+      const openSourceBtn = document.createElement("a");
+      openSourceBtn.className = "chat-citation-action";
+      openSourceBtn.href = entry.url;
+      openSourceBtn.target = "_blank";
+      openSourceBtn.rel = "noopener noreferrer";
+      openSourceBtn.textContent = "Open source";
+      actions.appendChild(openSourceBtn);
+
+      item.append(title, meta, preview, actions);
+      els.chatPanelWebSources.appendChild(item);
+    });
+  }
+
+  function clearConversation() {
+    if (store) {
+      store.setState({
+        chatMessages: [],
+        chatCitations: [],
+      });
+    }
+    if (els.chatPanelMessages) {
+      els.chatPanelMessages.innerHTML = "";
+    }
+    if (els.chatPanelCitations) {
+      els.chatPanelCitations.innerHTML = "";
+      els.chatPanelCitations.classList.add("hidden");
+    }
+    renderWebSources([]);
+    if (els.chatEmptyState) {
+      els.chatEmptyState.classList.remove("hidden");
+    }
+    clearDraftInput();
   }
 
   function buildItemContextQuestion(note) {
@@ -380,8 +522,10 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       els.chatPanelCitations.classList.add("hidden");
       els.chatPanelCitations.innerHTML = "";
     }
+    renderWebSources([]);
 
     isAsking = true;
+    setPendingState(true, "Generating response...");
 
     const typingEl = document.createElement("div");
     typingEl.className = "chat-typing-indicator";
@@ -396,6 +540,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
     const assistantMsg = addMessage("assistant", "");
     pushToStore("assistant", "");
+    let recoveryPromise = null;
 
     try {
       await apiClient.askStreaming(
@@ -416,16 +561,20 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
             renderCitations(citations);
             saveCitationsToStore(citations);
           },
+          onWebSources(sources) {
+            renderWebSources(sources);
+          },
           onToken(token) {
             removeTyping();
             const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
             if (toolStatus) toolStatus.remove();
+            setPendingState(true, "Generating response...");
             if (assistantMsg) {
               appendAssistantToken(assistantMsg, token);
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
             }
           },
-          onToolCall(name) {
+          onToolCall(name, _status, noteId) {
             removeTyping();
             const statusMap = {
               create_note: "Saving...",
@@ -439,17 +588,31 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
               restore_note_version: "Restoring version...",
               retry_note_enrichment: "Retrying enrichment...",
             };
+            const pendingLabel = statusMap[name] || "Working...";
+            setPendingState(true, pendingLabel);
             const statusEl = document.createElement("span");
             statusEl.className = "chat-tool-status";
-            statusEl.textContent = statusMap[name] || "Working...";
+            statusEl.textContent = pendingLabel;
             if (assistantMsg) {
               assistantMsg.appendChild(statusEl);
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
             }
+            if (
+              (name === "update_note" || name === "update_note_markdown") &&
+              noteId &&
+              typeof onWorkspaceAction === "function"
+            ) {
+              onWorkspaceAction({
+                phase: "start",
+                name,
+                noteId: String(noteId || "").trim(),
+              });
+            }
           },
-          onToolResult(name, result, error) {
+          onToolResult(name, result, error, noteIdFromEvent) {
             const statusEl = assistantMsg?.querySelector(".chat-tool-status");
             if (statusEl) statusEl.remove();
+            setPendingState(true, error ? "Recovering from tool error..." : "Finalizing response...");
             if (
               name === "create_note" &&
               result?.noteId &&
@@ -473,13 +636,21 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
                 name === "retry_note_enrichment") &&
               typeof onWorkspaceAction === "function"
             ) {
-              onWorkspaceAction({ name, result: result || null, error: error || null });
+              const resolvedNoteId = String(noteIdFromEvent || result?.noteId || "").trim();
+              onWorkspaceAction({
+                phase: "done",
+                name,
+                noteId: resolvedNoteId,
+                result: result || null,
+                error: error || null,
+              });
             }
           },
           onDone() {
             removeTyping();
             const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
             if (toolStatus) toolStatus.remove();
+            setPendingState(false);
             if (assistantMsg && !getMessageRawText(assistantMsg).trim()) {
               setMessageBodyText(assistantMsg, "assistant", "No answer generated.");
             }
@@ -487,10 +658,21 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
           },
           onError() {
             removeTyping();
-            fallbackAsk(question || "Save this attachment to Stash.", assistantMsg, project, contextNoteId, scopePayload, attachment);
+            setPendingState(true, "Recovering response...");
+            recoveryPromise = fallbackAsk(
+              question || "Save this attachment to Stash.",
+              assistantMsg,
+              project,
+              contextNoteId,
+              scopePayload,
+              attachment
+            );
           },
         }
       );
+      if (recoveryPromise) {
+        await recoveryPromise;
+      }
       return true;
     } catch {
       removeTyping();
@@ -498,10 +680,12 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       return true;
     } finally {
       isAsking = false;
+      setPendingState(false);
     }
   }
 
   async function handleSubmit() {
+    if (isAsking) return;
     const question = (els.chatPanelInput?.value || "").trim();
     const attachment = pendingAttachment.fileDataUrl ? { ...pendingAttachment } : null;
     if (!question && !attachment) return;
@@ -532,6 +716,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
         renderCitations(result.citations);
         saveCitationsToStore(result.citations);
       }
+      renderWebSources(result.webSources || []);
     } catch (error) {
       if (msgEl) setMessageBodyText(msgEl, "assistant", "Failed to get answer.");
       updateLastAssistantInStore("Failed to get answer.");
@@ -559,6 +744,11 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     handleSubmit();
   });
 
+  addHandler(els.chatPanelNewChat, "click", () => {
+    if (isAsking) return;
+    clearConversation();
+  });
+
   addHandler(els.chatPanelAttachBtn, "click", () => {
     els.chatPanelFileInput?.click();
   });
@@ -568,6 +758,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
   });
 
   addHandler(els.chatPanelFileInput, "change", async () => {
+    if (isAsking) return;
     const file = els.chatPanelFileInput?.files?.[0];
     if (!file) return;
     try {
@@ -594,6 +785,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     };
     els.chatChips.forEach((chip) => {
       addHandler(chip, "click", () => {
+        if (isAsking) return;
         const promptKey = chip.dataset.prompt || "";
         const prompt = chipPrompts[promptKey] ?? "";
         if (els.chatPanelInput) {
@@ -607,12 +799,14 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
   rebuildFromStore();
   refreshAttachmentUI();
+  setPendingState(false);
 
   return {
     askQuestion,
     isAsking: () => isAsking,
+    clearConversation,
     startFromNote(note, { autoSubmit = true } = {}) {
-      if (!note || !els.chatPanelInput) return;
+      if (isAsking || !note || !els.chatPanelInput) return;
       nextProjectHint = String(note.project || "").trim();
       els.chatPanelInput.value = buildItemContextQuestion(note);
       // Trigger auto-resize

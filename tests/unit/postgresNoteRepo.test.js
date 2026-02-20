@@ -12,6 +12,7 @@ describe("createPostgresNoteRepo", () => {
     assert.equal(typeof repo.listByProject, "function");
     assert.equal(typeof repo.listTags, "function");
     assert.equal(typeof repo.updateAttachment, "function");
+    assert.equal(typeof repo.updateExtractedContent, "function");
     assert.equal(repo.createNote.constructor.name, "AsyncFunction");
   });
 
@@ -81,6 +82,36 @@ describe("createPostgresNoteRepo", () => {
     assert.equal(captured.params[4], "report.txt");
     assert.equal(captured.params[5], "text/plain");
     assert.equal(captured.params[6], 42);
+  });
+
+  it("updateNote applies optimistic revision guard when baseRevision is provided", async () => {
+    const fakePool = { query: async () => ({ rows: [] }) };
+    const repo = createPostgresNoteRepo(fakePool);
+    let captured = null;
+
+    repo._query = async (sql, params = []) => {
+      captured = { sql, params };
+      return {
+        rows: [{ id: "note-1", workspace_id: "ws_123", content: "next", summary: "", tags_json: "[]", project: "", metadata_json: "{}", revision: 2 }],
+      };
+    };
+
+    const updated = await repo.updateNote({
+      id: "note-1",
+      content: "next",
+      summary: "",
+      tags: [],
+      project: "",
+      metadata: {},
+      workspaceId: "ws_123",
+      baseRevision: 1,
+    });
+
+    assert.ok(captured, "expected SQL query to be captured");
+    assert.match(captured.sql, /revision\s*=\s*revision\s*\+\s*1/i);
+    assert.match(captured.sql, /\(\$9::int IS NULL OR revision = \$9\)/i);
+    assert.equal(captured.params[8], 1);
+    assert.equal(updated.revision, 2);
   });
 
   it("uses case-insensitive project matching for scoped queries", async () => {

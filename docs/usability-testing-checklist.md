@@ -56,6 +56,9 @@ Use this checklist for manual end-to-end testing of the web app as a collaborati
 - [ ] Type continuously for 10+ seconds and verify autosave status transitions (`Unsaved` -> `Saving` -> `All changes saved`).
 - [ ] Refresh and confirm latest file text persists.
 - [ ] Keep a file open, ask chat agent to edit the same file, and verify remote update is applied (or deferred until local draft save).
+- [ ] While agent is editing the open file, confirm live status shows an in-progress indicator (`Agent is editing...` / `Applying ...`).
+- [ ] Trigger simultaneous edits from two tabs on the same file and confirm stale write receives conflict handling (no silent overwrite).
+- [ ] After a conflict, confirm the editor rebases on latest revision and saves successfully on next autosave.
 
 ## 4) Search, Context, and Chat Grounding
 

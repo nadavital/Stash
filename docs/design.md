@@ -400,16 +400,19 @@ openItemModal(els, note);
 
 #### Chat Panel
 
-Right-side chat surface for grounded Q&A over saved notes, with source citations.
+Right-side chat surface for grounded Q&A over saved notes, with source citations and optional web-source grounding.
 
 ```js
 export function renderChatPanelHTML()
 export function queryChatPanelEls(root)
-export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspaceAction })
+export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspaceAction, store })
 ```
 
-`initChatPanel()` returns controls for `toggle(show?)`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
+`initChatPanel()` returns controls for `askQuestion(...)`, `clearConversation()`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
+Header controls expose an icon-only `New chat` action (clear conversation history/citations and reset composer attachment state).
+While a response is in progress (including tool calls), the composer is locked and a pending status line is shown so users cannot submit overlapping requests.
 When `onOpenCitation` is provided, citation cards expose `Open item` for in-app context. If a source URL exists, `Open source` opens the original link in a new tab.
+When web search is used by the backend, URL sources are rendered in a dedicated `Web sources` section under citations.
 When chat tools create a file/image item, the panel automatically opens that newly created item view.
 Assistant responses are rendered via the shared Markdown service (`services/markdown.js`), so headings, lists, tables, code fences, and links render consistently with the rest of the app while remaining sanitized.
 Chat messages/citations persist across page refresh via workspace/user-scoped local storage and are restored during app-shell bootstrap.

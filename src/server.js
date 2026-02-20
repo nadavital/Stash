@@ -4,7 +4,14 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config, ROOT_DIR } from "./config.js";
-import { hasOpenAI } from "./openai.js";
+import {
+  buildWebSearchTool,
+  createStreamingResponse,
+  extractDomainFromUrl,
+  extractDomainsFromText,
+  extractOutputUrlCitations,
+  hasOpenAI,
+} from "./openai.js";
 import {
   askMemories,
   batchMoveMemories,
@@ -44,7 +51,6 @@ import {
   createCitationNoteNameAliasMap,
   resolveAgentToolArgs,
 } from "./chatToolArgs.js";
-import { createStreamingResponse } from "./openai.js";
 import {
   noteRepo,
   taskRepo,
@@ -735,6 +741,7 @@ const CHAT_TOOLS = [
         summary: { type: "string", description: "Updated summary" },
         tags: { type: "array", items: { type: "string" }, description: "Updated tags" },
         project: { type: "string", description: "Updated folder name" },
+        baseRevision: { type: "number", description: "Optional optimistic concurrency revision guard" },
       },
       required: ["id"],
     },
@@ -753,6 +760,7 @@ const CHAT_TOOLS = [
         fileMimeType: { type: "string", description: "Optional mime type for attachment" },
         content: { type: "string", description: "Optional note content override" },
         requeueEnrichment: { type: "boolean", description: "Requeue enrichment after attachment update" },
+        baseRevision: { type: "number", description: "Optional optimistic concurrency revision guard" },
       },
       required: ["id"],
     },
@@ -769,6 +777,7 @@ const CHAT_TOOLS = [
         rawContent: { type: "string", description: "Updated extracted raw text" },
         markdownContent: { type: "string", description: "Updated extracted markdown text" },
         requeueEnrichment: { type: "boolean", description: "Requeue enrichment after edit" },
+        baseRevision: { type: "number", description: "Optional optimistic concurrency revision guard" },
       },
       required: ["id"],
     },
@@ -825,7 +834,23 @@ const CHAT_TOOLS = [
   },
 ];
 
-const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links/files/images, create notes and folders, search notes, read extracted markdown/raw content, update note fields, update markdown/raw extracted content, add note comments, list/restore versions, retry failed enrichment, list workspace members, share/unshare folders, list folder collaborators, and list workspace activity. When the user asks to save, edit, or organize memory items, use tools directly. When creating notes and the user implies a name, pass that name using create_note.title. Keep responses concise and grounded in saved notes. In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs.";
+const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links/files/images, create notes and folders, search notes, read extracted markdown/raw content, update note fields, update markdown/raw extracted content, add note comments, list/restore versions, retry failed enrichment, list workspace members, share/unshare folders, list folder collaborators, and list workspace activity. When the user asks to save, edit, or organize memory items, use tools directly. When creating notes and the user implies a name, pass that name using create_note.title. Keep responses concise and grounded in saved notes, and use web search when the user asks for external/current information. Do not claim web-search restrictions unless the user explicitly scoped the request to a specific URL/item. In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs.";
+
+function buildChatWebSearchTool(allowedDomains = []) {
+  if (!config.openaiWebSearchEnabled) return null;
+  return buildWebSearchTool({
+    allowedDomains,
+    type: config.openaiWebSearchToolType,
+    searchContextSize: config.openaiWebSearchContextSize,
+    externalWebAccess: config.openaiWebSearchExternalAccess,
+    userLocation: {
+      country: config.openaiWebSearchUserCountry,
+      city: config.openaiWebSearchUserCity,
+      region: config.openaiWebSearchUserRegion,
+      timezone: config.openaiWebSearchUserTimezone,
+    },
+  });
+}
 
 async function executeChatToolCall(name, args, actor, { chatAttachment = null } = {}) {
   switch (name) {
@@ -1021,6 +1046,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
           ? args.tags.map((tag) => String(tag || "").trim()).filter(Boolean)
           : undefined,
         project: args.project,
+        baseRevision: args.baseRevision,
         actor,
       });
       return { noteId: note.id, title: buildAgentNoteTitle(note, "Updated item") };
@@ -1041,6 +1067,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
         imageDataUrl: attachment.imageDataUrl,
         fileName: attachment.fileName,
         fileMimeType: attachment.fileMimeType,
+        baseRevision: args.baseRevision,
         requeueEnrichment: args.requeueEnrichment !== false,
         actor,
       });
@@ -1057,6 +1084,7 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
         content: args.content,
         rawContent: args.rawContent,
         markdownContent: args.markdownContent,
+        baseRevision: args.baseRevision,
         requeueEnrichment: args.requeueEnrichment !== false,
         actor,
       });
@@ -2002,6 +2030,8 @@ async function handleApi(req, res, url) {
         sendJson(res, 400, { error: "Missing question" });
         return;
       }
+      const contextNoteId = String(body.contextNoteId || "").trim();
+      let contextNoteSourceUrl = "";
 
       // Pre-search for context
       let citations = await searchMemories({
@@ -2011,19 +2041,27 @@ async function handleApi(req, res, url) {
         actor,
         scope,
         workingSetIds,
-        contextNoteId: String(body.contextNoteId || "").trim(),
+        contextNoteId,
       });
 
-      const contextNoteId = String(body.contextNoteId || "").trim();
       if (contextNoteId) {
         try {
           const contextNote = await noteRepo.getNoteById(contextNoteId, actor.workspaceId);
           if (contextNote) {
+            contextNoteSourceUrl = String(contextNote.sourceUrl || "").trim();
             citations = citations.filter((c) => String(c.note?.id || "") !== contextNoteId);
             citations.unshift({ rank: 0, score: 1.0, note: contextNote });
           }
         } catch { /* best-effort */ }
       }
+      const questionDomains = extractDomainsFromText(question, 8);
+      const contextDomain = extractDomainFromUrl(contextNoteSourceUrl);
+      // Only hard-restrict web search when the user targets a specific URL/item.
+      // Folder/project citations should not silently narrow global web search.
+      const webSearchDomains = [...new Set([contextDomain, ...questionDomains].filter(Boolean))].slice(0, 100);
+      const webSearchTool = buildChatWebSearchTool(webSearchDomains);
+      const responseTools = webSearchTool ? [...CHAT_TOOLS, webSearchTool] : CHAT_TOOLS;
+      const responseInclude = webSearchTool ? ["web_search_call.action.sources"] : undefined;
       const citationAliasMap = createCitationNoteAliasMap(citations);
       const noteNameAliasMap = createCitationNoteNameAliasMap(citations);
 
@@ -2059,10 +2097,16 @@ async function handleApi(req, res, url) {
         if (hasAttachment) {
           systemPrompt = `A file/image attachment is included with this request. When the user asks to save a new item, call create_note. When the user asks to replace an existing note's attachment, call update_note_attachment. Attachment payload is supplied server-side and should not be reconstructed.\n\n${systemPrompt}`;
         }
+        if (contextNoteSourceUrl) {
+          systemPrompt = `When discussing this item, ground factual claims to the source URL when possible: ${contextNoteSourceUrl}\n\n${systemPrompt}`;
+        }
 
+        const groundingLine = contextNoteSourceUrl
+          ? `Primary source URL for this item: ${contextNoteSourceUrl}\n`
+          : "";
         const questionText = context
-          ? `${question}\n\nContext from saved notes:\n${context}`
-          : question;
+          ? `${question}\n\n${groundingLine}Context from saved notes:\n${context}`
+          : `${question}\n${groundingLine}`.trim();
 
         let currentInput = [
           { role: "user", content: [{ type: "input_text", text: questionText }] },
@@ -2098,10 +2142,12 @@ async function handleApi(req, res, url) {
         });
 
         while (toolRounds <= MAX_TOOL_ROUNDS) {
+          let roundWebSources = [];
           const streamResponse = await createStreamingResponse({
             instructions: currentInstructions,
             input: currentInput,
-            tools: CHAT_TOOLS,
+            tools: responseTools,
+            include: responseInclude,
             previousResponseId: currentPreviousId,
             temperature: 0.2,
           });
@@ -2127,6 +2173,11 @@ async function handleApi(req, res, url) {
                   responseId = parsed.response?.id || "";
                 } else if (parsed.type === "response.output_text.delta" && parsed.delta) {
                   res.write(`event: token\ndata: ${JSON.stringify({ token: parsed.delta })}\n\n`);
+                } else if (parsed.type === "response.completed" && parsed.response) {
+                  const webSources = extractOutputUrlCitations(parsed.response, 16);
+                  if (webSources.length > 0) {
+                    roundWebSources = webSources;
+                  }
                 } else if (parsed.type === "response.output_item.added" && parsed.item?.type === "function_call") {
                   currentToolCall = { callId: parsed.item.call_id, name: parsed.item.name, args: "" };
                 } else if (parsed.type === "response.function_call_arguments.delta") {
@@ -2142,13 +2193,28 @@ async function handleApi(req, res, url) {
             }
           }
 
+          if (roundWebSources.length > 0) {
+            res.write(`event: web_sources\ndata: ${JSON.stringify({ webSources: roundWebSources })}\n\n`);
+          }
+
           // No tool calls — we're done
           if (pendingToolCalls.length === 0) break;
 
           // Execute tool calls and collect outputs for continuation
           const toolOutputs = [];
           for (const tc of pendingToolCalls) {
-            res.write(`event: tool_call\ndata: ${JSON.stringify({ name: tc.name, status: "executing" })}\n\n`);
+            let toolNoteId = "";
+            try {
+              const parsedArgs = JSON.parse(String(tc.args || "{}"));
+              toolNoteId = String(parsedArgs?.id || "").trim();
+            } catch {
+              toolNoteId = "";
+            }
+            res.write(`event: tool_call\ndata: ${JSON.stringify({
+              name: tc.name,
+              status: "executing",
+              ...(toolNoteId ? { noteId: toolNoteId } : {}),
+            })}\n\n`);
             const execution = await harness.runToolCall({
               name: tc.name,
               rawArgs: tc.args,
@@ -2157,6 +2223,7 @@ async function handleApi(req, res, url) {
             });
             res.write(`event: tool_result\ndata: ${JSON.stringify({
               name: tc.name,
+              ...(toolNoteId ? { noteId: toolNoteId } : {}),
               ...(execution.ok
                 ? { result: execution.result }
                 : { error: execution.error || "Tool call failed" }),
@@ -2574,6 +2641,7 @@ async function handleApi(req, res, url) {
     const hasContent = body.content !== undefined;
     const hasRawContent = body.rawContent !== undefined;
     const hasMarkdownContent = body.markdownContent !== undefined;
+    const hasBaseRevision = body.baseRevision !== undefined;
     if (!hasTitle && !hasContent && !hasRawContent && !hasMarkdownContent) {
       sendJson(res, 400, { error: "Nothing to update" });
       return;
@@ -2594,6 +2662,13 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: "markdownContent must be a string or null" });
       return;
     }
+    if (hasBaseRevision) {
+      const parsedBaseRevision = Number(body.baseRevision);
+      if (!Number.isFinite(parsedBaseRevision) || parsedBaseRevision < 1) {
+        sendJson(res, 400, { error: "baseRevision must be a positive integer" });
+        return;
+      }
+    }
     try {
       const note = await updateMemoryExtractedContent({
         id,
@@ -2601,13 +2676,21 @@ async function handleApi(req, res, url) {
         content: body.content,
         rawContent: body.rawContent,
         markdownContent: body.markdownContent,
+        baseRevision: body.baseRevision,
         requeueEnrichment: body.requeueEnrichment === true,
         actor,
       });
       sendJson(res, 200, { note });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Update extracted content failed";
-      sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
+      sendJson(
+        res,
+        resolveErrorStatus(err, msg.includes("not found") ? 404 : 400),
+        {
+          error: msg,
+          ...(err?.conflict ? { conflict: err.conflict } : {}),
+        }
+      );
     }
     return;
   }
@@ -2626,6 +2709,13 @@ async function handleApi(req, res, url) {
       sendJson(res, 400, { error: validation.errors.join("; ") });
       return;
     }
+    if (body.baseRevision !== undefined) {
+      const parsedBaseRevision = Number(body.baseRevision);
+      if (!Number.isFinite(parsedBaseRevision) || parsedBaseRevision < 1) {
+        sendJson(res, 400, { error: "baseRevision must be a positive integer" });
+        return;
+      }
+    }
     try {
       const note = await updateMemory({
         id,
@@ -2634,12 +2724,20 @@ async function handleApi(req, res, url) {
         summary: body.summary,
         tags: body.tags,
         project: body.project,
+        baseRevision: body.baseRevision,
         actor,
       });
       sendJson(res, 200, { note });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Update failed";
-      sendJson(res, resolveErrorStatus(err, msg.includes("not found") ? 404 : 400), { error: msg });
+      sendJson(
+        res,
+        resolveErrorStatus(err, msg.includes("not found") ? 404 : 400),
+        {
+          error: msg,
+          ...(err?.conflict ? { conflict: err.conflict } : {}),
+        }
+      );
     }
     return;
   }

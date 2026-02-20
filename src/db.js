@@ -14,6 +14,32 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeBaseRevision(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error("baseRevision must be a positive integer");
+  }
+  return Math.floor(parsed);
+}
+
+function createRevisionConflictError({
+  id,
+  baseRevision,
+  currentNote = null,
+}) {
+  const error = new Error("Revision conflict: item changed since your last read");
+  error.status = 409;
+  error.code = "REVISION_CONFLICT";
+  error.conflict = {
+    id: String(id || "").trim(),
+    baseRevision: normalizeBaseRevision(baseRevision),
+    currentRevision: Number(currentNote?.revision || 0) || null,
+    currentNote,
+  };
+  return error;
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
@@ -38,6 +64,7 @@ function mapRow(row) {
     updatedAt: row.updated_at,
     embedding: safeJsonParse(row.embedding_json, null),
     metadata: safeJsonParse(row.metadata_json, {}),
+    revision: Number(row.revision || 1),
   };
 }
 
@@ -97,7 +124,8 @@ class NoteRepository {
         updated_at TEXT NOT NULL,
         embedding_json TEXT,
         metadata_json TEXT NOT NULL DEFAULT '{}',
-        status TEXT NOT NULL DEFAULT 'ready'
+        status TEXT NOT NULL DEFAULT 'ready',
+        revision INTEGER NOT NULL DEFAULT 1
       )
     `);
 
@@ -148,6 +176,7 @@ class NoteRepository {
       { name: "raw_content", sql: "ALTER TABLE notes ADD COLUMN raw_content TEXT" },
       { name: "markdown_content", sql: "ALTER TABLE notes ADD COLUMN markdown_content TEXT" },
       { name: "status", sql: "ALTER TABLE notes ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'" },
+      { name: "revision", sql: "ALTER TABLE notes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1" },
     ];
 
     for (const migration of migrations) {
@@ -160,6 +189,12 @@ class NoteRepository {
       UPDATE notes
       SET workspace_id = '${defaultWorkspaceLiteral}'
       WHERE workspace_id IS NULL OR trim(workspace_id) = ''
+    `);
+
+    this.db.exec(`
+      UPDATE notes
+      SET revision = 1
+      WHERE revision IS NULL OR revision < 1
     `);
 
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_notes_workspace_created ON notes(workspace_id, created_at DESC);`);
@@ -256,8 +291,8 @@ class NoteRepository {
         id, workspace_id, owner_user_id, created_by_user_id, content, source_type, source_url, image_path,
         file_name, file_mime, file_size, raw_content, markdown_content,
         summary, tags_json, project,
-        created_at, updated_at, embedding_json, metadata_json, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_at, updated_at, embedding_json, metadata_json, status, revision
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     this.updateEnrichmentStmt = this.db.prepare(`
@@ -401,8 +436,30 @@ class NoteRepository {
 
     this.updateNoteStmt = this.db.prepare(`
       UPDATE notes
-      SET content = ?, summary = ?, tags_json = ?, project = ?, metadata_json = COALESCE(?, metadata_json), updated_at = ?
-      WHERE id = ? AND workspace_id = ?
+      SET
+        content = ?,
+        summary = ?,
+        tags_json = ?,
+        project = ?,
+        metadata_json = COALESCE(?, metadata_json),
+        updated_at = ?,
+        revision = revision + 1
+      WHERE id = ? AND workspace_id = ? AND (? IS NULL OR revision = ?)
+    `);
+
+    this.updateExtractedContentStmt = this.db.prepare(`
+      UPDATE notes
+      SET
+        content = ?,
+        summary = ?,
+        tags_json = ?,
+        project = ?,
+        metadata_json = ?,
+        raw_content = CASE WHEN ? THEN ? ELSE raw_content END,
+        markdown_content = CASE WHEN ? THEN ? ELSE markdown_content END,
+        updated_at = ?,
+        revision = revision + 1
+      WHERE id = ? AND workspace_id = ? AND (? IS NULL OR revision = ?)
     `);
 
     this.tagListStmt = this.db.prepare(`
@@ -523,7 +580,8 @@ class NoteRepository {
       note.updatedAt,
       note.embedding ? JSON.stringify(note.embedding) : null,
       JSON.stringify(note.metadata || {}),
-      note.status || "ready"
+      note.status || "ready",
+      Number.isFinite(Number(note.revision)) ? Math.max(1, Math.floor(Number(note.revision))) : 1
     );
     const created = this.getNoteById(note.id, workspaceId);
     this.syncFts(note.id, workspaceId);
@@ -692,10 +750,20 @@ class NoteRepository {
     return Number(result?.changes || 0);
   }
 
-  updateNote({ id, content, summary, tags, project, metadata, workspaceId = config.defaultWorkspaceId }) {
+  updateNote({
+    id,
+    content,
+    summary,
+    tags,
+    project,
+    metadata,
+    workspaceId = config.defaultWorkspaceId,
+    baseRevision = null,
+  }) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
+    const normalizedBaseRevision = normalizeBaseRevision(baseRevision);
     const now = nowIso();
-    this.updateNoteStmt.run(
+    const result = this.updateNoteStmt.run(
       content,
       summary || "",
       JSON.stringify(tags || []),
@@ -703,8 +771,67 @@ class NoteRepository {
       metadata === undefined ? null : JSON.stringify(metadata || {}),
       now,
       id,
-      normalizedWorkspaceId
+      normalizedWorkspaceId,
+      normalizedBaseRevision,
+      normalizedBaseRevision
     );
+    if (Number(result?.changes || 0) === 0 && normalizedBaseRevision !== null) {
+      const currentNote = this.getNoteById(id, normalizedWorkspaceId);
+      if (currentNote) {
+        throw createRevisionConflictError({
+          id,
+          baseRevision: normalizedBaseRevision,
+          currentNote,
+        });
+      }
+    }
+    this.syncFts(id, normalizedWorkspaceId);
+    return this.getNoteById(id, normalizedWorkspaceId);
+  }
+
+  updateExtractedContent({
+    id,
+    content,
+    summary,
+    tags,
+    project,
+    metadata,
+    rawContent,
+    markdownContent,
+    updatedAt,
+    workspaceId = config.defaultWorkspaceId,
+    baseRevision = null,
+  }) {
+    const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
+    const normalizedBaseRevision = normalizeBaseRevision(baseRevision);
+    const hasRawContent = rawContent !== undefined;
+    const hasMarkdownContent = markdownContent !== undefined;
+    const result = this.updateExtractedContentStmt.run(
+      content,
+      summary || "",
+      JSON.stringify(tags || []),
+      project || "",
+      JSON.stringify(metadata || {}),
+      hasRawContent ? 1 : 0,
+      hasRawContent ? (rawContent === null ? null : String(rawContent)) : null,
+      hasMarkdownContent ? 1 : 0,
+      hasMarkdownContent ? (markdownContent === null ? null : String(markdownContent)) : null,
+      updatedAt || nowIso(),
+      id,
+      normalizedWorkspaceId,
+      normalizedBaseRevision,
+      normalizedBaseRevision
+    );
+    if (Number(result?.changes || 0) === 0 && normalizedBaseRevision !== null) {
+      const currentNote = this.getNoteById(id, normalizedWorkspaceId);
+      if (currentNote) {
+        throw createRevisionConflictError({
+          id,
+          baseRevision: normalizedBaseRevision,
+          currentNote,
+        });
+      }
+    }
     this.syncFts(id, normalizedWorkspaceId);
     return this.getNoteById(id, normalizedWorkspaceId);
   }

@@ -76,6 +76,7 @@ export function buildItemActivityEntries(note, versions = []) {
  * @param {(id: string) => void} opts.onNavigate – navigate to another item
  * @param {(payload) => Promise}      opts.onEdit
  * @param {(state: {dirty: boolean, saving: boolean}) => void} [opts.onFileDraftStateChange]
+ * @param {{active?: boolean, text?: string}} [opts.remoteActivity]
  */
 export function renderItemDetail(container, note, {
   relatedNotes = [],
@@ -83,6 +84,7 @@ export function renderItemDetail(container, note, {
   onNavigate,
   onEdit,
   onFileDraftStateChange,
+  remoteActivity = null,
 }) {
   if (!note || !container) return;
 
@@ -222,6 +224,7 @@ export function renderItemDetail(container, note, {
   const editController = {
     isEditing: false,
     focusEditEditor() {},
+    setRemoteActivity() {},
     getPendingEditPayload() {
       return null;
     },
@@ -240,11 +243,18 @@ export function renderItemDetail(container, note, {
     liveTitle.className = "item-file-live-title";
     liveTitle.textContent = "File content";
 
+    const liveSignals = document.createElement("div");
+    liveSignals.className = "item-file-live-signals";
+
+    const liveRemote = document.createElement("span");
+    liveRemote.className = "item-file-live-remote hidden";
+
     const liveStatus = document.createElement("span");
     liveStatus.className = "item-file-live-status";
     liveStatus.textContent = "All changes saved";
 
-    liveHeader.append(liveTitle, liveStatus);
+    liveSignals.append(liveRemote, liveStatus);
+    liveHeader.append(liveTitle, liveSignals);
 
     titleEl.classList.add("item-title--editable");
     titleEl.contentEditable = "true";
@@ -283,6 +293,30 @@ export function renderItemDetail(container, note, {
       reportDraftState();
     }
 
+    function extractNoteDraftValue(value, fallback = "") {
+      return String(value?.markdownContent || value?.rawContent || value?.content || fallback || "");
+    }
+
+    function extractNoteTitle(value, fallback = "") {
+      const explicit = String(value?.title || value?.metadata?.title || "").trim();
+      if (explicit) return explicit;
+      return String(fallback || "").trim();
+    }
+
+    function setRemoteActivityState(state = null) {
+      const active = Boolean(state?.active);
+      const label = String(state?.text || "").trim();
+      if (!active || !label) {
+        liveRemote.classList.add("hidden");
+        liveRemote.classList.remove("is-active");
+        liveRemote.textContent = "";
+        return;
+      }
+      liveRemote.textContent = label;
+      liveRemote.classList.remove("hidden");
+      liveRemote.classList.add("is-active");
+    }
+
     async function flushDraft(force = false) {
       if (inflight) {
         queued = true;
@@ -299,21 +333,55 @@ export function renderItemDetail(container, note, {
       inflight = true;
       updateLiveStatus("Saving...", "saving");
       try {
-        const result = await onEdit({
-          mode: "file-live",
-          ...(titleChanged ? { title: nextTitle } : {}),
-          content: draft,
-          rawContent: draft,
-          markdownContent: draft,
-          requeueEnrichment: false,
-        });
-        if (result?.note) {
-          baselineDraft = String(result.note.markdownContent || result.note.rawContent || result.note.content || draft);
-        } else {
-          baselineDraft = draft;
+        const userChangedDraft = draft !== baselineDraft;
+        const userChangedTitle = titleChanged;
+        let finalized = false;
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const result = await onEdit({
+            mode: "file-live",
+            ...(titleChanged ? { title: nextTitle } : {}),
+            content: draft,
+            rawContent: draft,
+            markdownContent: draft,
+            requeueEnrichment: false,
+          });
+
+          if (result?.conflict) {
+            const latestNote = result.note || null;
+            if (!latestNote || attempt > 0) {
+              break;
+            }
+            const latestDraft = extractNoteDraftValue(latestNote, baselineDraft);
+            const latestTitle = extractNoteTitle(latestNote, baselineTitle);
+            if (!userChangedDraft) {
+              fileEditor.setValue(latestDraft);
+            }
+            if (!userChangedTitle && latestTitle) {
+              titleEl.textContent = latestTitle;
+            }
+            baselineDraft = latestDraft;
+            baselineTitle = latestTitle || baselineTitle;
+            updateLiveStatus("Remote edits detected. Rebasing...", "saving");
+            continue;
+          }
+
+          if (result?.note) {
+            baselineDraft = extractNoteDraftValue(result.note, draft);
+            baselineTitle = extractNoteTitle(result.note, nextTitle) || nextTitle;
+          } else {
+            baselineDraft = draft;
+            baselineTitle = nextTitle;
+          }
+          finalized = true;
+          break;
         }
-        baselineTitle = nextTitle;
-        updateLiveStatus("All changes saved");
+
+        if (finalized) {
+          updateLiveStatus("All changes saved");
+        } else {
+          updateLiveStatus("Revision conflict. Keep typing to retry.", "error");
+        }
       } catch {
         updateLiveStatus("Save failed. Keep typing to retry.", "error");
       } finally {
@@ -368,6 +436,10 @@ export function renderItemDetail(container, note, {
       }
     };
 
+    editController.setRemoteActivity = (state) => {
+      setRemoteActivityState(state);
+    };
+    setRemoteActivityState(remoteActivity);
     reportDraftState();
     liveSection.append(liveHeader, fileEditor.element);
     wrap.appendChild(liveSection);

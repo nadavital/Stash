@@ -606,7 +606,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return adaptAnswerResponse(response, "chat");
     },
 
-    async askStreaming(payload, { onCitations, onToken, onDone, onError, onToolCall, onToolResult }) {
+    async askStreaming(payload, { onCitations, onWebSources, onToken, onDone, onError, onToolCall, onToolResult }) {
       try {
         const token = getStoredSessionToken();
         const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
@@ -641,6 +641,12 @@ export function createApiClient({ adapterDebug = false } = {}) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let doneSignaled = false;
+        const fireDone = () => {
+          if (doneSignaled) return;
+          doneSignaled = true;
+          if (onDone) onDone();
+        };
 
         while (true) {
           const { done, value } = await reader.read();
@@ -657,10 +663,15 @@ export function createApiClient({ adapterDebug = false } = {}) {
               try {
                 const parsed = JSON.parse(data);
                 if (eventType === "citations" && onCitations) onCitations(parsed.citations || []);
+                else if (eventType === "web_sources" && onWebSources) onWebSources(parsed.webSources || []);
                 else if (eventType === "token" && onToken) onToken(parsed.token || "");
-                else if (eventType === "tool_call" && onToolCall) onToolCall(parsed.name, parsed.status);
-                else if (eventType === "tool_result" && onToolResult) onToolResult(parsed.name, parsed.result || null, parsed.error || null);
-                else if (eventType === "done" && onDone) onDone();
+                else if (eventType === "tool_call" && onToolCall) {
+                  onToolCall(parsed.name, parsed.status, parsed.noteId || "", parsed);
+                }
+                else if (eventType === "tool_result" && onToolResult) {
+                  onToolResult(parsed.name, parsed.result || null, parsed.error || null, parsed.noteId || "", parsed);
+                }
+                else if (eventType === "done") fireDone();
               } catch {
                 // skip malformed event payloads
               }
@@ -669,7 +680,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
           }
         }
 
-        if (onDone) onDone();
+        fireDone();
       } catch (error) {
         if (onError) onError(error);
       }

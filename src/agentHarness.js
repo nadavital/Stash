@@ -196,6 +196,7 @@ function normalizeToolArgs(name, args) {
     case "update_note": {
       const id = normalizeText(source.id);
       if (!id) throw new Error("update_note requires an id");
+      const parsedBaseRevision = Number(source.baseRevision);
       return {
         id,
         ...(source.title !== undefined ? { title: String(source.title || "").trim() } : {}),
@@ -203,11 +204,15 @@ function normalizeToolArgs(name, args) {
         ...(source.summary !== undefined ? { summary: String(source.summary || "") } : {}),
         ...(source.tags !== undefined ? { tags: normalizeStringArray(source.tags, 40) } : {}),
         ...(source.project !== undefined ? { project: normalizeText(source.project) } : {}),
+        ...(Number.isFinite(parsedBaseRevision) && parsedBaseRevision >= 1
+          ? { baseRevision: Math.floor(parsedBaseRevision) }
+          : {}),
       };
     }
     case "update_note_attachment": {
       const id = normalizeText(source.id);
       if (!id) throw new Error("update_note_attachment requires an id");
+      const parsedBaseRevision = Number(source.baseRevision);
       return {
         id,
         ...(source.content !== undefined ? { content: String(source.content || "") } : {}),
@@ -216,17 +221,24 @@ function normalizeToolArgs(name, args) {
         ...(source.fileName !== undefined ? { fileName: normalizeText(source.fileName) } : {}),
         ...(source.fileMimeType !== undefined ? { fileMimeType: normalizeText(source.fileMimeType) } : {}),
         requeueEnrichment: source.requeueEnrichment !== false,
+        ...(Number.isFinite(parsedBaseRevision) && parsedBaseRevision >= 1
+          ? { baseRevision: Math.floor(parsedBaseRevision) }
+          : {}),
       };
     }
     case "update_note_markdown": {
       const id = normalizeText(source.id);
       if (!id) throw new Error("update_note_markdown requires an id");
+      const parsedBaseRevision = Number(source.baseRevision);
       return {
         id,
         ...(source.content !== undefined ? { content: String(source.content || "") } : {}),
         ...(source.rawContent !== undefined ? { rawContent: String(source.rawContent || "") } : {}),
         ...(source.markdownContent !== undefined ? { markdownContent: String(source.markdownContent || "") } : {}),
         requeueEnrichment: source.requeueEnrichment !== false,
+        ...(Number.isFinite(parsedBaseRevision) && parsedBaseRevision >= 1
+          ? { baseRevision: Math.floor(parsedBaseRevision) }
+          : {}),
       };
     }
     case "add_note_comment": {

@@ -42,7 +42,12 @@ function isFileSource(note = null) {
 
 function actionNoteId(action = null) {
   if (!action || typeof action !== "object") return "";
-  return String(action?.result?.noteId || "").trim();
+  return String(action?.noteId || action?.result?.noteId || "").trim();
+}
+
+function actionPhase(action = null) {
+  if (!action || typeof action !== "object") return "";
+  return String(action?.phase || "").trim().toLowerCase();
 }
 
 function renderItemPageContent() {
@@ -112,6 +117,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       let remoteRefreshInFlight = false;
       let isEditingNote = false;
       let detailController = null;
+      let remoteActivityState = { active: false, text: "" };
 
       function on(target, eventName, handler, options) {
         if (!target) return;
@@ -128,9 +134,24 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         if (!n) return;
         navigate(`#/item/${encodeURIComponent(n.id)}`);
       });
+      function setRemoteActivity(state = null) {
+        remoteActivityState = {
+          active: Boolean(state?.active),
+          text: String(state?.text || "").trim(),
+        };
+        detailController?.setRemoteActivity?.(remoteActivityState);
+      }
       shell.setOnWorkspaceAction((action) => {
         const targetNoteId = actionNoteId(action);
         if (!targetNoteId || !note || targetNoteId !== note.id) return;
+        const phase = actionPhase(action);
+
+        if (phase === "start") {
+          setRemoteActivity({ active: true, text: "Agent is editing..." });
+          return;
+        }
+
+        setRemoteActivity({ active: true, text: "Applying agent changes..." });
 
         if (isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) {
           pendingRemoteRefresh = true;
@@ -138,7 +159,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           return;
         }
 
-        void refreshCurrentNote({ refreshVersions: true });
+        void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: true });
       });
 
       // Toolbar handlers
@@ -287,7 +308,10 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         saveBtn.disabled = true;
         setActionButtonMarkup(saveBtn, { icon: SAVE_ICON, label: "Saving..." });
         try {
-          const result = await apiClient.updateNote(note.id, payload);
+          const result = await apiClient.updateNote(note.id, {
+            ...payload,
+            baseRevision: note?.revision,
+          });
           if (!isMounted) return;
           if (result?.note) {
             note = result.note;
@@ -301,6 +325,11 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           toast("Saved");
           renderNote();
         } catch (err) {
+          if (err?.status === 409) {
+            toast("This item changed elsewhere. Reloading latest version...", "error");
+            await refreshCurrentNote({ refreshVersions: true });
+            return;
+          }
           toast(conciseTechnicalError(err, "Save failed"), "error");
         } finally {
           saveBtn.disabled = false;
@@ -435,7 +464,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         setActionButtonMarkup(activityBtn, { icon: ACTIVITY_ICON, label: activityLabel });
       }
 
-      async function refreshCurrentNote({ refreshVersions = false } = {}) {
+      async function refreshCurrentNote({ refreshVersions = false, clearRemoteActivity = false } = {}) {
         if (!note || remoteRefreshInFlight) return;
         remoteRefreshInFlight = true;
         try {
@@ -457,6 +486,9 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           toast(conciseTechnicalError(err, "Failed to refresh item"), "error");
         } finally {
           remoteRefreshInFlight = false;
+          if (clearRemoteActivity) {
+            setRemoteActivity({ active: false, text: "" });
+          }
         }
       }
 
@@ -468,18 +500,20 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         detailController = renderItemDetail(els.itemDetail, note, {
           relatedNotes,
           isEditing: isEditingNote,
+          remoteActivity: remoteActivityState,
           onNavigate(id) {
             navigate(`#/item/${encodeURIComponent(id)}`);
           },
           async onEdit(payload) {
-            try {
-              if (payload?.mode === "file-live") {
+            if (payload?.mode === "file-live") {
+              try {
                 const result = await apiClient.updateNoteExtracted(note.id, {
                   title: payload.title,
                   content: payload.content,
                   rawContent: payload.rawContent,
                   markdownContent: payload.markdownContent,
                   requeueEnrichment: payload.requeueEnrichment === true,
+                  baseRevision: note?.revision,
                 });
                 if (!isMounted) return result;
                 if (result?.note) {
@@ -487,10 +521,31 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
                   shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
                 }
                 return result;
+              } catch (err) {
+                if (err?.status === 409) {
+                  let latestNote = err?.payload?.conflict?.currentNote || null;
+                  if (!latestNote) {
+                    try {
+                      const latestResult = await apiClient.fetchNote(note.id);
+                      latestNote = latestResult?.note || null;
+                    } catch {
+                      latestNote = null;
+                    }
+                  }
+                  if (latestNote) {
+                    note = latestNote;
+                    shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+                  }
+                  return {
+                    conflict: true,
+                    note: latestNote,
+                  };
+                }
+                toast(conciseTechnicalError(err, "Save failed"), "error");
+                throw err;
               }
-            } catch (err) {
-              toast(conciseTechnicalError(err, "Save failed"), "error");
             }
+            return null;
           },
           onFileDraftStateChange(state) {
             fileDraftState = {
@@ -499,7 +554,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
             };
             if (pendingRemoteRefresh && !fileDraftState.dirty && !fileDraftState.saving) {
               pendingRemoteRefresh = false;
-              void refreshCurrentNote({ refreshVersions: true });
+              void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: true });
             }
           },
         });
@@ -588,9 +643,11 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
             if (actorUserId && actorUserId === currentUserId) return;
             if (isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) {
               pendingRemoteRefresh = true;
+              setRemoteActivity({ active: true, text: "Remote update queued..." });
               return;
             }
-            void refreshCurrentNote({ refreshVersions: true });
+            setRemoteActivity({ active: true, text: "Applying remote update..." });
+            void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: true });
             return;
           }
         }

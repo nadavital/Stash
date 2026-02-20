@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at TIMESTAMPTZ NOT NULL,
   embedding_json JSONB,
   metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-  status TEXT NOT NULL DEFAULT 'ready'
+  status TEXT NOT NULL DEFAULT 'ready',
+  revision INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);

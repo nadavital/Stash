@@ -14,9 +14,13 @@ import { enrichmentQueue } from "./queue.js";
 import { logger } from "./logger.js";
 import { publishActivity } from "./activityBus.js";
 import {
+  buildWebSearchTool,
   convertUploadToMarkdown,
   createEmbedding,
   createResponse,
+  extractDomainFromUrl,
+  extractDomainsFromText,
+  extractOutputUrlCitations,
   hasOpenAI,
   pseudoEmbedding,
   cosineSimilarity,
@@ -82,6 +86,15 @@ const CONSOLIDATED_SECTIONS = [
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeBaseRevision(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error("baseRevision must be a positive integer");
+  }
+  return Math.floor(parsed);
 }
 
 function authenticationError(message = "Unauthorized") {
@@ -1929,10 +1942,11 @@ export async function createMemory({
   return note;
 }
 
-export async function updateMemory({ id, content, summary, title, tags, project, actor = null } = {}) {
+export async function updateMemory({ id, content, summary, title, tags, project, baseRevision = null, actor = null } = {}) {
   const actorContext = resolveActor(actor);
   const normalizedId = String(id || "").trim();
   if (!normalizedId) throw new Error("Missing id");
+  const normalizedBaseRevision = normalizeBaseRevision(baseRevision);
 
   const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
@@ -1985,7 +1999,11 @@ export async function updateMemory({ id, content, summary, title, tags, project,
     project: project !== undefined ? resolvedProject : existingProject,
     metadata: nextMetadata,
     workspaceId: actorContext.workspaceId,
+    baseRevision: normalizedBaseRevision,
   });
+  if (!updatedNote) {
+    throw new Error(`Memory not found: ${normalizedId}`);
+  }
 
   // Re-enrich if content changed
   if (contentChanged) {
@@ -2027,12 +2045,14 @@ export async function updateMemoryAttachment({
   imageDataUrl = null,
   fileName = "",
   fileMimeType = "",
+  baseRevision = null,
   actor = null,
   requeueEnrichment = true,
 } = {}) {
   const actorContext = resolveActor(actor);
   const normalizedId = String(id || "").trim();
   if (!normalizedId) throw new Error("Missing id");
+  const normalizedBaseRevision = normalizeBaseRevision(baseRevision);
 
   const existing = await noteRepo.getNoteById(normalizedId, actorContext.workspaceId);
   if (!existing) throw new Error(`Memory not found: ${normalizedId}`);
@@ -2104,7 +2124,11 @@ export async function updateMemoryAttachment({
     },
     updatedAt: nowIso(),
     workspaceId: actorContext.workspaceId,
+    baseRevision: normalizedBaseRevision,
   });
+  if (!updatedNote) {
+    throw new Error(`Memory not found: ${normalizedId}`);
+  }
 
   await cleanupReplacedImageArtifact(existing.imagePath, updatedNote.imagePath);
 
@@ -2157,12 +2181,14 @@ export async function updateMemoryExtractedContent({
   content,
   rawContent,
   markdownContent,
+  baseRevision = null,
   actor = null,
   requeueEnrichment = true,
 } = {}) {
   const actorContext = resolveActor(actor);
   const normalizedId = String(id || "").trim();
   if (!normalizedId) throw new Error("Missing id");
+  const normalizedBaseRevision = normalizeBaseRevision(baseRevision);
 
   const hasTitle = title !== undefined;
   const hasContent = content !== undefined;
@@ -2205,26 +2231,14 @@ export async function updateMemoryExtractedContent({
     });
   }
 
-  let noteAfterContent = existing;
-  if (contentChanged) {
-    noteAfterContent = await noteRepo.updateNote({
-      id: normalizedId,
-      content: normalizedContent,
-      summary: existing.summary,
-      tags: existing.tags,
-      project: existing.project,
-      workspaceId: actorContext.workspaceId,
-    });
-  }
-
-  const noteAfterExtract = await noteRepo.updateEnrichment({
+  const noteAfterExtract = await noteRepo.updateExtractedContent({
     id: normalizedId,
-    summary: noteAfterContent.summary || "",
-    tags: Array.isArray(noteAfterContent.tags) ? noteAfterContent.tags : [],
-    project: noteAfterContent.project || "General",
-    embedding: noteAfterContent.embedding || null,
+    content: normalizedContent,
+    summary: existing.summary || "",
+    tags: Array.isArray(existing.tags) ? existing.tags : [],
+    project: existing.project || "General",
     metadata: {
-      ...(noteAfterContent.metadata || {}),
+      ...(existing.metadata || {}),
       ...(hasTitle ? { title: normalizedTitle || null } : {}),
       extractedContentEditedAt: nowIso(),
       extractedContentEditedBy: actorContext.userId,
@@ -2233,7 +2247,11 @@ export async function updateMemoryExtractedContent({
     markdownContent: hasMarkdownContent ? normalizedMarkdownContent : undefined,
     updatedAt: nowIso(),
     workspaceId: actorContext.workspaceId,
+    baseRevision: normalizedBaseRevision,
   });
+  if (!noteAfterExtract) {
+    throw new Error(`Memory not found: ${normalizedId}`);
+  }
 
   const changedKeys = [];
   if (titleChanged) changedKeys.push("title");
@@ -3345,6 +3363,9 @@ export async function askMemories({
     throw new Error("Missing question");
   }
 
+  const questionDomains = extractDomainsFromText(normalizedQuestion, 8);
+  let contextNoteSourceUrl = "";
+
   let citations = await searchMemories({
     query: normalizedQuestion,
     project,
@@ -3363,6 +3384,7 @@ export async function askMemories({
       const contextNote = await noteRepo.getNoteById(normalizedContextId, actorContext.workspaceId);
       const accessContext = await buildFolderAccessContext(actorContext);
       if (contextNote && canReadNote(contextNote, actorContext, accessContext)) {
+        contextNoteSourceUrl = String(contextNote.sourceUrl || "").trim();
         const contextCitation = materializeCitation(contextNote, 1.0, 0);
         // Deduplicate if note already in results
         citations = citations.filter((c) => c.note?.id !== normalizedContextId);
@@ -3375,7 +3397,26 @@ export async function askMemories({
     }
   }
 
-  if (citations.length === 0) {
+  // Restrict web search domains only for explicit URL/item grounding.
+  const domainHints = [...new Set([extractDomainFromUrl(contextNoteSourceUrl), ...questionDomains].filter(Boolean))]
+    .slice(0, 100);
+  const webSearchEnabled = hasOpenAI() && config.openaiWebSearchEnabled;
+  const webSearchTool = webSearchEnabled
+    ? buildWebSearchTool({
+        allowedDomains: domainHints,
+        type: config.openaiWebSearchToolType,
+        searchContextSize: config.openaiWebSearchContextSize,
+        externalWebAccess: config.openaiWebSearchExternalAccess,
+        userLocation: {
+          country: config.openaiWebSearchUserCountry,
+          city: config.openaiWebSearchUserCity,
+          region: config.openaiWebSearchUserRegion,
+          timezone: config.openaiWebSearchUserTimezone,
+        },
+      })
+    : null;
+
+  if (citations.length === 0 && !webSearchTool) {
     return {
       answer: "No relevant memory found yet. Save a few notes first.",
       citations: [],
@@ -3397,11 +3438,17 @@ export async function askMemories({
 
   try {
     const context = buildCitationBlock(citations);
-    let askInstructions = "Answer ONLY using the provided memory snippets. Be concise. If uncertain, say what is missing. Do not use citation codes like [N1] in the final answer; refer to items naturally by title or folder.";
+    let askInstructions = citations.length > 0
+      ? "Answer using the provided memory snippets as the primary source of truth. If needed for up-to-date details, use web search and include source links. Be concise."
+      : "No saved memory snippets are available for this query. Use web search to answer accurately and include source links. Be concise.";
+    askInstructions += " Do not use citation codes like [N1] in the final answer; refer to items naturally by title or folder.";
     if (project) {
       askInstructions = `The user is working in project "${project}". Consider this context when answering.\n\n${askInstructions}`;
     }
-    const { text } = await createResponse({
+    const inputText = citations.length > 0
+      ? `Question: ${normalizedQuestion}\n\nMemory snippets:\n${context}`
+      : `Question: ${normalizedQuestion}`;
+    const { text, raw } = await createResponse({
       instructions: askInstructions,
       input: [
         {
@@ -3409,24 +3456,30 @@ export async function askMemories({
           content: [
             {
               type: "input_text",
-              text: `Question: ${normalizedQuestion}\n\nMemory snippets:\n${context}`,
+              text: inputText,
             },
           ],
         },
       ],
+      tools: webSearchTool ? [webSearchTool] : undefined,
+      include: webSearchTool ? ["web_search_call.action.sources"] : undefined,
       temperature: 0.2,
     });
+    const webSources = extractOutputUrlCitations(raw, 16);
 
     return {
       answer: text || "I could not generate an answer.",
       citations,
+      webSources,
       mode: "openai",
     };
   } catch {
-    const answer = [
-      "I could not call the model, but these notes look relevant:",
-      ...citations.slice(0, 4).map((entry) => `- ${entry.note.summary || heuristicSummary(entry.note.content, 120)}`),
-    ].join("\n");
+    const answer = citations.length > 0
+      ? [
+          "I could not call the model, but these notes look relevant:",
+          ...citations.slice(0, 4).map((entry) => `- ${entry.note.summary || heuristicSummary(entry.note.content, 120)}`),
+        ].join("\n")
+      : "I could not call the model. Try again in a moment.";
     return {
       answer,
       citations,

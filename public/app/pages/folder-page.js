@@ -360,7 +360,9 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         markAccessed(note.id);
         navigate(`#/item/${note.id}`);
       });
-      shell.setOnWorkspaceAction(() => {
+      shell.setOnWorkspaceAction((action) => {
+        const phase = String(action?.phase || "").trim().toLowerCase();
+        if (phase && phase !== "done") return;
         refreshNotes();
       });
 

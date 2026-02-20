@@ -167,6 +167,7 @@ export function normalizeNote(raw, index = 0) {
     rawContent,
     markdownContent,
     metadata,
+    revision: Math.max(1, Math.floor(toFiniteNumber(source.revision ?? source.rev ?? source.versionRevision, 1))),
     status: normalizeNoteStatus(source.status || source.processingStatus || source.processing_status),
     createdAt: normalizeDate(source.createdAt ?? source.created_at ?? source.timestamp ?? source.time),
     updatedAt: normalizeDate(source.updatedAt ?? source.updated_at ?? source.modifiedAt ?? source.modified_at),
@@ -272,10 +273,24 @@ export function adaptAnswerResponse(payload, kind = "chat") {
 
   const normalizedProvided = providedLabels.map((label) => normalizeCitationLabel(label)).filter(Boolean);
   const inferred = collectCitationLabels(text, citations.length);
+  let rawWebSources = pickPayloadArray(payload, ["webSources", "web_sources"]);
+  if (!rawWebSources.length) {
+    rawWebSources = pickPayloadArray(source.data, ["webSources", "web_sources"]);
+  }
+  const webSources = rawWebSources
+    .map((entry) => {
+      const value = isRecord(entry) ? entry : {};
+      const url = firstString([value.url, value.sourceUrl, value.source_url], "");
+      const title = firstString([value.title, value.name], "");
+      return url ? { url, title } : null;
+    })
+    .filter(Boolean)
+    .slice(0, 16);
 
   return {
     text,
     citations,
+    webSources,
     mode: firstString([source.mode, source.provider, source.strategy], "unknown"),
     usedCitationLabels: normalizedProvided.length ? normalizedProvided : inferred,
   };

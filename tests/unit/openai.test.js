@@ -1,12 +1,16 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildWebSearchTool,
   heuristicSummary,
   heuristicTags,
   pseudoEmbedding,
   cosineSimilarity,
   normalizeVector,
+  extractDomainFromUrl,
+  extractDomainsFromText,
   extractOutputText,
+  extractOutputUrlCitations,
 } from "../../src/openai.js";
 
 describe("heuristicSummary", () => {
@@ -149,5 +153,51 @@ describe("extractOutputText", () => {
       output: [{ content: [{ text: "fallback" }] }],
     };
     assert.equal(extractOutputText(payload), "preferred");
+  });
+});
+
+describe("web search helpers", () => {
+  it("extracts hostnames from URLs and text", () => {
+    assert.equal(extractDomainFromUrl("https://www.openai.com/docs"), "www.openai.com");
+    const domains = extractDomainsFromText("Compare https://openai.com and https://example.org/path", 5);
+    assert.deepEqual(domains, ["openai.com", "example.org"]);
+  });
+
+  it("builds web_search tool with domain filters and location", () => {
+    const tool = buildWebSearchTool({
+      allowedDomains: ["openai.com", "https://example.org/path"],
+      userLocation: { country: "US", city: "San Francisco" },
+      externalWebAccess: false,
+      type: "web_search",
+    });
+    assert.equal(tool.type, "web_search");
+    assert.deepEqual(tool.filters.allowed_domains, ["openai.com", "example.org"]);
+    assert.equal(tool.user_location.country, "US");
+    assert.equal(tool.user_location.city, "San Francisco");
+    assert.equal(tool.external_web_access, false);
+  });
+
+  it("extracts URL citations from response output annotations", () => {
+    const citations = extractOutputUrlCitations({
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: "Example",
+              annotations: [
+                { type: "url_citation", url: "https://example.com", title: "Example" },
+                { type: "url_citation", url: "https://openai.com", title: "OpenAI" },
+              ],
+            },
+          ],
+        },
+      ],
+    }, 10);
+    assert.deepEqual(citations, [
+      { url: "https://example.com", title: "Example" },
+      { url: "https://openai.com", title: "OpenAI" },
+    ]);
   });
 });

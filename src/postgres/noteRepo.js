@@ -40,6 +40,32 @@ function safeJsonParse(value, fallback) {
   return value;
 }
 
+function normalizeBaseRevision(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new Error("baseRevision must be a positive integer");
+  }
+  return Math.floor(parsed);
+}
+
+function createRevisionConflictError({
+  id,
+  baseRevision,
+  currentNote = null,
+}) {
+  const error = new Error("Revision conflict: item changed since your last read");
+  error.status = 409;
+  error.code = "REVISION_CONFLICT";
+  error.conflict = {
+    id: String(id || "").trim(),
+    baseRevision: normalizeBaseRevision(baseRevision),
+    currentRevision: Number(currentNote?.revision || 0) || null,
+    currentNote,
+  };
+  return error;
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
@@ -64,6 +90,7 @@ function mapRow(row) {
     updatedAt: toIso(row.updated_at),
     embedding: safeJsonParse(row.embedding_json, null),
     metadata: safeJsonParse(row.metadata_json, {}),
+    revision: Number(row.revision || 1),
   };
 }
 
@@ -90,11 +117,11 @@ class PostgresNoteRepository {
         INSERT INTO notes (
           id, workspace_id, owner_user_id, created_by_user_id, content, source_type, source_url, image_path,
           file_name, file_mime, file_size, raw_content, markdown_content, summary, tags_json, project,
-          created_at, updated_at, embedding_json, metadata_json, status
+          created_at, updated_at, embedding_json, metadata_json, status, revision
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15::jsonb, $16,
-          $17::timestamptz, $18::timestamptz, $19::jsonb, $20::jsonb, $21
+          $17::timestamptz, $18::timestamptz, $19::jsonb, $20::jsonb, $21, $22
         )
       `,
       [
@@ -119,6 +146,7 @@ class PostgresNoteRepository {
         note.embedding ? JSON.stringify(note.embedding) : null,
         JSON.stringify(note.metadata || {}),
         note.status || "ready",
+        Number.isFinite(Number(note.revision)) ? Math.max(1, Math.floor(Number(note.revision))) : 1,
       ]
     );
     return this.getNoteById(note.id, workspaceId);
@@ -368,9 +396,20 @@ class PostgresNoteRepository {
     return Number(result.rowCount || 0);
   }
 
-  async updateNote({ id, content, summary, tags, project, metadata, workspaceId = config.defaultWorkspaceId }) {
+  async updateNote({
+    id,
+    content,
+    summary,
+    tags,
+    project,
+    metadata,
+    workspaceId = config.defaultWorkspaceId,
+    baseRevision = null,
+  }) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
-    await this._query(
+    const normalizedId = String(id || "").trim();
+    const expectedRevision = normalizeBaseRevision(baseRevision);
+    const result = await this._query(
       `
         UPDATE notes
         SET
@@ -379,8 +418,10 @@ class PostgresNoteRepository {
           tags_json = $3::jsonb,
           project = $4,
           metadata_json = COALESCE($5::jsonb, metadata_json),
-          updated_at = $6::timestamptz
-        WHERE id = $7 AND workspace_id = $8
+          updated_at = $6::timestamptz,
+          revision = revision + 1
+        WHERE id = $7 AND workspace_id = $8 AND ($9::int IS NULL OR revision = $9)
+        RETURNING *
       `,
       [
         String(content || ""),
@@ -389,11 +430,25 @@ class PostgresNoteRepository {
         project || null,
         metadata === undefined ? null : JSON.stringify(metadata || {}),
         nowIso(),
-        String(id || "").trim(),
+        normalizedId,
         normalizedWorkspaceId,
+        expectedRevision,
       ]
     );
-    return this.getNoteById(id, normalizedWorkspaceId);
+    if (result.rows.length === 0) {
+      if (expectedRevision !== null) {
+        const currentNote = await this.getNoteById(normalizedId, normalizedWorkspaceId);
+        if (currentNote) {
+          throw createRevisionConflictError({
+            id: normalizedId,
+            baseRevision: expectedRevision,
+            currentNote,
+          });
+        }
+      }
+      return null;
+    }
+    return mapRow(result.rows[0]);
   }
 
   async updateAttachment({
@@ -410,9 +465,12 @@ class PostgresNoteRepository {
     metadata,
     updatedAt,
     workspaceId = config.defaultWorkspaceId,
+    baseRevision = null,
   }) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
-    await this._query(
+    const normalizedId = String(id || "").trim();
+    const expectedRevision = normalizeBaseRevision(baseRevision);
+    const result = await this._query(
       `
         UPDATE notes
         SET
@@ -426,8 +484,10 @@ class PostgresNoteRepository {
           raw_content = $8,
           markdown_content = $9,
           metadata_json = $10::jsonb,
-          updated_at = $11::timestamptz
-        WHERE id = $12 AND workspace_id = $13
+          updated_at = $11::timestamptz,
+          revision = revision + 1
+        WHERE id = $12 AND workspace_id = $13 AND ($14::int IS NULL OR revision = $14)
+        RETURNING *
       `,
       [
         String(content || ""),
@@ -441,11 +501,91 @@ class PostgresNoteRepository {
         markdownContent === undefined ? null : markdownContent,
         JSON.stringify(metadata || {}),
         updatedAt || nowIso(),
-        String(id || "").trim(),
+        normalizedId,
         normalizedWorkspaceId,
+        expectedRevision,
       ]
     );
-    return this.getNoteById(id, normalizedWorkspaceId);
+    if (result.rows.length === 0) {
+      if (expectedRevision !== null) {
+        const currentNote = await this.getNoteById(normalizedId, normalizedWorkspaceId);
+        if (currentNote) {
+          throw createRevisionConflictError({
+            id: normalizedId,
+            baseRevision: expectedRevision,
+            currentNote,
+          });
+        }
+      }
+      return null;
+    }
+    return mapRow(result.rows[0]);
+  }
+
+  async updateExtractedContent({
+    id,
+    content,
+    summary,
+    tags,
+    project,
+    metadata,
+    rawContent,
+    markdownContent,
+    updatedAt,
+    workspaceId = config.defaultWorkspaceId,
+    baseRevision = null,
+  }) {
+    const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
+    const normalizedId = String(id || "").trim();
+    const expectedRevision = normalizeBaseRevision(baseRevision);
+    const hasRawContent = rawContent !== undefined;
+    const hasMarkdownContent = markdownContent !== undefined;
+    const result = await this._query(
+      `
+        UPDATE notes
+        SET
+          content = $1,
+          summary = $2,
+          tags_json = $3::jsonb,
+          project = $4,
+          metadata_json = $5::jsonb,
+          raw_content = CASE WHEN $6::boolean THEN $7::text ELSE raw_content END,
+          markdown_content = CASE WHEN $8::boolean THEN $9::text ELSE markdown_content END,
+          updated_at = $10::timestamptz,
+          revision = revision + 1
+        WHERE id = $11 AND workspace_id = $12 AND ($13::int IS NULL OR revision = $13)
+        RETURNING *
+      `,
+      [
+        String(content || ""),
+        String(summary || ""),
+        JSON.stringify(tags || []),
+        project || null,
+        JSON.stringify(metadata || {}),
+        hasRawContent,
+        hasRawContent ? (rawContent === null ? null : String(rawContent)) : null,
+        hasMarkdownContent,
+        hasMarkdownContent ? (markdownContent === null ? null : String(markdownContent)) : null,
+        updatedAt || nowIso(),
+        normalizedId,
+        normalizedWorkspaceId,
+        expectedRevision,
+      ]
+    );
+    if (result.rows.length === 0) {
+      if (expectedRevision !== null) {
+        const currentNote = await this.getNoteById(normalizedId, normalizedWorkspaceId);
+        if (currentNote) {
+          throw createRevisionConflictError({
+            id: normalizedId,
+            baseRevision: expectedRevision,
+            currentNote,
+          });
+        }
+      }
+      return null;
+    }
+    return mapRow(result.rows[0]);
   }
 
   async listTags(workspaceId = config.defaultWorkspaceId) {

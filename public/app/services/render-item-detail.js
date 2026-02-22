@@ -1,4 +1,5 @@
 import { buildNoteTitle } from "./mappers.js";
+import { mergeTextWithBase } from "./revision-merge.js";
 import {
   iconTypeFor,
   getNoteProcessingState,
@@ -76,7 +77,7 @@ export function buildItemActivityEntries(note, versions = []) {
  * @param {(id: string) => void} opts.onNavigate – navigate to another item
  * @param {(payload) => Promise}      opts.onEdit
  * @param {(state: {dirty: boolean, saving: boolean}) => void} [opts.onFileDraftStateChange]
- * @param {{active?: boolean, text?: string}} [opts.remoteActivity]
+ * @param {{active?: boolean, text?: string, entries?: Array<{text?: string, status?: string}>}} [opts.remoteActivity]
  */
 export function renderItemDetail(container, note, {
   relatedNotes = [],
@@ -256,6 +257,9 @@ export function renderItemDetail(container, note, {
     liveSignals.append(liveRemote, liveStatus);
     liveHeader.append(liveTitle, liveSignals);
 
+    const liveActivityList = document.createElement("ul");
+    liveActivityList.className = "item-file-live-activity hidden";
+
     titleEl.classList.add("item-title--editable");
     titleEl.contentEditable = "true";
     titleEl.spellcheck = true;
@@ -306,15 +310,50 @@ export function renderItemDetail(container, note, {
     function setRemoteActivityState(state = null) {
       const active = Boolean(state?.active);
       const label = String(state?.text || "").trim();
+      const entries = Array.isArray(state?.entries)
+        ? state.entries
+            .map((entry) => ({
+              text: String(entry?.text || "").trim(),
+              status: String(entry?.status || "").trim().toLowerCase(),
+            }))
+            .filter((entry) => entry.text)
+            .slice(0, 6)
+        : [];
       if (!active || !label) {
         liveRemote.classList.add("hidden");
         liveRemote.classList.remove("is-active");
         liveRemote.textContent = "";
+      } else {
+        liveRemote.textContent = label;
+        liveRemote.classList.remove("hidden");
+        liveRemote.classList.add("is-active");
+      }
+      liveActivityList.innerHTML = "";
+      if (!entries.length) {
+        liveActivityList.classList.add("hidden");
         return;
       }
-      liveRemote.textContent = label;
-      liveRemote.classList.remove("hidden");
-      liveRemote.classList.add("is-active");
+
+      liveActivityList.classList.remove("hidden");
+      entries.forEach((entry) => {
+        const row = document.createElement("li");
+        row.className = "item-file-live-activity-entry";
+
+        const textEl = document.createElement("span");
+        textEl.className = "item-file-live-activity-text";
+        textEl.textContent = entry.text;
+
+        const statusEl = document.createElement("span");
+        statusEl.className = "item-file-live-activity-status";
+        const normalizedStatus = ["running", "success", "error", "queued"].includes(entry.status)
+          ? entry.status
+          : "success";
+        statusEl.dataset.status = normalizedStatus;
+        statusEl.textContent = normalizedStatus;
+
+        row.append(textEl, statusEl);
+        liveActivityList.appendChild(row);
+      });
     }
 
     async function flushDraft(force = false) {
@@ -333,52 +372,88 @@ export function renderItemDetail(container, note, {
       inflight = true;
       updateLiveStatus("Saving...", "saving");
       try {
-        const userChangedDraft = draft !== baselineDraft;
-        const userChangedTitle = titleChanged;
+        let workingDraft = draft;
+        let workingTitle = nextTitle;
+        let workingBaseDraft = baselineDraft;
+        let workingBaseTitle = baselineTitle;
         let finalized = false;
+        let remoteOnlyRebase = false;
+        let sawConflict = false;
 
         for (let attempt = 0; attempt < 2; attempt += 1) {
+          const includeTitle = workingTitle !== workingBaseTitle;
           const result = await onEdit({
             mode: "file-live",
-            ...(titleChanged ? { title: nextTitle } : {}),
-            content: draft,
-            rawContent: draft,
-            markdownContent: draft,
+            ...(includeTitle ? { title: workingTitle } : {}),
+            content: workingDraft,
+            rawContent: workingDraft,
+            markdownContent: workingDraft,
             requeueEnrichment: false,
           });
 
           if (result?.conflict) {
             const latestNote = result.note || null;
             if (!latestNote || attempt > 0) {
+              sawConflict = true;
               break;
             }
-            const latestDraft = extractNoteDraftValue(latestNote, baselineDraft);
-            const latestTitle = extractNoteTitle(latestNote, baselineTitle);
-            if (!userChangedDraft) {
-              fileEditor.setValue(latestDraft);
-            }
-            if (!userChangedTitle && latestTitle) {
-              titleEl.textContent = latestTitle;
-            }
+            const latestDraft = extractNoteDraftValue(latestNote, workingBaseDraft);
+            const latestTitle = extractNoteTitle(latestNote, workingBaseTitle) || workingBaseTitle;
+            const mergedDraft = mergeTextWithBase(workingBaseDraft, workingDraft, latestDraft);
+            const mergedTitle = mergeTextWithBase(workingBaseTitle, workingTitle, latestTitle);
+
             baselineDraft = latestDraft;
-            baselineTitle = latestTitle || baselineTitle;
-            updateLiveStatus("Remote edits detected. Rebasing...", "saving");
+            baselineTitle = latestTitle;
+            workingBaseDraft = latestDraft;
+            workingBaseTitle = latestTitle;
+
+            if (mergedDraft.status === "conflict" || mergedTitle.status === "conflict") {
+              sawConflict = true;
+              break;
+            }
+
+            workingDraft = mergedDraft.text;
+            workingTitle = mergedTitle.text;
+
+            if (workingDraft !== fileEditor.getValue()) {
+              fileEditor.setValue(workingDraft);
+            }
+            if (workingTitle !== readTitleText()) {
+              titleEl.textContent = workingTitle;
+            }
+
+            const hasLocalDelta = workingDraft !== latestDraft || workingTitle !== latestTitle;
+            if (!hasLocalDelta) {
+              finalized = true;
+              remoteOnlyRebase = true;
+              break;
+            }
+
+            updateLiveStatus("Remote edits detected. Auto-merging...", "saving");
             continue;
           }
 
           if (result?.note) {
-            baselineDraft = extractNoteDraftValue(result.note, draft);
-            baselineTitle = extractNoteTitle(result.note, nextTitle) || nextTitle;
+            baselineDraft = extractNoteDraftValue(result.note, workingDraft);
+            baselineTitle = extractNoteTitle(result.note, workingTitle) || workingTitle;
           } else {
-            baselineDraft = draft;
-            baselineTitle = nextTitle;
+            baselineDraft = workingDraft;
+            baselineTitle = workingTitle;
+          }
+          if (baselineDraft !== fileEditor.getValue()) {
+            fileEditor.setValue(baselineDraft);
+          }
+          if (baselineTitle !== readTitleText()) {
+            titleEl.textContent = baselineTitle;
           }
           finalized = true;
           break;
         }
 
         if (finalized) {
-          updateLiveStatus("All changes saved");
+          updateLiveStatus(remoteOnlyRebase ? "Remote edits applied" : "All changes saved");
+        } else if (sawConflict) {
+          updateLiveStatus("Remote edits conflict with your draft. Keep typing to resolve.", "error");
         } else {
           updateLiveStatus("Revision conflict. Keep typing to retry.", "error");
         }
@@ -441,7 +516,7 @@ export function renderItemDetail(container, note, {
     };
     setRemoteActivityState(remoteActivity);
     reportDraftState();
-    liveSection.append(liveHeader, fileEditor.element);
+    liveSection.append(liveHeader, liveActivityList, fileEditor.element);
     wrap.appendChild(liveSection);
   } else if (displayContent) {
     contentSection = document.createElement("div");

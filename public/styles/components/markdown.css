@@ -92,6 +92,24 @@
   margin-bottom: 0;
 }
 
+.markdown-body li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+
+.markdown-body li > input[type="checkbox"] {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  margin: 0 0.45em 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  display: inline-block;
+  vertical-align: middle;
+  accent-color: var(--accent);
+}
+
 .markdown-body blockquote {
   margin: 0.75em 0;
   padding: var(--space-2) var(--space-4);

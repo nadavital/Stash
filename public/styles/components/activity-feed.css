@@ -22,17 +22,6 @@
   font-weight: var(--weight-semibold);
 }
 
-.activity-feed-refresh-btn {
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--surface-strong);
-  color: var(--ink-secondary);
-  min-height: 28px;
-  padding: 0 var(--space-3);
-  font-size: var(--font-size-caption);
-  cursor: pointer;
-}
-
 .activity-feed-list {
   list-style: none;
   margin: 0;

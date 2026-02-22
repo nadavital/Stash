@@ -30,6 +30,19 @@ function normalizeStringArray(rawValue, max = 50) {
   return output;
 }
 
+function normalizeSingleSentence(value, maxLen = 140) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  const firstQuestion = text.match(/[^?]{1,300}\?/);
+  if (firstQuestion?.[0]) {
+    return firstQuestion[0].trim().slice(0, maxLen);
+  }
+  const firstSentence = text.split(/[.!](?:\s|$)/)[0] || text;
+  return firstSentence.trim().slice(0, maxLen);
+}
+
 const MEMORY_SCOPES = new Set(["all", "workspace", "user", "project", "item"]);
 
 function normalizeMemoryScope(value) {
@@ -183,6 +196,25 @@ function normalizeToolArgs(name, args) {
       const id = normalizeText(source.id);
       if (!id) throw new Error("retry_note_enrichment requires an id");
       return { id };
+    }
+    case "ask_user_question": {
+      const question = normalizeSingleSentence(source.question, 140);
+      if (!question) throw new Error("ask_user_question requires a question");
+      const rawOptions = normalizeStringArray(source.options, 4);
+      const options = [];
+      const seen = new Set();
+      rawOptions.forEach((option) => {
+        const key = option.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        options.push(option);
+      });
+      return {
+        question,
+        options,
+        allowFreeform: source.allowFreeform !== false,
+        context: normalizeSingleSentence(source.context, 120),
+      };
     }
     case "get_note_raw_content": {
       const id = normalizeText(source.id);

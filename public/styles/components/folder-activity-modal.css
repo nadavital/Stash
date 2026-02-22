@@ -51,22 +51,6 @@
   gap: var(--space-2);
 }
 
-.folder-activity-modal-refresh {
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--surface-strong);
-  color: var(--ink-secondary);
-  min-height: 28px;
-  padding: 0 var(--space-3);
-  font-size: var(--font-size-caption);
-  cursor: pointer;
-}
-
-.folder-activity-modal-refresh:hover {
-  background: var(--hover-bg);
-  color: var(--accent);
-}
-
 .folder-activity-modal-close {
   border: 0;
   border-radius: var(--radius-pill);

@@ -370,11 +370,6 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         onClose() {
           closeFolderActivityModal(els);
         },
-        onRefresh() {
-          refreshActivityFeed().catch(() => {
-            toast("Failed to refresh activity", "error");
-          });
-        },
       });
       disposers.push(cleanupFolderActivityModal);
       // Search toggle
@@ -622,6 +617,21 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
           renderView();
         } catch (error) {
           if (!isMounted) return;
+          const status = Number(error?.status || 0);
+          if (status === 401) {
+            toast("Session expired. Please sign in again.", "error");
+            auth?.onSignOut?.();
+            return;
+          }
+          if (status === 404) {
+            toast("Folder not found", "error");
+            navigate("#/");
+            return;
+          }
+          if (status >= 400 && status < 500) {
+            toast(conciseTechnicalError(error, "Unable to refresh folder"), "error");
+            return;
+          }
           const message = conciseTechnicalError(error, "Notes endpoint unavailable");
           fallbackState.refresh();
           apiClient.adapterLog("folder_notes_fallback", message);

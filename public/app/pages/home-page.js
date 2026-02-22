@@ -111,7 +111,6 @@ function queryPageElements(mountNode) {
     ...inlineSearchEls,
     ...sortFilterEls,
     recentNotesList: mountNode.querySelector("#recent-notes-list"),
-    refreshBtn: mountNode.querySelector("#refresh-btn"),
     foldersList: mountNode.querySelector("#home-folders-list"),
     foldersEmpty: mountNode.querySelector("#home-folders-empty"),
     foldersError: mountNode.querySelector("#home-folders-error"),
@@ -369,6 +368,16 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
           renderView();
         } catch (error) {
           if (!isMounted) return;
+          const status = Number(error?.status || 0);
+          if (status === 401) {
+            toast("Session expired. Please sign in again.", "error");
+            auth?.onSignOut?.();
+            return;
+          }
+          if (status >= 400 && status < 500) {
+            toast(conciseTechnicalError(error, "Unable to refresh notes"), "error");
+            return;
+          }
           const message = conciseTechnicalError(error, "Notes endpoint unavailable");
           fallbackState.refresh({ hint: true });
           apiClient.adapterLog("notes_fallback", message);
@@ -513,10 +522,6 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
         logLabel: "save_fallback",
       });
       disposers.push(cleanupSaveModal);
-
-      on(els.refreshBtn, "click", async () => {
-        await refreshNotes();
-      });
 
       on(els.folderKindRow, "click", (event) => {
         const target = event.target;

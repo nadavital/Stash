@@ -306,7 +306,7 @@ export function renderRecentInlineStripHTML({ title = "Recent" } = {})
 export function renderHomeRecentList()
 ```
 
-- `renderRecentInlineStripHTML(...)` renders the horizontal recents row with refresh control.
+- `renderRecentInlineStripHTML(...)` renders the horizontal recents row.
 - `renderHomeRecentList()` renders the full-height right sidebar chat container; the unified `Save/Ask` assistant shell is mounted under it by page controllers.
 
 ---
@@ -339,7 +339,7 @@ export function queryFolderActivityModalEls(root)
 export function renderFolderActivityModalItems(els, items)
 export function openFolderActivityModal(els, { title, items })
 export function closeFolderActivityModal(els)
-export function initFolderActivityModal(els, { onClose, onRefresh })
+export function initFolderActivityModal(els, { onClose })
 ```
 
 ---
@@ -410,12 +410,17 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
 `initChatPanel()` returns controls for `askQuestion(...)`, `clearConversation()`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
 Header controls expose an icon-only `New chat` action (clear conversation history/citations and reset composer attachment state).
+On local development hosts (`localhost`/`127.0.0.1`), header controls also expose `Copy chat debug`, which copies a JSON trace (request payload, tool events, final output, and persisted chat state) to clipboard.
 While a response is in progress (including tool calls), the composer is locked and a pending status line is shown so users cannot submit overlapping requests.
-When `onOpenCitation` is provided, citation cards expose `Open item` for in-app context. If a source URL exists, `Open source` opens the original link in a new tab.
-When web search is used by the backend, URL sources are rendered in a dedicated `Web sources` section under citations.
+Sources render as compact, collapsible groups (`Saved sources`, `Web sources`) with favicon stacks + count badges in the collapsed state; expanding reveals detailed links/actions.
+When `onOpenCitation` is provided, saved-source rows expose `Open` for in-app context. If a source URL exists, `Source` opens the original link in a new tab.
+Assistant messages also include inline source chips (up to three) for quick open actions without expanding the source trays.
+Citation/web-source sections are rendered only when the final assistant answer clearly references those sources (for example label/title/domain matches), reducing persistent source clutter for non-grounded replies.
 When chat tools create a file/image item, the panel automatically opens that newly created item view.
+When the backend uses the `ask_user_question` tool, the panel renders dedicated follow-up cards inside the assistant message with quick-option buttons plus an inline typed-reply input (while still allowing replies in the main composer). For open-ended location prompts (city/neighborhood/ZIP), quick-option buttons are suppressed and the prompt stays fully freeform. Once a follow-up is answered, the card compacts into a concise answered state to reduce visual clutter. Multiple follow-ups are shown sequentially, capped at four cards per assistant response.
 Assistant responses are rendered via the shared Markdown service (`services/markdown.js`), so headings, lists, tables, code fences, and links render consistently with the rest of the app while remaining sanitized.
 Chat messages/citations persist across page refresh via workspace/user-scoped local storage and are restored during app-shell bootstrap.
+Each chat request includes a bounded recent conversation history payload so follow-up turns keep prior intent and references.
 The panel and controls use touch-target tokens (`--tap-target`, `--tap-target-mobile`) so close/send/citation actions remain comfortable on small screens.
 
 ---
@@ -648,6 +653,32 @@ Central icon registry for web UI symbols. Components should render icons through
 Why this exists:
 - Ensures consistent iconography across toolbar, chat, modals, breadcrumbs, item detail, and note cards.
 - Makes icon swaps/rebranding a single-file change in `services/icons.js`.
+
+---
+
+### `services/live-agent-activity.js`
+
+Pure state helpers for item-page live agent progress rendering during chat-driven tool execution.
+
+| Export | Signature | Purpose |
+|--------|-----------|---------|
+| `createLiveAgentActivityState()` | `() => { active, text, entries }` | Create the baseline live-activity state |
+| `applyWorkspaceActionToLiveActivity(state, action, now?)` | `(object, object, number?) => object` | Fold `onWorkspaceAction` tool events (`start`/`done`) into timeline state |
+| `pushLiveAgentActivityEntry(state, opts)` | `(object, object) => object` | Append ad-hoc timeline entries (e.g. queued remote update) with bounded history |
+
+The item file editor consumes this state to render a short live timeline (`running`/`queued`/`success`/`error`) while agent edits are applied.
+
+---
+
+### `services/revision-merge.js`
+
+Pure three-way merge helper used by the file live editor to safely rebase user drafts when a remote/agent update lands first.
+
+| Export | Signature | Purpose |
+|--------|-----------|---------|
+| `mergeTextWithBase(baseText, localText, remoteText)` | `(string, string, string) => { status, text }` | Merge local + remote edits against a shared base (`same`, `local`, `remote`, `merged`, `conflict`) |
+
+`render-item-detail.js` uses this helper before retrying optimistic saves after a `409` revision conflict to avoid silent overwrite when edits are disjoint.
 
 ---
 

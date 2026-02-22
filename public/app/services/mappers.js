@@ -525,6 +525,24 @@ function markdownHeadingTitle(value) {
   return "";
 }
 
+function firstNonEmptyLine(value) {
+  const lines = String(value || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines[0] || "";
+}
+
+function trimTitleAtStructure(value) {
+  const cleaned = stripMarkdownTitleSyntax(value);
+  if (!cleaned) return "";
+  return cleaned
+    .split(/\s+(?:#{1,6}|[-*+]|\d+[.)])\s+/)[0]
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function buildNoteTitle(note) {
   const contentRaw = String(note.content || "").trim();
   const content = normalizeText(contentRaw);
@@ -550,8 +568,9 @@ export function buildNoteTitle(note) {
   if ((!content || isFilePlaceholder) && fallbackContent) {
     const headingCandidate = markdownHeadingTitle(fallbackContent);
     const cleanedFallback = stripMarkdownTitleSyntax(fallbackContent);
+    const firstLineCandidate = trimTitleAtStructure(firstNonEmptyLine(fallbackContent));
     const sentenceMatch = cleanedFallback.match(/^(.{10,130}?[.!?])(\s|$)/);
-    const candidate = headingCandidate || (sentenceMatch ? sentenceMatch[1] : cleanedFallback);
+    const candidate = headingCandidate || (sentenceMatch ? sentenceMatch[1] : (firstLineCandidate || cleanedFallback));
     return truncateText(candidate, maxTitleLength);
   }
   if (!content && note.fileName) return truncateText(note.fileName, maxTitleLength);
@@ -563,8 +582,9 @@ export function buildNoteTitle(note) {
 
   const headingCandidate = markdownHeadingTitle(contentRaw);
   const cleanedContent = stripMarkdownTitleSyntax(contentRaw);
+  const firstLineCandidate = trimTitleAtStructure(firstNonEmptyLine(contentRaw));
   const sentenceMatch = cleanedContent.match(/^(.{10,130}?[.!?])(\s|$)/);
-  const candidate = headingCandidate || (sentenceMatch ? sentenceMatch[1] : cleanedContent);
+  const candidate = headingCandidate || (sentenceMatch ? sentenceMatch[1] : (firstLineCandidate || cleanedContent));
   return truncateText(candidate, maxTitleLength);
 }
 

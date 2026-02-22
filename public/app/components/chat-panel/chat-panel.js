@@ -1,16 +1,34 @@
-import { buildNoteTitle, buildContentPreview, normalizeCitation } from "../../services/mappers.js";
+import { buildNoteTitle, normalizeCitation, normalizeCitationLabel } from "../../services/mappers.js";
 import { renderMarkdownInto } from "../../services/markdown.js";
 import { renderIcon } from "../../services/icons.js";
 
 const MAX_MESSAGES = 100;
+const MAX_RECENT_HISTORY = 12;
+const MAX_DEBUG_TRACES = 20;
+const MAX_SOURCE_LIST_ITEMS = 8;
+const MAX_INLINE_SOURCE_CHIPS = 3;
 
 export function renderChatPanelHTML() {
   const attachIcon = renderIcon("attach", { size: 15 });
   const sendIcon = renderIcon("arrow-up", { size: 16 });
   const newChatIcon = renderIcon("square-pen", { size: 15, strokeWidth: 1.9 });
+  const debugCopyIcon = renderIcon("copy", { size: 15, strokeWidth: 1.9 });
+  const isLocalRuntime = typeof window !== "undefined"
+    && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   return `
     <div id="chat-panel" class="chat-panel" aria-label="Chat with your notes">
       <div class="chat-panel-header">
+        ${isLocalRuntime ? `
+        <button
+          id="chat-panel-debug-copy"
+          class="chat-panel-header-btn"
+          type="button"
+          aria-label="Copy chat debug"
+          title="Copy chat debug"
+        >
+          ${debugCopyIcon}
+        </button>
+        ` : ""}
         <button
           id="chat-panel-new-chat"
           class="chat-panel-header-btn"
@@ -58,6 +76,7 @@ export function renderChatPanelHTML() {
 export function queryChatPanelEls(root) {
   return {
     chatPanel: root.querySelector("#chat-panel"),
+    chatPanelDebugCopy: root.querySelector("#chat-panel-debug-copy"),
     chatPanelNewChat: root.querySelector("#chat-panel-new-chat"),
     chatContextHeader: root.querySelector("#chat-context-header"),
     chatEmptyState: root.querySelector("#chat-empty-state"),
@@ -83,6 +102,13 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
   let isAsking = false;
   let nextProjectHint = "";
   let lastContextLabel = "";
+  const isLocalRuntime = typeof window !== "undefined"
+    && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  const debugTraces = [];
+  const sourcePanelState = {
+    citationsExpanded: false,
+    webExpanded: false,
+  };
   let pendingAttachment = {
     fileDataUrl: null,
     fileName: "",
@@ -128,6 +154,83 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     clearAttachment();
   }
 
+  function collectRecentConversationMessages(limit = MAX_RECENT_HISTORY) {
+    const state = store ? store.getState() : {};
+    const messages = Array.isArray(state.chatMessages) ? state.chatMessages : [];
+    return messages
+      .slice(-Math.max(limit * 2, limit))
+      .map((entry) => ({
+        role: String(entry?.role || "").trim().toLowerCase(),
+        text: String(entry?.text || "").trim(),
+      }))
+      .filter((entry) => (entry.role === "user" || entry.role === "assistant") && entry.text)
+      .slice(-limit)
+      .map((entry) => ({
+        role: entry.role,
+        text: entry.text.slice(0, 1600),
+      }));
+  }
+
+  function toDebugSafePayload(payload = {}) {
+    const next = { ...(payload || {}) };
+    if (next.imageDataUrl) {
+      const value = String(next.imageDataUrl || "");
+      next.imageDataUrl = `<redacted data url (${value.length} chars)>`;
+    }
+    if (next.fileDataUrl) {
+      const value = String(next.fileDataUrl || "");
+      next.fileDataUrl = `<redacted data url (${value.length} chars)>`;
+    }
+    return next;
+  }
+
+  function pushDebugTrace(entry = null) {
+    if (!isLocalRuntime || !entry || typeof entry !== "object") return;
+    debugTraces.push(entry);
+    if (debugTraces.length > MAX_DEBUG_TRACES) {
+      debugTraces.splice(0, debugTraces.length - MAX_DEBUG_TRACES);
+    }
+  }
+
+  async function copyDebugDump() {
+    if (!isLocalRuntime) return;
+    const state = store ? store.getState() : {};
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      location: typeof window !== "undefined" ? window.location.href : "",
+      chatContext: state.chatContext || null,
+      messages: Array.isArray(state.chatMessages)
+        ? state.chatMessages.map((entry) => ({
+            role: String(entry?.role || "").trim(),
+            text: String(entry?.text || ""),
+          }))
+        : [],
+      citations: Array.isArray(state.chatCitations) ? state.chatCitations : [],
+      traces: debugTraces,
+    };
+    const text = JSON.stringify(payload, null, 2);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        throw new Error("Clipboard API unavailable");
+      }
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "readonly");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    if (typeof toast === "function") {
+      toast("Chat debug copied");
+    }
+  }
+
   function setPendingState(pending, statusText = "") {
     const isPending = Boolean(pending);
     const text = String(statusText || "").trim();
@@ -154,14 +257,185 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
         chip.disabled = isPending;
       });
     }
+    if (els.chatPanelMessages) {
+      els.chatPanelMessages
+        .querySelectorAll(".chat-question-option, .chat-question-input, .chat-question-submit")
+        .forEach((control) => {
+          if (
+            control instanceof HTMLButtonElement ||
+            control instanceof HTMLInputElement ||
+            control instanceof HTMLTextAreaElement
+          ) {
+            control.disabled = isPending;
+          }
+        });
+    }
     if (!els.chatPanelPending) return;
-    if (isPending) {
+    const showPendingLabel = isPending && text && !/^generating response/i.test(text);
+    if (showPendingLabel) {
       els.chatPanelPending.textContent = text || "Generating response...";
       els.chatPanelPending.classList.remove("hidden");
       return;
     }
     els.chatPanelPending.textContent = "";
     els.chatPanelPending.classList.add("hidden");
+  }
+
+  function normalizeAskUserQuestionPayload(payload) {
+    if (!payload || typeof payload !== "object") return null;
+    const question = normalizeSingleSentence(payload.question, 140);
+    if (!question) return null;
+    const allowFreeform = payload.allowFreeform !== false;
+    const options = Array.isArray(payload.options)
+      ? payload.options.map((opt) => normalizeSingleSentence(opt, 60)).filter(Boolean).slice(0, 4)
+      : [];
+    const filteredOptions = options.filter((option) => !isActionLikeOption(option));
+    const locationOpenEnded = allowFreeform && isOpenEndedLocationQuestion(question);
+    const resolvedOptions = allowFreeform
+      ? (locationOpenEnded ? [] : (filteredOptions.length >= 2 ? filteredOptions : []))
+      : (filteredOptions.length ? filteredOptions : options);
+    return {
+      question,
+      options: resolvedOptions,
+      allowFreeform,
+      context: normalizeSingleSentence(payload.context, 120),
+    };
+  }
+
+  function isActionLikeOption(option = "") {
+    const value = String(option || "").trim().toLowerCase();
+    if (!value) return false;
+    return /^(share|use|tell|ask|click|enter|provide|set|pick|choose)\b/.test(value);
+  }
+
+  function isOpenEndedLocationQuestion(question = "") {
+    const value = String(question || "").trim().toLowerCase();
+    if (!value) return false;
+    const asksLocation = /\b(city|neighborhood|neighbourhood|zip|postal|postcode|location|area|where|near)\b/.test(value);
+    const asksDiscovery = /\b(search|look|find|recommend|near)\b/.test(value);
+    return asksLocation && (asksDiscovery || value.startsWith("what ") || value.startsWith("which ") || value.startsWith("where "));
+  }
+
+  function normalizeSingleSentence(value, maxLen = 140) {
+    const text = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return "";
+    const firstQuestion = text.match(/[^?]{1,300}\?/);
+    if (firstQuestion?.[0]) {
+      return firstQuestion[0].trim().slice(0, maxLen);
+    }
+    const firstSentence = text.split(/[.!](?:\s|$)/)[0] || text;
+    return firstSentence.trim().slice(0, maxLen);
+  }
+
+  function renderAskUserQuestionPrompt(msgEl, payload = null, { assistantText = "" } = {}) {
+    const normalized = normalizeAskUserQuestionPayload(payload);
+    if (!msgEl || !normalized) return;
+    const { question, options, allowFreeform } = normalized;
+    const questionAlreadyVisible = assistantContainsQuestionText(assistantText, question);
+    const questionKey = question.toLowerCase();
+    const duplicate = Array.from(msgEl.querySelectorAll(".chat-user-question")).some(
+      (node) => String(node?.dataset?.questionKey || "") === questionKey
+    );
+    if (duplicate) return;
+
+    const prompt = document.createElement("section");
+    prompt.className = "chat-user-question";
+    prompt.dataset.questionKey = questionKey;
+    prompt.setAttribute("role", "group");
+    prompt.setAttribute("aria-label", "Assistant follow-up question");
+
+    const label = document.createElement("p");
+    label.className = "chat-question-label";
+    label.textContent = questionAlreadyVisible ? "Reply to continue" : "Follow-up question";
+    prompt.appendChild(label);
+
+    if (!questionAlreadyVisible) {
+      const questionText = document.createElement("p");
+      questionText.className = "chat-question-text";
+      questionText.textContent = question;
+      prompt.appendChild(questionText);
+    } else {
+      prompt.classList.add("chat-user-question--compact");
+    }
+
+    if (options.length > 0) {
+      const optionsWrap = document.createElement("div");
+      optionsWrap.className = "chat-question-options";
+      options.forEach((option) => {
+        const optionBtn = document.createElement("button");
+        optionBtn.type = "button";
+        optionBtn.className = "chat-question-option";
+        optionBtn.textContent = option;
+        optionBtn.disabled = isAsking;
+        optionBtn.addEventListener("click", () => {
+          if (isAsking) return;
+          void askQuestion(option);
+        });
+        optionsWrap.appendChild(optionBtn);
+      });
+      prompt.appendChild(optionsWrap);
+    }
+
+    if (allowFreeform) {
+      const form = document.createElement("form");
+      form.className = "chat-question-form";
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (isAsking) return;
+        const value = String(input.value || "").trim();
+        if (!value) return;
+        input.value = "";
+        void askQuestion(value);
+      });
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "chat-question-input";
+      input.placeholder = "Type a response...";
+      input.autocomplete = "off";
+      input.disabled = isAsking;
+      input.setAttribute("aria-label", "Type your response");
+
+      const submit = document.createElement("button");
+      submit.type = "submit";
+      submit.className = "chat-question-submit";
+      submit.textContent = "Reply";
+      submit.disabled = isAsking;
+
+      form.append(input, submit);
+      prompt.appendChild(form);
+
+      const hint = document.createElement("p");
+      hint.className = "chat-question-hint";
+      hint.textContent = "You can also reply directly in the main chat input.";
+      prompt.appendChild(hint);
+    }
+
+    msgEl.appendChild(prompt);
+  }
+
+  function compactLatestFollowUp(answerText = "") {
+    if (!els.chatPanelMessages) return;
+    const prompts = Array.from(els.chatPanelMessages.querySelectorAll(".chat-user-question:not(.is-answered)"));
+    if (!prompts.length) return;
+    const prompt = prompts[prompts.length - 1];
+    prompt.classList.add("is-answered", "chat-user-question--compact");
+    prompt.querySelector(".chat-question-options")?.remove();
+    prompt.querySelector(".chat-question-form")?.remove();
+    prompt.querySelector(".chat-question-hint")?.remove();
+    const label = prompt.querySelector(".chat-question-label");
+    if (label) {
+      label.textContent = "Follow-up answered";
+    }
+    prompt.querySelector(".chat-question-answer")?.remove();
+    const normalized = String(answerText || "").replace(/\s+/g, " ").trim();
+    if (!normalized) return;
+    const answer = document.createElement("p");
+    answer.className = "chat-question-answer";
+    answer.textContent = `Answer: ${normalized.slice(0, 140)}`;
+    prompt.appendChild(answer);
   }
 
   function updateContextHeader() {
@@ -208,6 +482,33 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     handlers.push(() => target.removeEventListener(event, handler));
   }
 
+  function formatAssistantDisplayText(rawText = "") {
+    let text = String(rawText || "");
+    // Remove parenthesized markdown links like: ([example.com](https://example.com))
+    text = text.replace(/\(\s*\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\s*\)/gi, "");
+    // Replace remaining markdown links with label-only text.
+    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1");
+    text = text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+    return text.trim();
+  }
+
+  function normalizeComparableText(value = "") {
+    return String(value || "")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1")
+      .replace(/[*_`~#>]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function assistantContainsQuestionText(assistantText = "", questionText = "") {
+    const question = normalizeComparableText(questionText);
+    if (!question) return false;
+    const assistant = normalizeComparableText(assistantText);
+    if (!assistant) return false;
+    return assistant === question || assistant.includes(question);
+  }
+
   function setMessageBodyText(msgEl, role, text) {
     if (!msgEl) return;
     let body = msgEl.querySelector(".chat-msg-body");
@@ -220,7 +521,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     msgEl.dataset.rawText = rawText;
 
     if (role === "assistant") {
-      renderMarkdownInto(body, rawText);
+      renderMarkdownInto(body, formatAssistantDisplayText(rawText));
       return;
     }
 
@@ -303,72 +604,372 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     }
   }
 
+  function normalizeWebSourceEntries(sources = []) {
+    return Array.isArray(sources)
+      ? sources
+          .map((entry) => ({
+            url: String(entry?.url || "").trim(),
+            title: String(entry?.title || "").trim(),
+          }))
+          .filter((entry) => entry.url)
+          .slice(0, MAX_SOURCE_LIST_ITEMS)
+      : [];
+  }
+
+  function getSourceHostname(url = "") {
+    try {
+      return new URL(String(url || "")).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function getSourceFaviconUrl(url = "") {
+    const normalized = String(url || "").trim();
+    if (!normalized) return "";
+    return `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(normalized)}&sz=64`;
+  }
+
+  function createFaviconStack(urls = [], fallbackLabel = "S") {
+    const stack = document.createElement("div");
+    stack.className = "chat-source-stack";
+    const normalizedUrls = Array.isArray(urls) ? urls.filter(Boolean).slice(0, 3) : [];
+    if (normalizedUrls.length === 0) {
+      const fallback = document.createElement("span");
+      fallback.className = "chat-source-stack-item chat-source-stack-fallback";
+      fallback.textContent = String(fallbackLabel || "S").slice(0, 1).toUpperCase();
+      stack.appendChild(fallback);
+      return stack;
+    }
+    normalizedUrls.forEach((url, index) => {
+      const item = document.createElement("span");
+      item.className = "chat-source-stack-item";
+      item.style.zIndex = String(20 - index);
+      const img = document.createElement("img");
+      img.className = "chat-source-favicon";
+      img.src = getSourceFaviconUrl(url);
+      img.alt = "";
+      img.loading = "lazy";
+      img.decoding = "async";
+      item.appendChild(img);
+      stack.appendChild(item);
+    });
+    return stack;
+  }
+
+  function renderSourceToggle(container, {
+    label = "Sources",
+    count = 0,
+    urls = [],
+    expanded = false,
+    onToggle = null,
+  } = {}) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "chat-source-toggle";
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.addEventListener("click", () => {
+      if (typeof onToggle === "function") onToggle();
+    });
+
+    const left = document.createElement("span");
+    left.className = "chat-source-toggle-left";
+    left.append(
+      createFaviconStack(urls, label.slice(0, 1)),
+      Object.assign(document.createElement("span"), {
+        className: "chat-source-toggle-label",
+        textContent: label,
+      }),
+      Object.assign(document.createElement("span"), {
+        className: "chat-source-toggle-count",
+        textContent: String(Math.max(0, Number(count) || 0)),
+      })
+    );
+
+    const chevron = document.createElement("span");
+    chevron.className = `chat-source-toggle-chevron${expanded ? " is-expanded" : ""}`;
+    chevron.innerHTML = renderIcon("chevron-right", { size: 14, strokeWidth: 2 });
+
+    toggle.append(left, chevron);
+    container.appendChild(toggle);
+  }
+
   function renderCitations(citations = []) {
     if (!els.chatPanelCitations) return;
+    const normalized = Array.isArray(citations)
+      ? citations.map((entry, index) => normalizeCitation(entry, index)).slice(0, MAX_SOURCE_LIST_ITEMS)
+      : [];
     els.chatPanelCitations.innerHTML = "";
-    if (!citations.length) {
+    if (!normalized.length) {
       els.chatPanelCitations.classList.add("hidden");
+      sourcePanelState.citationsExpanded = false;
       return;
     }
 
     els.chatPanelCitations.classList.remove("hidden");
-    const heading = document.createElement("p");
-    heading.className = "chat-citations-heading";
-    heading.textContent = "Sources";
-    els.chatPanelCitations.appendChild(heading);
+    const sourceUrls = normalized
+      .map((entry) => String(entry?.note?.sourceUrl || "").trim())
+      .filter(Boolean);
+    renderSourceToggle(els.chatPanelCitations, {
+      label: "Saved sources",
+      count: normalized.length,
+      urls: sourceUrls,
+      expanded: sourcePanelState.citationsExpanded,
+      onToggle: () => {
+        sourcePanelState.citationsExpanded = !sourcePanelState.citationsExpanded;
+        renderCitations(normalized);
+      },
+    });
 
-    citations.slice(0, 6).forEach((entry, index) => {
-      const citation = normalizeCitation(entry, index);
+    if (!sourcePanelState.citationsExpanded) return;
+    const list = document.createElement("div");
+    list.className = "chat-source-list";
+
+    normalized.forEach((citation) => {
       const note = citation.note || {};
-      const item = document.createElement("div");
-      item.className = "chat-citation-item";
+      const item = document.createElement("article");
+      item.className = "chat-source-item";
 
-      const title = document.createElement("span");
-      title.className = "chat-citation-title";
+      const row = document.createElement("div");
+      row.className = "chat-source-item-row";
+
+      const title = document.createElement("button");
+      title.type = "button";
+      title.className = "chat-source-title";
       title.textContent = buildNoteTitle(note);
-
-      const meta = document.createElement("span");
-      meta.className = "chat-citation-meta";
-      meta.textContent = String(note.project || note.sourceType || "Saved item");
-
-      const preview = document.createElement("span");
-      preview.className = "chat-citation-preview";
-      preview.textContent = buildContentPreview(note) || "Open this source";
-
-      const actions = document.createElement("div");
-      actions.className = "chat-citation-actions";
-
-      const openInAppBtn = document.createElement("button");
-      openInAppBtn.type = "button";
-      openInAppBtn.className = "chat-citation-action";
-      openInAppBtn.textContent = "Open item";
-      openInAppBtn.addEventListener("click", () => {
+      title.title = buildNoteTitle(note);
+      title.addEventListener("click", () => {
         if (typeof onOpenCitation === "function") {
           onOpenCitation(note);
-          return;
         }
       });
 
+      const meta = document.createElement("span");
+      meta.className = "chat-source-meta";
+      meta.textContent = String(note.project || note.sourceType || "Saved item");
+      row.append(title, meta);
+      item.appendChild(row);
+
+      const actions = document.createElement("div");
+      actions.className = "chat-source-actions";
+      const openInAppBtn = document.createElement("button");
+      openInAppBtn.type = "button";
+      openInAppBtn.className = "chat-source-action";
+      openInAppBtn.textContent = "Open";
+      openInAppBtn.addEventListener("click", () => {
+        if (typeof onOpenCitation === "function") {
+          onOpenCitation(note);
+        }
+      });
       actions.appendChild(openInAppBtn);
 
       const sourceUrl = String(note.sourceUrl || "").trim();
       if (sourceUrl) {
         const openSourceBtn = document.createElement("a");
-        openSourceBtn.className = "chat-citation-action";
+        openSourceBtn.className = "chat-source-action";
         openSourceBtn.href = sourceUrl;
         openSourceBtn.target = "_blank";
         openSourceBtn.rel = "noopener noreferrer";
-        openSourceBtn.textContent = "Open source";
+        openSourceBtn.innerHTML = `${renderIcon("external-link", { size: 12, strokeWidth: 2 })}<span>Source</span>`;
         actions.appendChild(openSourceBtn);
       }
 
-      item.append(title, meta, preview, actions);
-      els.chatPanelCitations.appendChild(item);
+      item.appendChild(actions);
+      list.appendChild(item);
     });
+
+    els.chatPanelCitations.appendChild(list);
   }
 
   function renderWebSources(sources = []) {
     if (!els.chatPanelWebSources) return;
+    const normalized = normalizeWebSourceEntries(sources);
+    els.chatPanelWebSources.innerHTML = "";
+    if (!normalized.length) {
+      els.chatPanelWebSources.classList.add("hidden");
+      sourcePanelState.webExpanded = false;
+      return;
+    }
+
+    els.chatPanelWebSources.classList.remove("hidden");
+    renderSourceToggle(els.chatPanelWebSources, {
+      label: "Web sources",
+      count: normalized.length,
+      urls: normalized.map((entry) => entry.url),
+      expanded: sourcePanelState.webExpanded,
+      onToggle: () => {
+        sourcePanelState.webExpanded = !sourcePanelState.webExpanded;
+        renderWebSources(normalized);
+      },
+    });
+
+    if (!sourcePanelState.webExpanded) return;
+    const list = document.createElement("div");
+    list.className = "chat-source-list";
+
+    normalized.forEach((entry) => {
+      const host = getSourceHostname(entry.url);
+      const link = document.createElement("a");
+      link.className = "chat-source-link";
+      link.href = entry.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = entry.url;
+
+      const favicon = document.createElement("img");
+      favicon.className = "chat-source-link-favicon";
+      favicon.src = getSourceFaviconUrl(entry.url);
+      favicon.alt = "";
+      favicon.loading = "lazy";
+      favicon.decoding = "async";
+
+      const text = document.createElement("span");
+      text.className = "chat-source-link-text";
+      const title = document.createElement("span");
+      title.className = "chat-source-title";
+      title.textContent = entry.title || host || entry.url;
+      const meta = document.createElement("span");
+      meta.className = "chat-source-meta";
+      meta.textContent = host || entry.url;
+      text.append(title, meta);
+
+      const icon = document.createElement("span");
+      icon.className = "chat-source-link-icon";
+      icon.innerHTML = renderIcon("external-link", { size: 12, strokeWidth: 2 });
+
+      link.append(favicon, text, icon);
+      list.appendChild(link);
+    });
+
+    els.chatPanelWebSources.appendChild(list);
+  }
+
+  function renderInlineSourceChips(msgEl, { citations = [], webSources = [] } = {}) {
+    if (!msgEl) return;
+    msgEl.querySelector(".chat-inline-sources")?.remove();
+
+    const normalizedWeb = normalizeWebSourceEntries(webSources);
+    const normalizedCitations = Array.isArray(citations)
+      ? citations.map((entry, index) => normalizeCitation(entry, index)).slice(0, MAX_INLINE_SOURCE_CHIPS)
+      : [];
+    const chips = [];
+    const seen = new Set();
+
+    normalizedWeb.slice(0, MAX_INLINE_SOURCE_CHIPS).forEach((entry) => {
+      const key = `web:${entry.url}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      chips.push({
+        kind: "web",
+        url: entry.url,
+        label: getSourceHostname(entry.url) || entry.title || entry.url,
+      });
+    });
+
+    if (chips.length < MAX_INLINE_SOURCE_CHIPS) {
+      normalizedCitations.forEach((entry) => {
+        if (chips.length >= MAX_INLINE_SOURCE_CHIPS) return;
+        const note = entry.note || {};
+        const noteId = String(note.id || "");
+        if (!noteId || seen.has(`note:${noteId}`)) return;
+        seen.add(`note:${noteId}`);
+        chips.push({
+          kind: "note",
+          note,
+          label: buildNoteTitle(note),
+          url: String(note.sourceUrl || "").trim(),
+        });
+      });
+    }
+
+    if (!chips.length) return;
+    const wrap = document.createElement("div");
+    wrap.className = "chat-inline-sources";
+
+    chips.forEach((chip) => {
+      if (chip.kind === "web") {
+        const anchor = document.createElement("a");
+        anchor.className = "chat-inline-source-chip";
+        anchor.href = chip.url;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        const favicon = document.createElement("img");
+        favicon.className = "chat-inline-source-favicon";
+        favicon.src = getSourceFaviconUrl(chip.url);
+        favicon.alt = "";
+        favicon.loading = "lazy";
+        favicon.decoding = "async";
+        const label = document.createElement("span");
+        label.textContent = chip.label;
+        anchor.append(favicon, label);
+        wrap.appendChild(anchor);
+        return;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chat-inline-source-chip";
+      button.textContent = chip.label;
+      button.addEventListener("click", () => {
+        if (typeof onOpenCitation === "function") {
+          onOpenCitation(chip.note);
+        }
+      });
+      wrap.appendChild(button);
+    });
+
+    msgEl.appendChild(wrap);
+  }
+
+  function extractCitationLabelsFromText(text, max = 12) {
+    const labels = [];
+    const seen = new Set();
+    const matcher = /\[?(N\d+)\]?/gi;
+    let match = matcher.exec(String(text || ""));
+    while (match && labels.length < max) {
+      const label = normalizeCitationLabel(match[1]);
+      if (label && !seen.has(label)) {
+        seen.add(label);
+        labels.push(label);
+      }
+      match = matcher.exec(String(text || ""));
+    }
+    return labels;
+  }
+
+  function resolveVisibleCitations(citations = [], assistantText = "", usedLabels = []) {
+    const normalizedCitations = Array.isArray(citations)
+      ? citations.map((entry, index) => normalizeCitation(entry, index))
+      : [];
+    if (!normalizedCitations.length) return [];
+    const text = String(assistantText || "").trim();
+    if (!text) return [];
+
+    const textLabels = extractCitationLabelsFromText(text, normalizedCitations.length);
+    const explicitLabels = Array.isArray(usedLabels)
+      ? usedLabels.map((label) => normalizeCitationLabel(label)).filter(Boolean)
+      : [];
+    const preferredLabels = new Set([...explicitLabels, ...textLabels]);
+    if (preferredLabels.size > 0) {
+      return normalizedCitations.filter((entry) => preferredLabels.has(entry.label)).slice(0, 6);
+    }
+
+    const textLower = text.toLowerCase();
+    const titleMatchedLabels = new Set();
+    normalizedCitations.forEach((entry) => {
+      const title = buildNoteTitle(entry.note || {}).trim().toLowerCase();
+      if (title.length >= 4 && textLower.includes(title)) {
+        titleMatchedLabels.add(entry.label);
+      }
+    });
+
+    if (titleMatchedLabels.size > 0) {
+      return normalizedCitations.filter((entry) => titleMatchedLabels.has(entry.label)).slice(0, 6);
+    }
+
+    return [];
+  }
+
+  function resolveVisibleWebSources(sources = [], assistantText = "") {
     const normalized = Array.isArray(sources)
       ? sources
           .map((entry) => ({
@@ -378,51 +979,50 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
           .filter((entry) => entry.url)
           .slice(0, 8)
       : [];
-    els.chatPanelWebSources.innerHTML = "";
-    if (!normalized.length) {
-      els.chatPanelWebSources.classList.add("hidden");
-      return;
-    }
+    if (!normalized.length) return [];
+    const textLower = String(assistantText || "").toLowerCase().trim();
+    if (!textLower) return [];
 
-    els.chatPanelWebSources.classList.remove("hidden");
-    const heading = document.createElement("p");
-    heading.className = "chat-citations-heading";
-    heading.textContent = "Web sources";
-    els.chatPanelWebSources.appendChild(heading);
-
-    normalized.forEach((entry) => {
-      const item = document.createElement("div");
-      item.className = "chat-citation-item";
-
-      const title = document.createElement("span");
-      title.className = "chat-citation-title";
-      title.textContent = entry.title || entry.url;
-
-      const meta = document.createElement("span");
-      meta.className = "chat-citation-meta";
-      meta.textContent = "Web";
-
-      const preview = document.createElement("span");
-      preview.className = "chat-citation-preview";
-      preview.textContent = entry.url;
-
-      const actions = document.createElement("div");
-      actions.className = "chat-citation-actions";
-
-      const openSourceBtn = document.createElement("a");
-      openSourceBtn.className = "chat-citation-action";
-      openSourceBtn.href = entry.url;
-      openSourceBtn.target = "_blank";
-      openSourceBtn.rel = "noopener noreferrer";
-      openSourceBtn.textContent = "Open source";
-      actions.appendChild(openSourceBtn);
-
-      item.append(title, meta, preview, actions);
-      els.chatPanelWebSources.appendChild(item);
+    return normalized.filter((entry) => {
+      const title = entry.title.toLowerCase();
+      let host = "";
+      try {
+        host = new URL(entry.url).hostname.replace(/^www\./, "").toLowerCase();
+      } catch {
+        host = "";
+      }
+      return (
+        (title.length >= 5 && textLower.includes(title)) ||
+        (host.length >= 4 && textLower.includes(host)) ||
+        textLower.includes(entry.url.toLowerCase())
+      );
     });
   }
 
+  function renderSourcesForAnswer({ assistantText = "", citations = [], usedCitationLabels = [], webSources = [], suppress = false } = {}) {
+    if (suppress) {
+      renderCitations([]);
+      saveCitationsToStore([]);
+      renderWebSources([]);
+      return { citations: [], webSources: [] };
+    }
+    sourcePanelState.citationsExpanded = false;
+    sourcePanelState.webExpanded = false;
+    const visibleCitations = resolveVisibleCitations(citations, assistantText, usedCitationLabels);
+    renderCitations(visibleCitations);
+    saveCitationsToStore(visibleCitations);
+
+    const visibleWebSources = resolveVisibleWebSources(webSources, assistantText);
+    renderWebSources(visibleWebSources);
+    return {
+      citations: visibleCitations,
+      webSources: visibleWebSources,
+    };
+  }
+
   function clearConversation() {
+    sourcePanelState.citationsExpanded = false;
+    sourcePanelState.webExpanded = false;
     if (store) {
       store.setState({
         chatMessages: [],
@@ -490,6 +1090,9 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     const question = String(rawQuestion || "").trim();
     const hasAttachment = Boolean(attachment?.fileDataUrl);
     if (!question && !hasAttachment) return false;
+    if (question) {
+      compactLatestFollowUp(question);
+    }
 
     // Read context from store
     const ctx = store ? (store.getState().chatContext || { type: "home" }) : { type: "home" };
@@ -505,6 +1108,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       project = ctx.folderId;
     }
     const scopePayload = buildScopePayload(ctx, contextNoteId, project);
+    const recentMessages = collectRecentConversationMessages(MAX_RECENT_HISTORY);
 
     nextProjectHint = "";
 
@@ -540,35 +1144,50 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
     const assistantMsg = addMessage("assistant", "");
     pushToStore("assistant", "");
+    let deferredCitations = [];
+    let deferredWebSources = [];
+    let deferredAskUserQuestions = [];
     let recoveryPromise = null;
+
+    const requestPayload = {
+      question: question || "Save this attachment to Stash.",
+      project: project || undefined,
+      contextNoteId: contextNoteId || undefined,
+      scope: scopePayload.scope,
+      workingSetIds: scopePayload.workingSetIds,
+      recentMessages,
+      captureIntent: hasAttachment ? "save" : "",
+      imageDataUrl: hasAttachment && attachment.isImage ? attachment.fileDataUrl : undefined,
+      fileDataUrl: hasAttachment ? attachment.fileDataUrl : undefined,
+      fileName: hasAttachment ? attachment.fileName : undefined,
+      fileMimeType: hasAttachment ? attachment.fileMimeType : undefined,
+    };
+    const debugTrace = {
+      id: `chat-debug-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      startedAt: new Date().toISOString(),
+      request: toDebugSafePayload(requestPayload),
+      events: [],
+      tokenCount: 0,
+      status: "running",
+    };
+    pushDebugTrace(debugTrace);
 
     try {
       await apiClient.askStreaming(
-        {
-          question: question || "Save this attachment to Stash.",
-          project: project || undefined,
-          contextNoteId: contextNoteId || undefined,
-          scope: scopePayload.scope,
-          workingSetIds: scopePayload.workingSetIds,
-          captureIntent: hasAttachment ? "save" : "",
-          imageDataUrl: hasAttachment && attachment.isImage ? attachment.fileDataUrl : undefined,
-          fileDataUrl: hasAttachment ? attachment.fileDataUrl : undefined,
-          fileName: hasAttachment ? attachment.fileName : undefined,
-          fileMimeType: hasAttachment ? attachment.fileMimeType : undefined,
-        },
+        requestPayload,
         {
           onCitations(citations) {
-            renderCitations(citations);
-            saveCitationsToStore(citations);
+            deferredCitations = Array.isArray(citations) ? citations : [];
           },
           onWebSources(sources) {
-            renderWebSources(sources);
+            deferredWebSources = Array.isArray(sources) ? sources : [];
           },
           onToken(token) {
             removeTyping();
             const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
             if (toolStatus) toolStatus.remove();
             setPendingState(true, "Generating response...");
+            debugTrace.tokenCount += String(token || "").length;
             if (assistantMsg) {
               appendAssistantToken(assistantMsg, token);
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
@@ -587,9 +1206,16 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
               list_note_versions: "Loading versions...",
               restore_note_version: "Restoring version...",
               retry_note_enrichment: "Retrying enrichment...",
+              ask_user_question: "Preparing a follow-up question...",
             };
             const pendingLabel = statusMap[name] || "Working...";
             setPendingState(true, pendingLabel);
+            debugTrace.events.push({
+              type: "tool_call",
+              name,
+              noteId: String(noteId || "").trim(),
+              at: new Date().toISOString(),
+            });
             const statusEl = document.createElement("span");
             statusEl.className = "chat-tool-status";
             statusEl.textContent = pendingLabel;
@@ -613,6 +1239,18 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
             const statusEl = assistantMsg?.querySelector(".chat-tool-status");
             if (statusEl) statusEl.remove();
             setPendingState(true, error ? "Recovering from tool error..." : "Finalizing response...");
+            if (!error && name === "ask_user_question" && result && typeof result === "object") {
+              if (deferredAskUserQuestions.length < 4) {
+                deferredAskUserQuestions.push(result);
+              }
+            }
+            debugTrace.events.push({
+              type: "tool_result",
+              name,
+              ok: !error,
+              error: error ? String(error) : "",
+              at: new Date().toISOString(),
+            });
             if (
               name === "create_note" &&
               result?.noteId &&
@@ -650,22 +1288,55 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
             removeTyping();
             const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
             if (toolStatus) toolStatus.remove();
+            if (assistantMsg && deferredAskUserQuestions.length > 0) {
+              const assistantTextForPrompt = getMessageRawText(assistantMsg);
+              deferredAskUserQuestions.forEach((questionPayload) => {
+                renderAskUserQuestionPrompt(assistantMsg, questionPayload, {
+                  assistantText: assistantTextForPrompt,
+                });
+              });
+            }
             setPendingState(false);
-            if (assistantMsg && !getMessageRawText(assistantMsg).trim()) {
+            const hasQuestionPrompt = Boolean(assistantMsg?.querySelector(".chat-user-question"));
+            if (assistantMsg && !getMessageRawText(assistantMsg).trim() && !hasQuestionPrompt) {
               setMessageBodyText(assistantMsg, "assistant", "No answer generated.");
             }
-            updateLastAssistantInStore(getMessageRawText(assistantMsg));
+            const assistantText = getMessageRawText(assistantMsg);
+            const renderedSources = renderSourcesForAnswer({
+              assistantText,
+              citations: deferredCitations,
+              webSources: deferredWebSources,
+              suppress: hasQuestionPrompt,
+            });
+            renderInlineSourceChips(assistantMsg, renderedSources);
+            debugTrace.status = "completed";
+            debugTrace.finishedAt = new Date().toISOString();
+            debugTrace.assistantText = assistantText;
+            updateLastAssistantInStore(assistantText);
+          },
+          onToolTrace(trace) {
+            if (!trace) return;
+            debugTrace.events.push({
+              type: "tool_trace",
+              at: new Date().toISOString(),
+              trace,
+            });
           },
           onError() {
             removeTyping();
             setPendingState(true, "Recovering response...");
+            debugTrace.status = "recovering";
+            debugTrace.error = "Streaming error; switched to fallback ask";
+            debugTrace.finishedAt = new Date().toISOString();
             recoveryPromise = fallbackAsk(
               question || "Save this attachment to Stash.",
               assistantMsg,
               project,
               contextNoteId,
               scopePayload,
-              attachment
+              attachment,
+              recentMessages,
+              debugTrace
             );
           },
         }
@@ -676,7 +1347,19 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       return true;
     } catch {
       removeTyping();
-      await fallbackAsk(question || "Save this attachment to Stash.", assistantMsg, project, contextNoteId, scopePayload, attachment);
+      debugTrace.status = "recovering";
+      debugTrace.error = "Streaming request failed before events; switched to fallback ask";
+      debugTrace.finishedAt = new Date().toISOString();
+      await fallbackAsk(
+        question || "Save this attachment to Stash.",
+        assistantMsg,
+        project,
+        contextNoteId,
+        scopePayload,
+        attachment,
+        recentMessages,
+        debugTrace
+      );
       return true;
     } finally {
       isAsking = false;
@@ -692,7 +1375,16 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     await askQuestion(question, { attachment });
   }
 
-  async function fallbackAsk(question, msgEl, projectHint = "", contextNoteId = "", scopePayload = null, attachment = null) {
+  async function fallbackAsk(
+    question,
+    msgEl,
+    projectHint = "",
+    contextNoteId = "",
+    scopePayload = null,
+    attachment = null,
+    recentMessages = [],
+    debugTrace = null
+  ) {
     try {
       const hasAttachment = Boolean(attachment?.fileDataUrl);
       const result = await apiClient.ask({
@@ -701,6 +1393,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
         contextNoteId: contextNoteId || undefined,
         scope: scopePayload?.scope || "all",
         workingSetIds: Array.isArray(scopePayload?.workingSetIds) ? scopePayload.workingSetIds : [],
+        recentMessages: Array.isArray(recentMessages) ? recentMessages : [],
         captureIntent: hasAttachment ? "save" : "",
         imageDataUrl: hasAttachment && attachment.isImage ? attachment.fileDataUrl : undefined,
         fileDataUrl: hasAttachment ? attachment.fileDataUrl : undefined,
@@ -712,14 +1405,26 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
         setMessageBodyText(msgEl, "assistant", resultText);
       }
       updateLastAssistantInStore(msgEl ? getMessageRawText(msgEl) : resultText);
-      if (result.citations) {
-        renderCitations(result.citations);
-        saveCitationsToStore(result.citations);
+      const renderedSources = renderSourcesForAnswer({
+        assistantText: resultText,
+        citations: result.citations || [],
+        usedCitationLabels: result.usedCitationLabels || [],
+        webSources: result.webSources || [],
+      });
+      renderInlineSourceChips(msgEl, renderedSources);
+      if (debugTrace) {
+        debugTrace.status = "completed-fallback";
+        debugTrace.finishedAt = new Date().toISOString();
+        debugTrace.assistantText = resultText;
       }
-      renderWebSources(result.webSources || []);
     } catch (error) {
       if (msgEl) setMessageBodyText(msgEl, "assistant", "Failed to get answer.");
       updateLastAssistantInStore("Failed to get answer.");
+      if (debugTrace) {
+        debugTrace.status = "failed";
+        debugTrace.finishedAt = new Date().toISOString();
+        debugTrace.error = String(error?.message || error || "Fallback ask failed");
+      }
     }
   }
 
@@ -747,6 +1452,10 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
   addHandler(els.chatPanelNewChat, "click", () => {
     if (isAsking) return;
     clearConversation();
+  });
+
+  addHandler(els.chatPanelDebugCopy, "click", () => {
+    void copyDebugDump();
   });
 
   addHandler(els.chatPanelAttachBtn, "click", () => {

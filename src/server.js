@@ -538,6 +538,63 @@ function normalizeFolderMemberRole(role = "viewer") {
   return FOLDER_MEMBER_ROLES.has(normalized) ? normalized : "viewer";
 }
 
+function normalizeSingleSentence(value, maxLen = 140) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  const firstQuestion = text.match(/[^?]{1,300}\?/);
+  if (firstQuestion?.[0]) {
+    return firstQuestion[0].trim().slice(0, maxLen);
+  }
+  const firstSentence = text.split(/[.!](?:\s|$)/)[0] || text;
+  return firstSentence.trim().slice(0, maxLen);
+}
+
+function normalizeRecentChatMessages(rawMessages, max = 12) {
+  const source = Array.isArray(rawMessages) ? rawMessages : [];
+  const normalized = [];
+  for (const entry of source.slice(-Math.max(max * 2, max))) {
+    if (!entry || typeof entry !== "object") continue;
+    const role = String(entry.role || "").trim().toLowerCase();
+    if (role !== "user" && role !== "assistant") continue;
+    const text = String(entry.text || entry.content || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    normalized.push({
+      role,
+      text: text.slice(0, 1600),
+    });
+  }
+  return normalized.slice(-max);
+}
+
+function isLikelyExternalInfoRequest(text = "") {
+  const normalized = String(text || "").toLowerCase();
+  if (!normalized.trim()) return false;
+  return /\b(coffee|cafe|restaurant|bar|date night|brunch|dinner|lunch|near me|open now|weather|traffic|flight|hotel|airbnb|event|concert|museum|park|things to do|itinerary|plan a trip|recommend)\b/.test(normalized);
+}
+
+function buildRecentConversationBlock(messages = [], maxMessages = 8, maxCharsPerMessage = 280) {
+  const normalized = Array.isArray(messages)
+    ? messages
+        .filter((entry) => entry && (entry.role === "user" || entry.role === "assistant"))
+        .slice(-Math.max(1, maxMessages))
+        .map((entry) => {
+          const role = entry.role === "assistant" ? "Assistant" : "User";
+          const text = String(entry.text || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, Math.max(40, maxCharsPerMessage));
+          return text ? `${role}: ${text}` : "";
+        })
+        .filter(Boolean)
+    : [];
+  if (!normalized.length) return "";
+  return `Recent conversation:\n${normalized.join("\n")}`;
+}
+
 async function resolveWorkspaceMemberForAgent(actor, { userId = "", email = "" } = {}) {
   const normalizedUserId = String(userId || "").trim();
   const normalizedEmail = String(email || "").trim().toLowerCase();
@@ -697,6 +754,28 @@ const CHAT_TOOLS = [
   },
   {
     type: "function",
+    name: "ask_user_question",
+    description: "Ask the user a focused follow-up question to clarify intent, preferences, or constraints before continuing.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "Exactly one short follow-up question for this step (single sentence, no lists/sections, ideally under 140 chars).",
+        },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional short answer choices (2-4) that represent literal user answers, not instructions/actions.",
+        },
+        allowFreeform: { type: "boolean", description: "Whether user can answer in free text" },
+        context: { type: "string", description: "Optional one-line context (keep concise)." },
+      },
+      required: ["question"],
+    },
+  },
+  {
+    type: "function",
     name: "search_notes",
     description: "Search through saved notes. Use when the user asks about their saved content.",
     parameters: {
@@ -834,7 +913,7 @@ const CHAT_TOOLS = [
   },
 ];
 
-const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links/files/images, create notes and folders, search notes, read extracted markdown/raw content, update note fields, update markdown/raw extracted content, add note comments, list/restore versions, retry failed enrichment, list workspace members, share/unshare folders, list folder collaborators, and list workspace activity. When the user asks to save, edit, or organize memory items, use tools directly. When creating notes and the user implies a name, pass that name using create_note.title. Keep responses concise and grounded in saved notes, and use web search when the user asks for external/current information. Do not claim web-search restrictions unless the user explicitly scoped the request to a specific URL/item. In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs.";
+const CHAT_SYSTEM_PROMPT = "You are Stash, a workspace assistant. You can save links/files/images, create notes and folders, search notes, read extracted markdown/raw content, update note fields, update markdown/raw extracted content, add note comments, list/restore versions, retry failed enrichment, list workspace members, share/unshare folders, list folder collaborators, list workspace activity, and ask_user_question for clarification. When intent is ambiguous or preferences are missing, proactively use ask_user_question before taking irreversible or low-confidence actions. ask_user_question must contain exactly one concrete concise question (no multi-part prompts, no numbered sections) with 2-4 options when useful. Options must be literal answer values the user can click as-is, not instruction-like phrases (avoid options like 'share ZIP' or 'use my location'). For open-ended location prompts (city/neighborhood/ZIP/current location), keep allowFreeform true and omit options entirely. If multiple details are required, ask follow-ups one-by-one in sequence, ask only what is necessary, and do not ask more than 4 follow-up questions for a single user request. When the user asks to save, edit, or organize memory items, use tools directly. When creating notes and the user implies a name, pass that name using create_note.title. Keep responses concise and grounded in saved notes, and use web search when the user asks for external/current information. Do not claim web-search restrictions unless the user explicitly scoped the request to a specific URL/item. In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs. Prefer plain text source attributions without inline markdown URLs; only include direct URLs when the user explicitly asks for links.";
 
 function buildChatWebSearchTool(allowedDomains = []) {
   if (!config.openaiWebSearchEnabled) return null;
@@ -1009,6 +1088,22 @@ async function executeChatToolCall(name, args, actor, { chatAttachment = null } 
           message: item.message || "",
           createdAt: item.createdAt,
         })),
+      };
+    }
+    case "ask_user_question": {
+      const question = normalizeSingleSentence(args.question, 140);
+      const options = Array.isArray(args.options)
+        ? args.options.map((opt) => normalizeSingleSentence(opt, 60)).filter(Boolean).slice(0, 4)
+        : [];
+      const context = normalizeSingleSentence(args.context, 120);
+      if (!question) {
+        throw new Error("ask_user_question requires question");
+      }
+      return {
+        question,
+        options,
+        allowFreeform: args.allowFreeform !== false,
+        context,
       };
     }
     case "search_notes": {
@@ -2015,6 +2110,7 @@ async function handleApi(req, res, url) {
     const wantsStream = (req.headers.accept || "").includes("text/event-stream");
     const scope = String(body.scope || "all");
     const workingSetIds = parseWorkingSetIds(body.workingSetIds);
+    const recentMessages = normalizeRecentChatMessages(body.recentMessages, 12);
     const chatAttachment = {
       imageDataUrl: String(body.imageDataUrl || "").trim() || null,
       fileDataUrl: String(body.fileDataUrl || "").trim() || null,
@@ -2030,6 +2126,10 @@ async function handleApi(req, res, url) {
         sendJson(res, 400, { error: "Missing question" });
         return;
       }
+      const recentConversationText = recentMessages
+        .map((entry) => `${entry.role}: ${entry.text}`)
+        .join("\n");
+      const likelyExternalIntent = isLikelyExternalInfoRequest(`${question}\n${recentConversationText}`);
       const contextNoteId = String(body.contextNoteId || "").trim();
       let contextNoteSourceUrl = "";
 
@@ -2091,6 +2191,9 @@ async function handleApi(req, res, url) {
         if (scopeHints.length > 0) {
           systemPrompt = `${scopeHints.join(" ")}\n\n${systemPrompt}`;
         }
+        if (likelyExternalIntent) {
+          systemPrompt = `The user is working on an external real-world request. Continue the active thread from recent conversation context. Prefer web search and do not switch to summarizing saved notes unless the user explicitly asks for their saved notes.\n\n${systemPrompt}`;
+        }
         systemPrompt = `Citation labels like [N1], [N2], etc are snippet references only and not note IDs. Never pass N1/N2 as tool ids. Do not include citation labels in user-facing prose; refer to items by title/folder name. ${
           contextNoteId ? `If the user says "this note", use id "${contextNoteId}". ` : ""
         }\n\n${systemPrompt}`;
@@ -2104,13 +2207,15 @@ async function handleApi(req, res, url) {
         const groundingLine = contextNoteSourceUrl
           ? `Primary source URL for this item: ${contextNoteSourceUrl}\n`
           : "";
-        const questionText = context
-          ? `${question}\n\n${groundingLine}Context from saved notes:\n${context}`
-          : `${question}\n${groundingLine}`.trim();
+        const recentConversationBlock = buildRecentConversationBlock(recentMessages, 8, 280);
+        const includeMemoryContext = !likelyExternalIntent && Boolean(context);
+        const questionText = includeMemoryContext
+          ? `${recentConversationBlock ? `${recentConversationBlock}\n\n` : ""}${question}\n\n${groundingLine}Context from saved notes:\n${context}`
+          : `${recentConversationBlock ? `${recentConversationBlock}\n\n` : ""}${question}\n${groundingLine}`.trim();
 
-        let currentInput = [
-          { role: "user", content: [{ type: "input_text", text: questionText }] },
-        ];
+        // Keep the Responses input shape simple and stable: one user message that includes
+        // compact conversation history + current turn. This avoids role/content schema drift.
+        let currentInput = [{ role: "user", content: [{ type: "input_text", text: questionText }] }];
         let currentInstructions = systemPrompt;
         let currentPreviousId = undefined;
         let toolRounds = 0;
@@ -2253,13 +2358,27 @@ async function handleApi(req, res, url) {
         })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
-      } catch {
-        // Fallback: heuristic answer
-        const answer = citations
-          .slice(0, 4)
-          .map((entry) => `- ${buildAgentNoteTitle(entry.note, "Saved item")}`)
-          .join("\n");
-        res.write(`event: token\ndata: ${JSON.stringify({ token: answer ? "Based on your saved notes:\n" + answer : "Something went wrong. Please try again." })}\n\n`);
+      } catch (error) {
+        logger.error("chat_stream_failed", {
+          error: error instanceof Error ? error.message : String(error),
+          likelyExternalIntent,
+          scope,
+          hasAttachment,
+        });
+        // Fallback: avoid off-topic memory summaries for external/live requests.
+        let fallbackText = "";
+        if (likelyExternalIntent) {
+          fallbackText = "I hit a temporary issue while fetching live results. Please try again in a moment.";
+        } else {
+          const answer = citations
+            .slice(0, 4)
+            .map((entry) => `- ${buildAgentNoteTitle(entry.note, "Saved item")}`)
+            .join("\n");
+          fallbackText = answer
+            ? `Based on your saved notes:\n${answer}`
+            : "Something went wrong. Please try again.";
+        }
+        res.write(`event: token\ndata: ${JSON.stringify({ token: fallbackText })}\n\n`);
         res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       }

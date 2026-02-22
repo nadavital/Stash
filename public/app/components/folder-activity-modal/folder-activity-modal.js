@@ -32,7 +32,6 @@ export function renderFolderActivityModalHTML() {
         <header class="folder-activity-modal-head">
           <h3 id="folder-activity-modal-heading" class="folder-activity-modal-heading">Activity</h3>
           <div class="folder-activity-modal-head-actions">
-            <button id="folder-activity-modal-refresh" class="folder-activity-modal-refresh" type="button">Refresh</button>
             <button id="folder-activity-modal-close" class="folder-activity-modal-close" type="button" aria-label="Close">&times;</button>
           </div>
         </header>
@@ -48,7 +47,6 @@ export function queryFolderActivityModalEls(root) {
     folderActivityModal: root.querySelector("#folder-activity-modal"),
     folderActivityModalBackdrop: root.querySelector("#folder-activity-modal-backdrop"),
     folderActivityModalHeading: root.querySelector("#folder-activity-modal-heading"),
-    folderActivityModalRefresh: root.querySelector("#folder-activity-modal-refresh"),
     folderActivityModalClose: root.querySelector("#folder-activity-modal-close"),
     folderActivityModalList: root.querySelector("#folder-activity-modal-list"),
     folderActivityModalEmpty: root.querySelector("#folder-activity-modal-empty"),
@@ -100,7 +98,7 @@ export function isFolderActivityModalOpen(els) {
   return Boolean(els?.folderActivityModal && !els.folderActivityModal.classList.contains("hidden"));
 }
 
-export function initFolderActivityModal(els, { onClose, onRefresh } = {}) {
+export function initFolderActivityModal(els, { onClose } = {}) {
   const handlers = [];
 
   function on(target, eventName, handler) {
@@ -114,9 +112,6 @@ export function initFolderActivityModal(els, { onClose, onRefresh } = {}) {
   });
   on(els.folderActivityModalBackdrop, "click", () => {
     if (typeof onClose === "function") onClose();
-  });
-  on(els.folderActivityModalRefresh, "click", () => {
-    if (typeof onRefresh === "function") onRefresh();
   });
   on(els.folderActivityModal, "keydown", (event) => {
     if (event.key === "Escape") {

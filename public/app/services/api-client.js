@@ -606,7 +606,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return adaptAnswerResponse(response, "chat");
     },
 
-    async askStreaming(payload, { onCitations, onWebSources, onToken, onDone, onError, onToolCall, onToolResult }) {
+    async askStreaming(payload, { onCitations, onWebSources, onToken, onDone, onError, onToolCall, onToolResult, onToolTrace }) {
       try {
         const token = getStoredSessionToken();
         const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
@@ -670,6 +670,9 @@ export function createApiClient({ adapterDebug = false } = {}) {
                 }
                 else if (eventType === "tool_result" && onToolResult) {
                   onToolResult(parsed.name, parsed.result || null, parsed.error || null, parsed.noteId || "", parsed);
+                }
+                else if (eventType === "tool_trace" && onToolTrace) {
+                  onToolTrace(parsed || null);
                 }
                 else if (eventType === "done") fireDone();
               } catch {

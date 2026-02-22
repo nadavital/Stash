@@ -20,6 +20,11 @@ import {
 } from "../services/mappers.js";
 import { buildItemActivityEntries, renderItemDetail } from "../services/render-item-detail.js";
 import { renderIcon } from "../services/icons.js";
+import {
+  applyWorkspaceActionToLiveActivity,
+  createLiveAgentActivityState,
+  pushLiveAgentActivityEntry,
+} from "../services/live-agent-activity.js";
 
 const CHEVRON_SVG = renderIcon("chevron-right", { size: 16, className: "folder-breadcrumb-chevron" });
 const actionIcon = (name) => renderIcon(name, {
@@ -117,7 +122,8 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       let remoteRefreshInFlight = false;
       let isEditingNote = false;
       let detailController = null;
-      let remoteActivityState = { active: false, text: "" };
+      let remoteActivityState = createLiveAgentActivityState();
+      let remoteActivityClearTimer = null;
 
       function on(target, eventName, handler, options) {
         if (!target) return;
@@ -135,31 +141,64 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         navigate(`#/item/${encodeURIComponent(n.id)}`);
       });
       function setRemoteActivity(state = null) {
-        remoteActivityState = {
-          active: Boolean(state?.active),
-          text: String(state?.text || "").trim(),
-        };
+        remoteActivityState = state && typeof state === "object"
+          ? {
+              active: Boolean(state.active),
+              text: String(state.text || "").trim(),
+              entries: Array.isArray(state.entries) ? state.entries : [],
+            }
+          : createLiveAgentActivityState();
         detailController?.setRemoteActivity?.(remoteActivityState);
       }
+
+      function scheduleRemoteActivityClear(delayMs = 3600) {
+        if (remoteActivityClearTimer) {
+          clearTimeout(remoteActivityClearTimer);
+        }
+        remoteActivityClearTimer = window.setTimeout(() => {
+          const hasRunning = Array.isArray(remoteActivityState.entries)
+            && remoteActivityState.entries.some((entry) => String(entry?.status || "") === "running");
+          if (hasRunning) return;
+          setRemoteActivity({
+            ...remoteActivityState,
+            active: false,
+            text: "",
+          });
+        }, delayMs);
+      }
+
       shell.setOnWorkspaceAction((action) => {
         const targetNoteId = actionNoteId(action);
         if (!targetNoteId || !note || targetNoteId !== note.id) return;
         const phase = actionPhase(action);
+        if (!phase) return;
+
+        setRemoteActivity(applyWorkspaceActionToLiveActivity(remoteActivityState, action));
 
         if (phase === "start") {
-          setRemoteActivity({ active: true, text: "Agent is editing..." });
           return;
         }
 
-        setRemoteActivity({ active: true, text: "Applying agent changes..." });
+        if (action?.error) {
+          scheduleRemoteActivityClear();
+          return;
+        }
 
         if (isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) {
           pendingRemoteRefresh = true;
+          setRemoteActivity(pushLiveAgentActivityEntry(remoteActivityState, {
+            actionName: "remote_update",
+            text: "Agent update queued until your draft is saved",
+            status: "queued",
+          }));
           toast("Agent updated this file. Changes will refresh after your draft is saved.");
           return;
         }
 
-        void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: true });
+        void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
+          .finally(() => {
+            scheduleRemoteActivityClear();
+          });
       });
 
       // Toolbar handlers
@@ -487,7 +526,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         } finally {
           remoteRefreshInFlight = false;
           if (clearRemoteActivity) {
-            setRemoteActivity({ active: false, text: "" });
+            setRemoteActivity(createLiveAgentActivityState());
           }
         }
       }
@@ -554,7 +593,10 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
             };
             if (pendingRemoteRefresh && !fileDraftState.dirty && !fileDraftState.saving) {
               pendingRemoteRefresh = false;
-              void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: true });
+              void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
+                .finally(() => {
+                  scheduleRemoteActivityClear();
+                });
             }
           },
         });
@@ -643,11 +685,27 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
             if (actorUserId && actorUserId === currentUserId) return;
             if (isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) {
               pendingRemoteRefresh = true;
-              setRemoteActivity({ active: true, text: "Remote update queued..." });
+              setRemoteActivity(pushLiveAgentActivityEntry(remoteActivityState, {
+                actionName: "remote_update",
+                text: "Remote update queued until your draft is saved",
+                status: "queued",
+              }));
               return;
             }
-            setRemoteActivity({ active: true, text: "Applying remote update..." });
-            void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: true });
+            setRemoteActivity(pushLiveAgentActivityEntry(remoteActivityState, {
+              actionName: "remote_update",
+              text: "Applying remote workspace update...",
+              status: "running",
+            }));
+            void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
+              .finally(() => {
+                setRemoteActivity(pushLiveAgentActivityEntry(remoteActivityState, {
+                  actionName: "remote_update",
+                  text: "Remote workspace update applied",
+                  status: "success",
+                }));
+                scheduleRemoteActivityClear();
+              });
             return;
           }
         }
@@ -675,6 +733,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         shell.setToast(null);
         shell.setOnOpenCitation(null);
         shell.setOnWorkspaceAction(null);
+        if (remoteActivityClearTimer) clearTimeout(remoteActivityClearTimer);
         disposers.forEach((fn) => fn());
       };
     },

@@ -51,6 +51,15 @@ export async function runStreamingChatOrchestrator({
       round: toolRounds,
     });
 
+    // If this round only asks a user follow-up, stop here and let the client
+    // render the structured follow-up card without a duplicated assistant echo.
+    const onlyAskUserQuestion =
+      roundResult.pendingToolCalls.length > 0 &&
+      roundResult.pendingToolCalls.every((toolCall) => String(toolCall?.name || "").trim() === "ask_user_question");
+    if (onlyAskUserQuestion) {
+      break;
+    }
+
     currentPreviousId = roundResult.responseId;
     currentInput = toolOutputs;
     currentInstructions = undefined;

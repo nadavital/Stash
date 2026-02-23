@@ -68,6 +68,86 @@ export function createMemoryEnrichmentOps({
       .trim();
   }
 
+  function normalizeAutoTitle(value, maxLen = 90) {
+    let normalized = String(value || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/^#{1,6}\s+/gm, "")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+      .replace(/`{1,3}([^`]+)`{1,3}/g, "$1")
+      .replace(/[*_~]+/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) return "";
+    if (/^https?:\/\//i.test(normalized)) return "";
+    if (normalized.length > maxLen) {
+      normalized = `${normalized.slice(0, maxLen - 1).trim()}...`;
+    }
+    return normalized;
+  }
+
+  function inferTitleFromFileName(fileName = "") {
+    const normalized = String(fileName || "").trim();
+    if (!normalized) return "";
+    const noExt = normalized.replace(/\.[^.]+$/, "");
+    const words = noExt
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return normalizeAutoTitle(titleCaseWords(words), 90);
+  }
+
+  function isUserTitleLocked(metadata = null) {
+    if (!metadata || typeof metadata !== "object") return false;
+    if (metadata.titleEditedByUser === true) return true;
+    const source = String(metadata.titleSource || "").trim().toLowerCase();
+    return source === "user";
+  }
+
+  function toAutoTitleMetadataPatch(title = "", source = "auto") {
+    const normalizedTitle = normalizeAutoTitle(title, 180);
+    if (!normalizedTitle) return {};
+    return {
+      title: normalizedTitle,
+      titleSource: String(source || "").trim() || "auto",
+      titleEditedByUser: false,
+      titleAuto: normalizedTitle,
+    };
+  }
+
+  function buildFallbackAutoTitle(note, linkPreview = null, summary = "", preferredTitle = "") {
+    const fromPreferred = normalizeAutoTitle(preferredTitle, 90);
+    if (fromPreferred && !/^uploaded file:|^file:/i.test(fromPreferred)) {
+      return fromPreferred;
+    }
+
+    const existingMetadataTitle = normalizeAutoTitle(note?.metadata?.title || note?.metadata?.titleAuto || "", 90);
+    if (existingMetadataTitle) return existingMetadataTitle;
+
+    const fromFileName = inferTitleFromFileName(note?.fileName || "");
+    if (fromFileName) return fromFileName;
+
+    const fromSummary = normalizeAutoTitle(summary || note?.summary || linkPreview?.title || "", 90);
+    if (fromSummary) return fromSummary;
+
+    const firstLine = String(note?.content || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)[0] || "";
+    const fromContent = normalizeAutoTitle(firstLine, 90);
+    if (fromContent && !/^uploaded file:|^file:/i.test(fromContent)) {
+      return fromContent;
+    }
+
+    const sourceType = String(note?.sourceType || "").trim().toLowerCase();
+    if (sourceType === "image") return "Image capture";
+    if (sourceType === "file") return "Saved file";
+    if (sourceType === "link") {
+      const inferred = normalizeAutoTitle(linkPreview?.title || inferEntityTitleFromUrl(note?.sourceUrl || "") || "", 90);
+      return inferred || "Saved link";
+    }
+    return "Saved item";
+  }
+
   function extractHtmlMetaContent(html, key, attribute = "property") {
     if (!html || !key) return "";
     const escapedKey = String(key).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -438,6 +518,7 @@ export function createMemoryEnrichmentOps({
     const fallbackSummary = heuristicSummary(note.content);
     const fallbackTags = heuristicTags(`${note.content} ${linkPreview?.title || ""}`);
     const fallbackProject = note.project || buildProjectFallback(note.sourceUrl, fallbackTags);
+    const fallbackTitle = buildFallbackAutoTitle(note, linkPreview, fallbackSummary);
 
     if (
       precomputed &&
@@ -452,6 +533,7 @@ export function createMemoryEnrichmentOps({
             ? precomputed.tags.slice(0, 8)
             : fallbackTags,
         project: String(precomputed.project || fallbackProject).trim().slice(0, 80) || fallbackProject,
+        title: normalizeAutoTitle(precomputed.title || fallbackTitle, 90) || fallbackTitle,
         enrichmentSource: "openai-upload",
       };
     }
@@ -461,6 +543,7 @@ export function createMemoryEnrichmentOps({
         summary: fallbackSummary,
         tags: fallbackTags,
         project: fallbackProject,
+        title: fallbackTitle,
         enrichmentSource: "heuristic",
       };
     }
@@ -493,7 +576,7 @@ export function createMemoryEnrichmentOps({
 
       const { text } = await createResponse({
         instructions:
-          "You are extracting memory metadata for a single-user project notebook. Output JSON only with keys: summary (<=180 chars), tags (array of 3-8 short lowercase tags), project (2-4 words).",
+          "You are extracting memory metadata for a single-user project notebook. Output JSON only with keys: title (concise, <=90 chars, plain text), summary (<=180 chars), tags (array of 3-8 short lowercase tags), project (2-4 words).",
         input: [
           {
             role: "user",
@@ -518,11 +601,16 @@ export function createMemoryEnrichmentOps({
         typeof parsed?.project === "string" && parsed.project.trim()
           ? parsed.project.trim().slice(0, 80)
           : fallbackProject;
+      const title =
+        typeof parsed?.title === "string" && parsed.title.trim()
+          ? normalizeAutoTitle(parsed.title, 90)
+          : fallbackTitle;
 
       return {
         summary,
         tags,
         project,
+        title: title || fallbackTitle,
         enrichmentSource: "openai",
       };
     } catch {
@@ -530,6 +618,7 @@ export function createMemoryEnrichmentOps({
         summary: fallbackSummary,
         tags: fallbackTags,
         project: fallbackProject,
+        title: fallbackTitle,
         enrichmentSource: "heuristic",
       };
     }
@@ -831,6 +920,7 @@ export function createMemoryEnrichmentOps({
           note = await noteRepo.getNoteById(noteId, workspaceId);
         }
         uploadEnrichment = {
+          title: parsedUpload.title || "",
           summary: parsedUpload.summary || "",
           tags: Array.isArray(parsedUpload.tags) ? parsedUpload.tags : [],
           project: parsedUpload.project || "",
@@ -843,11 +933,12 @@ export function createMemoryEnrichmentOps({
     let linkPreview = null;
     if (normalizedSourceType === "link" && normalizedSourceUrl) {
       linkPreview = await fetchLinkPreview(normalizedSourceUrl);
+      const userLockedTitle = isUserTitleLocked(note.metadata);
       const linkTitle = await inferLinkTitleWithOpenAI({
         sourceUrl: normalizedSourceUrl,
         linkPreview,
       });
-      if (linkTitle || linkPreview?.ogImage) {
+      if ((!userLockedTitle && linkTitle) || linkPreview?.ogImage) {
         await noteRepo.updateEnrichment({
           id: noteId,
           summary: note.summary,
@@ -856,7 +947,12 @@ export function createMemoryEnrichmentOps({
           embedding: null,
           metadata: {
             ...(note.metadata || {}),
-            ...(linkTitle ? { title: linkTitle, linkTitle } : {}),
+            ...(!userLockedTitle
+              ? {
+                  ...toAutoTitleMetadataPatch(linkTitle, "ai"),
+                  ...(linkTitle ? { linkTitle } : {}),
+                }
+              : {}),
             ...(linkPreview?.ogImage ? { ogImage: linkPreview.ogImage } : {}),
           },
           updatedAt: nowIso(),
@@ -868,6 +964,28 @@ export function createMemoryEnrichmentOps({
 
     const enrichment = await buildEnrichment(note, linkPreview, uploadEnrichment);
     const latestNote = await noteRepo.getNoteById(noteId, workspaceId);
+    const latestMetadata = {
+      ...(latestNote?.metadata || note?.metadata || {}),
+    };
+    const userLockedTitle = isUserTitleLocked(latestMetadata);
+    const autoTitleCandidate = userLockedTitle
+      ? ""
+      : buildFallbackAutoTitle(
+          {
+            ...note,
+            ...(latestNote || {}),
+            metadata: latestMetadata,
+          },
+          linkPreview,
+          enrichment.summary || "",
+          enrichment.title || ""
+        );
+    const titlePatch = !userLockedTitle
+      ? toAutoTitleMetadataPatch(
+          autoTitleCandidate,
+          enrichment.enrichmentSource === "openai" || enrichment.enrichmentSource === "openai-upload" ? "ai" : "auto"
+        )
+      : {};
     const finalProject = resolveEnrichmentProject({
       requestedProject,
       currentProject: latestNote?.project ?? note?.project ?? "",
@@ -905,7 +1023,8 @@ export function createMemoryEnrichmentOps({
       project: finalProject,
       embedding,
       metadata: {
-        ...(note.metadata || {}),
+        ...latestMetadata,
+        ...titlePatch,
         enrichmentSource: enrichment.enrichmentSource,
         embeddingSource,
         processingMs: Date.now() - tStart,

@@ -104,4 +104,60 @@ describe("handleChatRoutes", () => {
     assert.equal(payload.input[3].content?.[0]?.text?.includes("midtown?"), true);
     assert.equal(res.ended, true);
   });
+
+  it("returns explicit retry fallback on streaming failures", async () => {
+    const req = {
+      method: "POST",
+      headers: { accept: "text/event-stream", "x-request-id": "req-2" },
+    };
+    const res = createSseResponseRecorder();
+    const url = new URL("http://localhost/api/chat");
+
+    const handled = await handleChatRoutes(req, res, url, {
+      actor: { userId: "u1", workspaceId: "w1" },
+      sendJson: () => {},
+      readJsonBody: async () => ({
+        question: "move this note to text files",
+        recentMessages: [
+          { role: "user", text: "move this note to a different folder" },
+          { role: "assistant", text: "Which folder should I move this into?" },
+        ],
+      }),
+      parseWorkingSetIds: () => [],
+      normalizeRecentChatMessages: (raw) => raw,
+      isLikelyExternalInfoRequest: () => false,
+      extractDomainsFromText: () => [],
+      extractDomainFromUrl: () => "",
+      searchMemories: async () => [{ rank: 1, score: 1, note: { id: "n1", title: "Brainstorm Template" } }],
+      noteRepo: { getNoteById: async () => null },
+      buildChatWebSearchTool: () => null,
+      CHAT_TOOLS: [],
+      createCitationNoteAliasMap: () => new Map(),
+      createCitationNoteNameAliasMap: () => new Map(),
+      createStreamingResponse: async () => {
+        throw new Error("upstream timeout");
+      },
+      extractOutputUrlCitations: () => [],
+      buildCitationBlock: () => "",
+      CHAT_SYSTEM_PROMPT: "You are Stash.",
+      createAgentToolHarness: () => ({
+        requestId: "req-2",
+        traces: [],
+        runToolCall: async () => ({ ok: true, result: {}, trace: {} }),
+      }),
+      resolveAgentToolArgs: () => ({}),
+      executeChatToolCall: async () => ({}),
+      logger: { error: () => {} },
+      buildAgentNoteTitle: () => "item",
+      createMemory: async () => ({}),
+      askMemories: async () => ({}),
+      buildProjectContext: async () => ({}),
+    });
+
+    assert.equal(handled, true);
+    assert.equal(res.ended, true);
+    const output = res.chunks.join("\n");
+    assert.match(output, /temporary issue while completing that/i);
+    assert.equal(/Based on your saved notes/i.test(output), false);
+  });
 });

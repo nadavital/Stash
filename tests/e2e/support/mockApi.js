@@ -366,12 +366,17 @@ export async function installMockApi(page, {
 
       const response = custom || {
         delayMs: 0,
+        status: 200,
         events: [
           { type: "citations", data: { citations: [] } },
           { type: "token", data: { token: "E2E default response." } },
           { type: "done", data: { done: true } },
         ],
       };
+      const statusCode = Number(response.status) || 200;
+      const errorPayload = response.payload && typeof response.payload === "object"
+        ? response.payload
+        : { error: String(response.error || "Request failed") };
 
       if (Number(response.delayMs) > 0) {
         await wait(Number(response.delayMs));
@@ -379,9 +384,13 @@ export async function installMockApi(page, {
 
       const acceptHeader = String(request.headers().accept || "");
       const wantsStream = acceptHeader.includes("text/event-stream");
+      if (statusCode >= 400) {
+        await encodeJson(route, statusCode, errorPayload);
+        return;
+      }
       if (wantsStream) {
         await route.fulfill({
-          status: 200,
+          status: statusCode,
           headers: {
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
@@ -389,7 +398,7 @@ export async function installMockApi(page, {
           body: buildSseBody(response.events || []),
         });
       } else {
-        await encodeJson(route, 200, {
+        await encodeJson(route, statusCode, {
           answer: String(response.answer || "E2E default response."),
           citations: [],
         });

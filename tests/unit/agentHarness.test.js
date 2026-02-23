@@ -204,8 +204,8 @@ describe("createAgentToolHarness", () => {
       name: "ask_user_question",
       rawArgs: JSON.stringify({
         question: "  Which neighborhood should I prioritize? ",
-        options: ["Mission", "  ", "North Beach", "Mission", "Sunset"],
-        allowFreeform: false,
+        options: ["Mission", "  ", "North Beach", "Mission", "Sunset", "Something else (type it)"],
+        answerMode: "choices_plus_freeform",
         context: "  Need your preference to tailor the plan. ",
       }),
       callId: "call-9",
@@ -215,7 +215,7 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.ok, true);
     assert.equal(result.result?.args?.question, "Which neighborhood should I prioritize?");
     assert.deepEqual(result.result?.args?.options, ["Mission", "North Beach", "Sunset"]);
-    assert.equal(result.result?.args?.allowFreeform, false);
+    assert.equal(result.result?.args?.answerMode, "choices_plus_freeform");
     assert.equal(result.result?.args?.context, "Need your preference to tailor the plan");
   });
 
@@ -229,6 +229,7 @@ describe("createAgentToolHarness", () => {
       rawArgs: JSON.stringify({
         question: "Before I continue: 1) budget? 2) neighborhood? 3) indoor/outdoor?",
         options: ["Cheap", "Mid-range", "Premium", "Surprise me", "No preference"],
+        answerMode: "choices_plus_freeform",
         context: "I need these details so I can narrow suggestions. We can refine later if needed.",
       }),
       callId: "call-10",
@@ -238,6 +239,7 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.ok, true);
     assert.equal(result.result?.args?.question, "Before I continue: 1) budget?");
     assert.deepEqual(result.result?.args?.options, ["Cheap", "Mid-range", "Premium", "Surprise me"]);
+    assert.equal(result.result?.args?.answerMode, "choices_plus_freeform");
     assert.equal(result.result?.args?.context, "I need these details so I can narrow suggestions");
   });
 });

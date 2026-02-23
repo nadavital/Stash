@@ -118,10 +118,14 @@ export const CHAT_TOOLS = [
           items: { type: "string" },
           description: "Optional short answer choices (2-4) that represent literal user answers, not instructions/actions.",
         },
-        allowFreeform: { type: "boolean", description: "Whether user can answer in free text" },
+        answerMode: {
+          type: "string",
+          enum: ["freeform_only", "choices_only", "choices_plus_freeform"],
+          description: "How the user should answer: freeform text only, choices only, or choices plus freeform text.",
+        },
         context: { type: "string", description: "Optional one-line context (keep concise)." },
       },
-      required: ["question"],
+      required: ["question", "answerMode"],
     },
   },
   {
@@ -269,12 +273,18 @@ Maintain conversation flow across turns: treat previously established entities, 
 
 When intent is partially ambiguous, continue with the most likely interpretation from established thread context whenever a safe default exists, and briefly state the assumption. Use ask_user_question only when missing detail would materially change the result or action and no safe default exists. Avoid unnecessary clarification loops.
 
-ask_user_question must contain exactly one concrete concise question (no multi-part prompts, no numbered sections) with 2-4 options when useful. Options must be literal answer values the user can click as-is, not instruction-like phrases. For open-ended prompts with broad answer space, keep allowFreeform true and omit options.
+ask_user_question must contain exactly one concrete concise question (no multi-part prompts, no numbered sections) and must set answerMode:
+- freeform_only: open text answer only (omit options)
+- choices_only: 2-4 literal options only
+- choices_plus_freeform: 2-4 literal options plus free-text input
+Options must be literal answer values the user can click as-is, not instruction-like phrases. For choices_plus_freeform, never include "Other"/"Something else" options because free-text is already available.
 
 If multiple details are required, ask follow-ups one-by-one in sequence, ask only what is necessary, and do not ask more than 4 follow-up questions for a single user request.
 
 When the user asks to save, edit, or organize memory items, use tools directly. When creating notes and the user implies a name, pass that name using create_note.title.
 
+When using ask_user_question, do not repeat the same question/options in assistant prose; rely on the structured tool output for the follow-up card.
+
 Keep responses concise and grounded in saved notes, and use web search when the user asks for external/current information. Do not claim web-search restrictions unless the user explicitly scoped the request to a specific URL/item.
 
-In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs. Prefer plain text source attributions without inline markdown URLs; only include direct URLs when the user explicitly asks for links.`;
+In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs. Never refer to items as N1/N2/citation labels in user-visible text. Prefer plain text source attributions without inline markdown URLs; only include direct URLs when the user explicitly asks for links.`;

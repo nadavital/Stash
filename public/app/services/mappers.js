@@ -549,8 +549,9 @@ export function buildNoteTitle(note) {
   const summaryRaw = String(note.summary || "").trim();
   const markdownRaw = String(note.markdownContent || "").trim();
   const rawContentRaw = String(note.rawContent || "").trim();
+  const sourceType = String(note.sourceType || "").trim().toLowerCase();
   const explicitTitle = stripMarkdownTitleSyntax(
-    note.title || note.metadata?.title || note.metadata?.linkTitle || note.metadata?.documentTitle || note.metadata?.name || ""
+    note.title || note.metadata?.title || note.metadata?.titleAuto || note.metadata?.linkTitle || note.metadata?.documentTitle || note.metadata?.name || ""
   );
   const fallbackContent = summaryRaw || markdownRaw || rawContentRaw;
   const isFilePlaceholder = isGenericFilePlaceholder(content);
@@ -562,6 +563,10 @@ export function buildNoteTitle(note) {
       return compactUrl(explicitTitle, maxTitleLength) || explicitTitle;
     }
     return truncateText(explicitTitle, maxTitleLength);
+  }
+
+  if (sourceType === "file" && note.fileName) {
+    return truncateText(note.fileName, maxTitleLength);
   }
 
   if (!content && note.sourceType === "image") return "Image memory";

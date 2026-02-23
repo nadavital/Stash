@@ -110,7 +110,7 @@ export function normalizeToolArgs(name, args) {
       const question = normalizeSingleSentence(source.question, 140);
       if (!question) throw new Error("ask_user_question requires a question");
       const rawOptions = normalizeStringArray(source.options, 4);
-      const options = [];
+      let options = [];
       const seen = new Set();
       rawOptions.forEach((option) => {
         const key = option.toLowerCase();
@@ -118,10 +118,22 @@ export function normalizeToolArgs(name, args) {
         seen.add(key);
         options.push(option);
       });
+      const rawAnswerMode = normalizeText(source.answerMode).toLowerCase();
+      const validModes = new Set(["freeform_only", "choices_only", "choices_plus_freeform"]);
+      if (!validModes.has(rawAnswerMode)) {
+        throw new Error("ask_user_question requires answerMode");
+      }
+      if (rawAnswerMode === "choices_plus_freeform") {
+        options = options.filter((option) => !isGenericOtherOption(option));
+      }
+      if (rawAnswerMode !== "freeform_only" && options.length === 0) {
+        throw new Error("ask_user_question requires options for choice answerMode");
+      }
+      const resolvedOptions = rawAnswerMode === "freeform_only" ? [] : options;
       return {
         question,
-        options,
-        allowFreeform: source.allowFreeform !== false,
+        options: resolvedOptions,
+        answerMode: rawAnswerMode,
         context: normalizeSingleSentence(source.context, 120),
       };
     }
@@ -206,4 +218,10 @@ export function normalizeToolArgs(name, args) {
     default:
       throw new Error(`Unknown tool: ${normalizedName}`);
   }
+}
+
+function isGenericOtherOption(option = "") {
+  const value = String(option || "").trim().toLowerCase();
+  if (!value) return false;
+  return /^(other|something else|anything else|else|another option|not sure|none of these|none)\b/i.test(value);
 }

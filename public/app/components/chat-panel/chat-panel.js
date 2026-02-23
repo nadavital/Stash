@@ -7,6 +7,7 @@ const MAX_RECENT_HISTORY = MAX_MESSAGES;
 const MAX_DEBUG_TRACES = 20;
 const MAX_SOURCE_LIST_ITEMS = 8;
 const MAX_INLINE_SOURCE_CHIPS = 3;
+const MAX_PENDING_FOLLOW_UPS = 8;
 
 export function renderChatPanelHTML() {
   const attachIcon = renderIcon("attach", { size: 15 });
@@ -97,11 +98,20 @@ export function queryChatPanelEls(root) {
   };
 }
 
-export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspaceAction, store } = {}) {
+export function initChatPanel(
+  els,
+  {
+    apiClient,
+    toast,
+    onOpenCitation,
+    onWorkspaceAction,
+    onAuthExpired,
+    store,
+  } = {}
+) {
   const handlers = [];
   let isAsking = false;
   let nextProjectHint = "";
-  let lastContextLabel = "";
   const isLocalRuntime = typeof window !== "undefined"
     && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   const debugTraces = [];
@@ -206,6 +216,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
           }))
         : [],
       citations: Array.isArray(state.chatCitations) ? state.chatCitations : [],
+      pendingFollowUps: Array.isArray(state.chatPendingFollowUps) ? state.chatPendingFollowUps : [],
       traces: debugTraces,
     };
     const text = JSON.stringify(payload, null, 2);
@@ -231,9 +242,8 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     }
   }
 
-  function setPendingState(pending, statusText = "") {
+  function setPendingState(pending, _statusText = "") {
     const isPending = Boolean(pending);
-    const text = String(statusText || "").trim();
     if (els.chatPanel) {
       els.chatPanel.setAttribute("aria-busy", isPending ? "true" : "false");
     }
@@ -271,12 +281,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
         });
     }
     if (!els.chatPanelPending) return;
-    const showPendingLabel = isPending && text && !/^generating response/i.test(text);
-    if (showPendingLabel) {
-      els.chatPanelPending.textContent = text || "Generating response...";
-      els.chatPanelPending.classList.remove("hidden");
-      return;
-    }
+    // Keep progress indicators inside chat messages only.
     els.chatPanelPending.textContent = "";
     els.chatPanelPending.classList.add("hidden");
   }
@@ -285,19 +290,28 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     if (!payload || typeof payload !== "object") return null;
     const question = normalizeSingleSentence(payload.question, 140);
     if (!question) return null;
-    const allowFreeform = payload.allowFreeform !== false;
+    const validModes = new Set(["freeform_only", "choices_only", "choices_plus_freeform"]);
+    const rawAnswerMode = String(payload.answerMode || "").trim().toLowerCase();
     const options = Array.isArray(payload.options)
       ? payload.options.map((opt) => normalizeSingleSentence(opt, 60)).filter(Boolean).slice(0, 4)
       : [];
     const filteredOptions = options.filter((option) => !isActionLikeOption(option));
-    const locationOpenEnded = allowFreeform && isOpenEndedLocationQuestion(question);
-    const resolvedOptions = allowFreeform
-      ? (locationOpenEnded ? [] : (filteredOptions.length >= 2 ? filteredOptions : []))
-      : (filteredOptions.length ? filteredOptions : options);
+    const answerMode = validModes.has(rawAnswerMode)
+      ? rawAnswerMode
+      : (filteredOptions.length >= 2 ? "choices_plus_freeform" : "freeform_only");
+    let resolvedMode =
+      answerMode === "choices_only" && filteredOptions.length === 0 ? "freeform_only" : answerMode;
+    let resolvedOptions = resolvedMode === "freeform_only" ? [] : filteredOptions;
+    if (resolvedMode === "choices_plus_freeform") {
+      resolvedOptions = resolvedOptions.filter((option) => !isGenericOtherOption(option));
+    }
+    if (resolvedMode !== "freeform_only" && resolvedOptions.length === 0) {
+      resolvedMode = "freeform_only";
+    }
     return {
       question,
       options: resolvedOptions,
-      allowFreeform,
+      answerMode: resolvedMode,
       context: normalizeSingleSentence(payload.context, 120),
     };
   }
@@ -308,12 +322,10 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     return /^(share|use|tell|ask|click|enter|provide|set|pick|choose)\b/.test(value);
   }
 
-  function isOpenEndedLocationQuestion(question = "") {
-    const value = String(question || "").trim().toLowerCase();
+  function isGenericOtherOption(option = "") {
+    const value = String(option || "").trim().toLowerCase();
     if (!value) return false;
-    const asksLocation = /\b(city|neighborhood|neighbourhood|zip|postal|postcode|location|area|where|near)\b/.test(value);
-    const asksDiscovery = /\b(search|look|find|recommend|near)\b/.test(value);
-    return asksLocation && (asksDiscovery || value.startsWith("what ") || value.startsWith("which ") || value.startsWith("where "));
+    return /^(other|something else|anything else|else|another option|not sure|none of these|none)\b/i.test(value);
   }
 
   function normalizeSingleSentence(value, maxLen = 140) {
@@ -332,7 +344,9 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
   function renderAskUserQuestionPrompt(msgEl, payload = null, { assistantText = "" } = {}) {
     const normalized = normalizeAskUserQuestionPayload(payload);
     if (!msgEl || !normalized) return;
-    const { question, options, allowFreeform } = normalized;
+    const { question, options, answerMode } = normalized;
+    const showOptions = answerMode !== "freeform_only" && options.length > 0;
+    const showFreeform = answerMode !== "choices_only";
     const questionAlreadyVisible = assistantContainsQuestionText(assistantText, question);
     const questionKey = question.toLowerCase();
     const duplicate = Array.from(msgEl.querySelectorAll(".chat-user-question")).some(
@@ -360,7 +374,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       prompt.classList.add("chat-user-question--compact");
     }
 
-    if (options.length > 0) {
+    if (showOptions) {
       const optionsWrap = document.createElement("div");
       optionsWrap.className = "chat-question-options";
       options.forEach((option) => {
@@ -378,7 +392,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       prompt.appendChild(optionsWrap);
     }
 
-    if (allowFreeform) {
+    if (showFreeform) {
       const form = document.createElement("form");
       form.className = "chat-question-form";
       form.addEventListener("submit", (event) => {
@@ -416,7 +430,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     msgEl.appendChild(prompt);
   }
 
-  function compactLatestFollowUp(answerText = "") {
+  function compactLatestFollowUp() {
     if (!els.chatPanelMessages) return;
     const prompts = Array.from(els.chatPanelMessages.querySelectorAll(".chat-user-question:not(.is-answered)"));
     if (!prompts.length) return;
@@ -429,13 +443,6 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     if (label) {
       label.textContent = "Follow-up answered";
     }
-    prompt.querySelector(".chat-question-answer")?.remove();
-    const normalized = String(answerText || "").replace(/\s+/g, " ").trim();
-    if (!normalized) return;
-    const answer = document.createElement("p");
-    answer.className = "chat-question-answer";
-    answer.textContent = `Answer: ${normalized.slice(0, 140)}`;
-    prompt.appendChild(answer);
   }
 
   function updateContextHeader() {
@@ -450,17 +457,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       label = `In: ${ctx.folderId}`;
     }
 
-    // Only show navigation dividers when there are actual chat messages
-    const hasMessages = store && (store.getState().chatMessages || []).length > 0;
-    if (label !== lastContextLabel && lastContextLabel && els.chatPanelMessages && hasMessages) {
-      const divider = document.createElement("div");
-      divider.className = "chat-context-divider";
-      divider.textContent = label || "Home";
-      els.chatPanelMessages.appendChild(divider);
-      els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
-    }
-    lastContextLabel = label;
-
+    // Keep chat visually seamless across navigation; do not inject context divider rows.
     if (label) {
       els.chatContextHeader.textContent = label;
       els.chatContextHeader.classList.remove("hidden");
@@ -488,6 +485,13 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     text = text.replace(/\(\s*\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\s*\)/gi, "");
     // Replace remaining markdown links with label-only text.
     text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1");
+    // Remove citation marker noise in user-facing copy.
+    text = text
+      .replace(/\[N\d+\]/gi, "")
+      .replace(/\(\s*N\d+\s*\)/gi, "")
+      .replace(/\b(note|item)\s+N\d+\b/gi, "$1")
+      .replace(/\bN\d+\b(?=\s*(?:,|\.|;|:|$))/gi, "")
+      .replace(/\bnote\s+\**\s*\[?N\d+\]?\**\b/gi, "this item");
     text = text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
     return text.trim();
   }
@@ -538,15 +542,71 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     return String(msgEl?.dataset.rawText || "");
   }
 
-  function pushToStore(role, text) {
+  function createMessageId() {
+    return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function normalizePendingFollowUpEntry(entry = null) {
+    if (!entry || typeof entry !== "object") return null;
+    const messageId = String(entry.messageId || "").trim();
+    if (!messageId) return null;
+    const payloadSource = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
+    const payload = normalizeAskUserQuestionPayload(payloadSource);
+    if (!payload) return null;
+    return { messageId, payload };
+  }
+
+  function getPendingFollowUps() {
+    if (!store) return [];
+    const state = store.getState();
+    const rawEntries = Array.isArray(state.chatPendingFollowUps) ? state.chatPendingFollowUps : [];
+    return rawEntries
+      .map((entry) => normalizePendingFollowUpEntry(entry))
+      .filter(Boolean)
+      .slice(-MAX_PENDING_FOLLOW_UPS);
+  }
+
+  function setPendingFollowUps(entries = []) {
     if (!store) return;
+    const normalizedEntries = Array.isArray(entries)
+      ? entries.map((entry) => normalizePendingFollowUpEntry(entry)).filter(Boolean).slice(-MAX_PENDING_FOLLOW_UPS)
+      : [];
+    store.setState({ chatPendingFollowUps: normalizedEntries });
+  }
+
+  function upsertPendingFollowUpsForMessage(messageId = "", payloads = []) {
+    const normalizedMessageId = String(messageId || "").trim();
+    if (!normalizedMessageId) return;
+    const existing = getPendingFollowUps().filter((entry) => entry.messageId !== normalizedMessageId);
+    const normalizedPayloads = Array.isArray(payloads)
+      ? payloads.map((payload) => normalizeAskUserQuestionPayload(payload)).filter(Boolean)
+      : [];
+    const nextEntries = [
+      ...existing,
+      ...normalizedPayloads.map((payload) => ({ messageId: normalizedMessageId, payload })),
+    ];
+    setPendingFollowUps(nextEntries);
+  }
+
+  function popLatestPendingFollowUp() {
+    const entries = getPendingFollowUps();
+    if (!entries.length) return null;
+    const latest = entries[entries.length - 1];
+    setPendingFollowUps(entries.slice(0, -1));
+    return latest;
+  }
+
+  function pushToStore(role, text, idOverride = "") {
+    if (!store) return "";
     const state = store.getState();
     const messages = [...(state.chatMessages || [])];
-    messages.push({ role, text, id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+    const id = String(idOverride || createMessageId()).trim() || createMessageId();
+    messages.push({ role, text, id });
     if (messages.length > MAX_MESSAGES) {
       messages.splice(0, messages.length - MAX_MESSAGES);
     }
     store.setState({ chatMessages: messages });
+    return id;
   }
 
   function updateLastAssistantInStore(text) {
@@ -567,11 +627,15 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     store.setState({ chatCitations: citations || [] });
   }
 
-  function addMessage(role, text) {
+  function addMessage(role, text, messageId = "") {
     if (!els.chatPanelMessages) return;
     if (els.chatEmptyState) els.chatEmptyState.classList.add("hidden");
     const msg = document.createElement("div");
     msg.className = `chat-msg chat-msg--${role}`;
+    const normalizedMessageId = String(messageId || "").trim();
+    if (normalizedMessageId) {
+      msg.dataset.messageId = normalizedMessageId;
+    }
     setMessageBodyText(msg, role, text);
     els.chatPanelMessages.appendChild(msg);
     els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
@@ -586,12 +650,34 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 
     if (els.chatEmptyState) els.chatEmptyState.classList.add("hidden");
     els.chatPanelMessages.innerHTML = "";
+    const assistantEls = [];
+    const assistantById = new Map();
     messages.forEach((msg) => {
       const el = document.createElement("div");
       el.className = `chat-msg chat-msg--${msg.role}`;
+      const messageId = String(msg?.id || "").trim();
+      if (messageId) {
+        el.dataset.messageId = messageId;
+      }
       setMessageBodyText(el, msg.role, msg.text);
       els.chatPanelMessages.appendChild(el);
+      if (msg.role === "assistant") {
+        assistantEls.push(el);
+        if (messageId) assistantById.set(messageId, el);
+      }
     });
+
+    const pendingFollowUps = getPendingFollowUps();
+    if (pendingFollowUps.length > 0 && assistantEls.length > 0) {
+      const fallbackAssistant = assistantEls[assistantEls.length - 1] || null;
+      pendingFollowUps.forEach((entry) => {
+        const target = assistantById.get(entry.messageId) || fallbackAssistant;
+        if (!target) return;
+        renderAskUserQuestionPrompt(target, entry.payload, {
+          assistantText: getMessageRawText(target),
+        });
+      });
+    }
     els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
 
     const citations = state.chatCitations || [];
@@ -1027,6 +1113,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       store.setState({
         chatMessages: [],
         chatCitations: [],
+        chatPendingFollowUps: [],
       });
     }
     if (els.chatPanelMessages) {
@@ -1090,8 +1177,10 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     const question = String(rawQuestion || "").trim();
     const hasAttachment = Boolean(attachment?.fileDataUrl);
     if (!question && !hasAttachment) return false;
+    let answeredFollowUp = null;
     if (question) {
-      compactLatestFollowUp(question);
+      compactLatestFollowUp();
+      answeredFollowUp = popLatestPendingFollowUp();
     }
 
     // Read context from store
@@ -1109,14 +1198,21 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
     }
     const scopePayload = buildScopePayload(ctx, contextNoteId, project);
     const recentMessages = collectRecentConversationMessages(MAX_RECENT_HISTORY);
+    if (answeredFollowUp?.payload?.question) {
+      recentMessages.push({
+        role: "assistant",
+        text: String(answeredFollowUp.payload.question || "").trim(),
+      });
+    }
 
     nextProjectHint = "";
 
     const userLine = hasAttachment
       ? `${question || "Save this attachment"}\n[attachment: ${attachment.fileName || "file"}]`
       : question;
-    addMessage("user", userLine);
-    pushToStore("user", userLine);
+    const userMessageId = createMessageId();
+    addMessage("user", userLine, userMessageId);
+    pushToStore("user", userLine, userMessageId);
     if (els.chatPanelInput) {
       els.chatPanelInput.value = "";
       els.chatPanelInput.style.height = "";
@@ -1142,8 +1238,9 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
       if (!typingRemoved) { typingEl.remove(); typingRemoved = true; }
     }
 
-    const assistantMsg = addMessage("assistant", "");
-    pushToStore("assistant", "");
+    const assistantMessageId = createMessageId();
+    const assistantMsg = addMessage("assistant", "", assistantMessageId);
+    pushToStore("assistant", "", assistantMessageId);
     let deferredCitations = [];
     let deferredWebSources = [];
     let deferredAskUserQuestions = [];
@@ -1193,7 +1290,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
               els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
             }
           },
-          onToolCall(name, _status, noteId) {
+          onToolCall(name, _status, noteId, toolEvent = null) {
             removeTyping();
             const statusMap = {
               create_note: "Saving...",
@@ -1201,7 +1298,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
               search_notes: "Searching...",
               get_note_raw_content: "Loading note content...",
               update_note: "Updating note...",
-              update_note_markdown: "Updating markdown...",
+              update_note_markdown: "Updating content...",
               add_note_comment: "Adding comment...",
               list_note_versions: "Loading versions...",
               restore_note_version: "Restoring version...",
@@ -1228,10 +1325,14 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
               noteId &&
               typeof onWorkspaceAction === "function"
             ) {
+              const patch = toolEvent && typeof toolEvent === "object" && toolEvent.patch && typeof toolEvent.patch === "object"
+                ? toolEvent.patch
+                : null;
               onWorkspaceAction({
                 phase: "start",
                 name,
                 noteId: String(noteId || "").trim(),
+                ...(patch ? { result: { patch } } : {}),
               });
             }
           },
@@ -1274,7 +1375,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
                 name === "retry_note_enrichment") &&
               typeof onWorkspaceAction === "function"
             ) {
-              const resolvedNoteId = String(noteIdFromEvent || result?.noteId || "").trim();
+              const resolvedNoteId = String(result?.noteId || noteIdFromEvent || "").trim();
               onWorkspaceAction({
                 phase: "done",
                 name,
@@ -1296,8 +1397,13 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
                 });
               });
             }
+            upsertPendingFollowUpsForMessage(assistantMessageId, deferredAskUserQuestions);
             setPendingState(false);
             const hasQuestionPrompt = Boolean(assistantMsg?.querySelector(".chat-user-question"));
+            if (assistantMsg && hasQuestionPrompt) {
+              // Keep follow-up content inside the structured card to avoid duplicate question text.
+              setMessageBodyText(assistantMsg, "assistant", "");
+            }
             if (assistantMsg && !getMessageRawText(assistantMsg).trim() && !hasQuestionPrompt) {
               setMessageBodyText(assistantMsg, "assistant", "No answer generated.");
             }
@@ -1322,8 +1428,21 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
               trace,
             });
           },
-          onError() {
+          onError(streamError) {
             removeTyping();
+            const statusCode = Number(streamError?.status || streamError?.payload?.status || 0);
+            const authExpired = statusCode === 401 || /not authenticated/i.test(String(streamError?.message || ""));
+            if (authExpired) {
+              const authText = "Session expired. Please sign in again.";
+              if (assistantMsg) setMessageBodyText(assistantMsg, "assistant", authText);
+              updateLastAssistantInStore(authText);
+              if (typeof toast === "function") toast(authText, "error");
+              if (typeof onAuthExpired === "function") onAuthExpired();
+              debugTrace.status = "failed";
+              debugTrace.error = authText;
+              debugTrace.finishedAt = new Date().toISOString();
+              return;
+            }
             setPendingState(true, "Recovering response...");
             debugTrace.status = "recovering";
             debugTrace.error = "Streaming error; switched to fallback ask";
@@ -1418,8 +1537,15 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
         debugTrace.assistantText = resultText;
       }
     } catch (error) {
-      if (msgEl) setMessageBodyText(msgEl, "assistant", "Failed to get answer.");
-      updateLastAssistantInStore("Failed to get answer.");
+      const statusCode = Number(error?.status || error?.payload?.status || 0);
+      const authExpired = statusCode === 401 || /not authenticated/i.test(String(error?.message || ""));
+      const failureText = authExpired ? "Session expired. Please sign in again." : "Failed to get answer.";
+      if (msgEl) setMessageBodyText(msgEl, "assistant", failureText);
+      updateLastAssistantInStore(failureText);
+      if (authExpired) {
+        if (typeof toast === "function") toast(failureText, "error");
+        if (typeof onAuthExpired === "function") onAuthExpired();
+      }
       if (debugTrace) {
         debugTrace.status = "failed";
         debugTrace.finishedAt = new Date().toISOString();

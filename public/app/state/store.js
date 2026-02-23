@@ -15,6 +15,7 @@ const DEFAULT_STATE = {
   toastTimer: null,
   chatMessages: [],
   chatCitations: [],
+  chatPendingFollowUps: [],
   chatContext: { type: "home" },
 };
 

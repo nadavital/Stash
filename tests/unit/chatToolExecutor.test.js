@@ -7,14 +7,14 @@ describe("createChatToolExecutor", () => {
     const execute = createChatToolExecutor({});
     const result = await execute("ask_user_question", {
       question: "  Which neighborhood should I prioritize?  ",
-      options: ["Mission", " ", "North Beach", "Mission", "Sunset", "Richmond"],
+      options: ["Mission", " ", "North Beach", "Mission", "Sunset", "Something else (type it)"],
       context: " Need your preference to tailor the plan. ",
-      allowFreeform: false,
+      answerMode: "choices_plus_freeform",
     }, { userId: "u1", workspaceId: "w1" });
 
     assert.equal(result.question, "Which neighborhood should I prioritize?");
     assert.deepEqual(result.options, ["Mission", "North Beach", "Mission", "Sunset"]);
-    assert.equal(result.allowFreeform, false);
+    assert.equal(result.answerMode, "choices_plus_freeform");
     assert.equal(result.context, "Need your preference to tailor the plan");
   });
 

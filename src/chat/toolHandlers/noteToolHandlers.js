@@ -45,7 +45,20 @@ export function createNoteToolHandlers({
         baseRevision: args.baseRevision,
         actor,
       });
-      return { noteId: note.id, title: buildAgentNoteTitle(note, "Updated item") };
+      const patch = {
+        ...(args.title !== undefined ? { title: String(note?.metadata?.title || "").trim() } : {}),
+        ...(args.content !== undefined ? { content: String(note?.content || "") } : {}),
+        ...(args.summary !== undefined ? { summary: String(note?.summary || "") } : {}),
+        ...(args.tags !== undefined ? { tags: Array.isArray(note?.tags) ? note.tags : [] } : {}),
+        ...(args.project !== undefined ? { project: String(note?.project || "") } : {}),
+        ...(note?.status ? { status: String(note.status) } : {}),
+        ...(Number.isFinite(Number(note?.revision)) ? { revision: Number(note.revision) } : {}),
+      };
+      return {
+        noteId: note.id,
+        title: buildAgentNoteTitle(note, "Updated item"),
+        patch,
+      };
     },
 
     async update_note_attachment(args, actor, { chatAttachment = null } = {}) {
@@ -79,7 +92,18 @@ export function createNoteToolHandlers({
         requeueEnrichment: args.requeueEnrichment !== false,
         actor,
       });
-      return { noteId: note.id, status: note.status || "" };
+      const patch = {
+        ...(args.content !== undefined ? { content: String(note?.content || "") } : {}),
+        ...(args.rawContent !== undefined ? { rawContent: String(note?.rawContent || "") } : {}),
+        ...(args.markdownContent !== undefined ? { markdownContent: String(note?.markdownContent || "") } : {}),
+        ...(note?.status ? { status: String(note.status) } : {}),
+        ...(Number.isFinite(Number(note?.revision)) ? { revision: Number(note.revision) } : {}),
+      };
+      return {
+        noteId: note.id,
+        status: note.status || "",
+        patch,
+      };
     },
 
     async add_note_comment(args, actor) {

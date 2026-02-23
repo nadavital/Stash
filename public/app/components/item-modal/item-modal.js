@@ -33,7 +33,7 @@ export function renderItemModalHTML() {
             <button id="item-modal-copy-source" class="item-modal-quick-action hidden" type="button">Copy link</button>
           </div>
           <img id="item-modal-image" class="item-modal-image hidden" alt="Item preview" />
-          <button id="item-modal-toggle" class="item-modal-toggle hidden" type="button" aria-expanded="false">Show full text</button>
+          <button id="item-modal-toggle" class="item-modal-toggle hidden" type="button" aria-expanded="false">Show full content</button>
           <pre id="item-modal-full-content" class="item-modal-full-content hidden"></pre>
           <section class="item-modal-comments" aria-label="Comments">
             <p class="item-modal-comments-title">Context comments</p>
@@ -206,7 +206,7 @@ export function openItemModal(els, note) {
   if (els.itemModalToggle && els.itemModalFullContent) {
     els.itemModalToggle.classList.toggle("hidden", !hasDistinctFull);
     els.itemModalFullContent.classList.add("hidden");
-    els.itemModalToggle.textContent = "Show full extracted text";
+    els.itemModalToggle.textContent = "Show full content";
     els.itemModalToggle.setAttribute("aria-expanded", "false");
     els.itemModalFullContent.textContent = hasDistinctFull ? fullExtract : "";
     els.itemModalToggle.onclick = hasDistinctFull
@@ -214,7 +214,7 @@ export function openItemModal(els, note) {
           const expanded = els.itemModalToggle.getAttribute("aria-expanded") === "true";
           const nextExpanded = !expanded;
           els.itemModalToggle.setAttribute("aria-expanded", nextExpanded ? "true" : "false");
-          els.itemModalToggle.textContent = nextExpanded ? "Hide full extracted text" : "Show full extracted text";
+          els.itemModalToggle.textContent = nextExpanded ? "Hide full content" : "Show full content";
           els.itemModalFullContent.classList.toggle("hidden", !nextExpanded);
         }
       : null;
@@ -239,7 +239,7 @@ export function closeItemModal(els) {
   exitEditMode(els);
   if (els.itemModalToggle && els.itemModalFullContent) {
     els.itemModalToggle.classList.add("hidden");
-    els.itemModalToggle.textContent = "Show full extracted text";
+    els.itemModalToggle.textContent = "Show full content";
     els.itemModalToggle.setAttribute("aria-expanded", "false");
     els.itemModalToggle.onclick = null;
     els.itemModalFullContent.classList.add("hidden");

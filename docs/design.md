@@ -411,15 +411,15 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 `initChatPanel()` returns controls for `askQuestion(...)`, `clearConversation()`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
 Header controls expose an icon-only `New chat` action (clear conversation history/citations and reset composer attachment state).
 On local development hosts (`localhost`/`127.0.0.1`), header controls also expose `Copy chat debug`, which copies a JSON trace (request payload, tool events, final output, and persisted chat state) to clipboard.
-While a response is in progress (including tool calls), the composer is locked and a pending status line is shown so users cannot submit overlapping requests.
+While a response is in progress (including tool calls), the composer is locked so users cannot submit overlapping requests. Progress feedback appears inline in the chat stream (typing/tool status), not as a duplicate status line under the composer.
 Sources render as compact, collapsible groups (`Saved sources`, `Web sources`) with favicon stacks + count badges in the collapsed state; expanding reveals detailed links/actions.
 When `onOpenCitation` is provided, saved-source rows expose `Open` for in-app context. If a source URL exists, `Source` opens the original link in a new tab.
 Assistant messages also include inline source chips (up to three) for quick open actions without expanding the source trays.
 Citation/web-source sections are rendered only when the final assistant answer clearly references those sources (for example label/title/domain matches), reducing persistent source clutter for non-grounded replies.
 When chat tools create a file/image item, the panel automatically opens that newly created item view.
-When the backend uses the `ask_user_question` tool, the panel renders dedicated follow-up cards inside the assistant message with quick-option buttons plus an inline typed-reply input (while still allowing replies in the main composer). For open-ended location prompts (city/neighborhood/ZIP), quick-option buttons are suppressed and the prompt stays fully freeform. Once a follow-up is answered, the card compacts into a concise answered state to reduce visual clutter. Multiple follow-ups are shown sequentially, capped at four cards per assistant response.
+When the backend uses the `ask_user_question` tool, the panel renders dedicated follow-up cards inside the assistant message with quick-option buttons plus an inline typed-reply input (while still allowing replies in the main composer). Follow-up cards include an optional context line, animate in, and compact after the user replies to reduce visual clutter. Generic `"Other"/"Something else"` options are suppressed whenever freeform reply is already available. Multiple follow-ups are shown sequentially, capped at four cards per assistant response.
 Assistant responses are rendered via the shared Markdown service (`services/markdown.js`), so headings, lists, tables, code fences, and links render consistently with the rest of the app while remaining sanitized.
-Chat messages/citations persist across page refresh via workspace/user-scoped local storage and are restored during app-shell bootstrap.
+Chat messages/citations persist across page refresh via workspace/user-scoped local storage and are restored during app-shell bootstrap. Unanswered structured follow-up cards also persist and are rehydrated on reload so pending questions are not lost.
 Each chat request includes a bounded recent conversation history payload so follow-up turns keep prior intent and references.
 The panel and controls use touch-target tokens (`--tap-target`, `--tap-target-mobile`) so close/send/citation actions remain comfortable on small screens.
 
@@ -709,8 +709,8 @@ Note-specific UI helpers.
 | `isProcessedNote(note)` | `object => boolean` | Check if note has been enriched |
 | `deleteIconMarkup()` | `() => string` | Trash icon markup (delegates to `services/icons.js`) |
 | `compactInlineText(value)` | `string => string` | Collapse whitespace for inline display |
-| `buildModalSummary(note)` | `object => string` | Summary HTML for item modal |
-| `buildModalFullExtract(note)` | `object => string` | Full-extract HTML for item modal |
+| `buildModalSummary(note)` | `object => string` | Summary text for item modal |
+| `buildModalFullExtract(note)` | `object => string` | Expanded full-content text for item modal |
 | `noteTypeIconMarkup(type)` | `string => string` | Capture-type icon markup (delegates to `services/icons.js`) |
 
 ---

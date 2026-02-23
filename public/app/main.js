@@ -52,6 +52,7 @@ function hydrateChatFromStorage(session) {
   store.setState({
     chatMessages: restored?.chatMessages || [],
     chatCitations: restored?.chatCitations || [],
+    chatPendingFollowUps: restored?.chatPendingFollowUps || [],
   });
 }
 
@@ -63,23 +64,31 @@ function startChatPersistence(session) {
 
   let prevMessages = store.getState().chatMessages;
   let prevCitations = store.getState().chatCitations;
+  let prevPendingFollowUps = store.getState().chatPendingFollowUps;
 
   savePersistedChatState(storage, session, {
     chatMessages: prevMessages,
     chatCitations: prevCitations,
+    chatPendingFollowUps: prevPendingFollowUps,
   });
 
   const unsubscribe = store.subscribe((nextState) => {
-    if (nextState.chatMessages === prevMessages && nextState.chatCitations === prevCitations) {
+    if (
+      nextState.chatMessages === prevMessages
+      && nextState.chatCitations === prevCitations
+      && nextState.chatPendingFollowUps === prevPendingFollowUps
+    ) {
       return;
     }
 
     prevMessages = nextState.chatMessages;
     prevCitations = nextState.chatCitations;
+    prevPendingFollowUps = nextState.chatPendingFollowUps;
 
     savePersistedChatState(storage, session, {
       chatMessages: nextState.chatMessages,
       chatCitations: nextState.chatCitations,
+      chatPendingFollowUps: nextState.chatPendingFollowUps,
     });
   });
 
@@ -102,6 +111,7 @@ async function handleSignOut() {
     accessedIds: [],
     chatMessages: [],
     chatCitations: [],
+    chatPendingFollowUps: [],
     chatContext: { type: "home" },
   });
   mountAuthGate();

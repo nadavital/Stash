@@ -11,6 +11,21 @@ function normalizeNoteComments(rawComments = []) {
     .filter((entry) => entry.text);
 }
 
+function toTitleMetadataPatch({
+  title = "",
+  source = "",
+  editedByUser = false,
+} = {}) {
+  const normalizedTitle = String(title || "").trim();
+  const normalizedSource = String(source || "").trim();
+  return {
+    title: normalizedTitle || null,
+    titleSource: normalizedSource || null,
+    titleEditedByUser: editedByUser === true,
+    titleAuto: editedByUser === true ? null : (normalizedTitle || null),
+  };
+}
+
 export function createMemoryMutationOps({
   resolveActor,
   normalizeSourceType,
@@ -167,7 +182,11 @@ export function createMemoryMutationOps({
       embedding: null,
       metadata: {
         ...metadata,
-        title: derivedTitle || linkTitle || null,
+        ...toTitleMetadataPatch({
+          title: derivedTitle || linkTitle || "",
+          source: explicitTitle ? "user" : (derivedTitle || linkTitle ? "auto" : ""),
+          editedByUser: Boolean(explicitTitle),
+        }),
         imageMime: imageData?.imageMime || null,
         imageSize: imageData?.imageSize || null,
         fileMime: uploadMime || null,
@@ -248,7 +267,11 @@ export function createMemoryMutationOps({
     const nextMetadata = title !== undefined
       ? {
           ...(existing.metadata || {}),
-          title: normalizedTitle || null,
+          ...toTitleMetadataPatch({
+            title: normalizedTitle || "",
+            source: "user",
+            editedByUser: true,
+          }),
         }
       : existing.metadata;
 
@@ -498,7 +521,13 @@ export function createMemoryMutationOps({
       project: existing.project || "General",
       metadata: {
         ...(existing.metadata || {}),
-        ...(hasTitle ? { title: normalizedTitle || null } : {}),
+        ...(hasTitle
+          ? toTitleMetadataPatch({
+              title: normalizedTitle || "",
+              source: "user",
+              editedByUser: true,
+            })
+          : {}),
         extractedContentEditedAt: nowIso(),
         extractedContentEditedBy: actorContext.userId,
       },

@@ -151,19 +151,10 @@ export async function handleChatRoutes(req, res, url, context) {
           scope,
           hasAttachment,
         });
-        // Fallback: avoid off-topic memory summaries for external/live requests.
-        let fallbackText = "";
-        if (likelyExternalIntent) {
-          fallbackText = "I hit a temporary issue while fetching live results. Please try again in a moment.";
-        } else {
-          const answer = citations
-            .slice(0, 4)
-            .map((entry) => `- ${buildAgentNoteTitle(entry.note, "Saved item")}`)
-            .join("\n");
-          fallbackText = answer
-            ? `Based on your saved notes:\n${answer}`
-            : "Something went wrong. Please try again.";
-        }
+        // Fallback: never switch to off-topic memory summaries on stream errors.
+        const fallbackText = likelyExternalIntent
+          ? "I hit a temporary issue while fetching live results. Please try again in a moment."
+          : "I hit a temporary issue while completing that. Please retry your last message.";
         writeSseEvent(res, "token", { token: fallbackText });
         writeSseEvent(res, "done", { done: true });
         res.end();

@@ -8,13 +8,24 @@ export function createQueryToolHandlers({ searchMemories }) {
         ? args.options.map((opt) => normalizeSingleSentence(opt, 60)).filter(Boolean).slice(0, 4)
         : [];
       const contextLine = normalizeSingleSentence(args.context, 120);
+      const answerMode = String(args.answerMode || "").trim().toLowerCase();
+      const validModes = new Set(["freeform_only", "choices_only", "choices_plus_freeform"]);
       if (!question) {
         throw new Error("ask_user_question requires question");
       }
+      if (!validModes.has(answerMode)) {
+        throw new Error("ask_user_question requires answerMode");
+      }
+      const resolvedOptions = answerMode === "choices_plus_freeform"
+        ? options.filter((option) => !isGenericOtherOption(option))
+        : options;
+      if (answerMode !== "freeform_only" && resolvedOptions.length === 0) {
+        throw new Error("ask_user_question requires options for choice answerMode");
+      }
       return {
         question,
-        options,
-        allowFreeform: args.allowFreeform !== false,
+        options: answerMode === "freeform_only" ? [] : resolvedOptions,
+        answerMode,
         context: contextLine,
       };
     },
@@ -37,4 +48,10 @@ export function createQueryToolHandlers({ searchMemories }) {
       };
     },
   };
+}
+
+function isGenericOtherOption(option = "") {
+  const value = String(option || "").trim().toLowerCase();
+  if (!value) return false;
+  return /^(other|something else|anything else|else|another option|not sure|none of these|none)\b/i.test(value);
 }

@@ -107,9 +107,6 @@ export function buildModalSummary(note) {
 }
 
 export function buildModalFullExtract(note) {
-  const extracted = String(note.markdownContent || note.rawContent || "").trim();
-  if (extracted) return extracted;
-
   const content = String(note.content || "").trim();
   if (content && !/^file:|^uploaded file:/i.test(content)) {
     return content;

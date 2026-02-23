@@ -162,6 +162,7 @@
   padding: var(--space-3);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent-soft) 30%, var(--surface-strong));
+  animation: chatQuestionReveal 180ms ease-out both;
 }
 
 .chat-question-label {
@@ -171,6 +172,13 @@
   text-transform: uppercase;
   font-weight: var(--weight-semibold);
   color: color-mix(in srgb, var(--accent-deep) 70%, var(--ink-secondary));
+}
+
+.chat-question-context {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-snug);
+  color: var(--ink-secondary);
 }
 
 .chat-question-text {
@@ -309,6 +317,17 @@
 @keyframes chatPendingPulse {
   0%, 100% { transform: scale(1); opacity: 0.35; }
   50% { transform: scale(1.15); opacity: 0.9; }
+}
+
+@keyframes chatQuestionReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ── Citations ─────────────────────────────────────────── */

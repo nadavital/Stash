@@ -51,6 +51,7 @@ export function initAppShell(els, { store, apiClient, auth }) {
     toast: (msg, tone) => _toastFn(msg, tone),
     onOpenCitation: (note) => _onOpenCitationFn(note),
     onWorkspaceAction: (action) => _onWorkspaceActionFn(action),
+    onAuthExpired: () => auth?.onSignOut?.(),
   });
   disposers.push(chatPanel.dispose);
 

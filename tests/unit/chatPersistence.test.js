@@ -53,12 +53,25 @@ describe("chat persistence", () => {
         },
         { note: {} },
       ],
+      chatPendingFollowUps: [
+        {
+          messageId: "msg-a1",
+          payload: {
+            question: "Which outcome matters most?",
+            answerMode: "choices_plus_freeform",
+            options: ["Option A", "Option B", "Something else"],
+          },
+        },
+        { messageId: "", payload: { question: "" } },
+      ],
     });
 
     assert.equal(state.chatMessages.length, 1);
     assert.equal(state.chatMessages[0].role, "assistant");
     assert.equal(state.chatCitations.length, 1);
     assert.equal(state.chatCitations[0].note.id, "note-1");
+    assert.equal(state.chatPendingFollowUps.length, 1);
+    assert.equal(state.chatPendingFollowUps[0].messageId, "msg-a1");
   });
 
   it("saves and loads persisted chat state", () => {
@@ -70,6 +83,16 @@ describe("chat persistence", () => {
         { role: "assistant", text: "answer", id: "a-1" },
       ],
       chatCitations: [{ note: { id: "n-1", title: "Note 1" } }],
+      chatPendingFollowUps: [
+        {
+          messageId: "a-1",
+          payload: {
+            question: "Which option?",
+            answerMode: "choices_only",
+            options: ["A", "B"],
+          },
+        },
+      ],
     };
 
     savePersistedChatState(storage, session, inputState);
@@ -80,6 +103,8 @@ describe("chat persistence", () => {
     assert.equal(loaded.chatMessages[0].text, "question");
     assert.equal(loaded.chatCitations.length, 1);
     assert.equal(loaded.chatCitations[0].note.id, "n-1");
+    assert.equal(loaded.chatPendingFollowUps.length, 1);
+    assert.equal(loaded.chatPendingFollowUps[0].payload.question, "Which option?");
   });
 
   it("handles corrupted persisted payloads gracefully", () => {
@@ -102,7 +127,7 @@ describe("chat persistence", () => {
     });
     assert.ok(storage.getItem(key));
 
-    savePersistedChatState(storage, session, { chatMessages: [], chatCitations: [] });
+    savePersistedChatState(storage, session, { chatMessages: [], chatCitations: [], chatPendingFollowUps: [] });
     assert.equal(storage.getItem(key), null);
   });
 

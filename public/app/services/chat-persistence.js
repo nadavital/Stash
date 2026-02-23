@@ -2,6 +2,7 @@ const CHAT_STORAGE_PREFIX = "stash:chat:v1";
 const MAX_MESSAGES = 100;
 const MAX_MESSAGE_TEXT_LENGTH = 12000;
 const MAX_CITATIONS = 24;
+const MAX_PENDING_FOLLOW_UPS = 8;
 const MAX_TEXT_FIELD_LENGTH = 2000;
 const MAX_URL_LENGTH = 2000;
 
@@ -19,7 +20,7 @@ function sanitizeMessage(entry, index = 0) {
   if (!role) return null;
 
   const text = String(entry.text || "").slice(0, MAX_MESSAGE_TEXT_LENGTH);
-  if (!text) return null;
+  if (!text && role !== "assistant") return null;
 
   const id = asTrimmedString(entry.id, 96) || `persisted-${role}-${index + 1}`;
   return { role, text, id };
@@ -62,6 +63,41 @@ function sanitizeCitation(entry, index = 0) {
   };
 }
 
+function sanitizePendingFollowUp(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const messageId = asTrimmedString(entry.messageId, 96);
+  if (!messageId) return null;
+
+  const source = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
+  const question = asTrimmedString(source.question, 240);
+  if (!question) return null;
+
+  const rawAnswerMode = asTrimmedString(source.answerMode, 40).toLowerCase();
+  const validModes = new Set(["freeform_only", "choices_only", "choices_plus_freeform"]);
+  let answerMode = validModes.has(rawAnswerMode) ? rawAnswerMode : "freeform_only";
+
+  let options = Array.isArray(source.options)
+    ? source.options.map((option) => asTrimmedString(option, 120)).filter(Boolean).slice(0, 4)
+    : [];
+  if (answerMode === "freeform_only") {
+    options = [];
+  } else if (options.length === 0) {
+    answerMode = "freeform_only";
+  }
+
+  const context = asTrimmedString(source.context, 240);
+
+  return {
+    messageId,
+    payload: {
+      question,
+      answerMode,
+      options,
+      ...(context ? { context } : {}),
+    },
+  };
+}
+
 export function buildChatStorageKey(session) {
   const workspaceId = asTrimmedString(session?.workspaceId, 96) || "workspace";
   const userId = asTrimmedString(session?.userId, 96) || "user";
@@ -79,7 +115,14 @@ export function sanitizeChatState(state) {
     ? raw.chatCitations.map((entry, index) => sanitizeCitation(entry, index)).filter(Boolean).slice(0, MAX_CITATIONS)
     : [];
 
-  return { chatMessages, chatCitations };
+  const chatPendingFollowUps = Array.isArray(raw.chatPendingFollowUps)
+    ? raw.chatPendingFollowUps
+        .map((entry) => sanitizePendingFollowUp(entry))
+        .filter(Boolean)
+        .slice(-MAX_PENDING_FOLLOW_UPS)
+    : [];
+
+  return { chatMessages, chatCitations, chatPendingFollowUps };
 }
 
 export function getBrowserStorage() {
@@ -112,7 +155,11 @@ export function savePersistedChatState(storage, session, state) {
   const safeState = sanitizeChatState(state);
 
   try {
-    if (!safeState.chatMessages.length && !safeState.chatCitations.length) {
+    if (
+      !safeState.chatMessages.length
+      && !safeState.chatCitations.length
+      && !safeState.chatPendingFollowUps.length
+    ) {
       if (typeof storage.removeItem === "function") {
         storage.removeItem(key);
       }

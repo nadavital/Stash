@@ -32,6 +32,24 @@ test("folder -> item -> back keeps folder items visible", async ({ page }) => {
   await expect(page.locator("#folder-items-grid .ui-empty", { hasText: "No items." })).toHaveCount(0);
 });
 
+test("chat stays seamless across navigation (no context divider rows)", async ({ page }) => {
+  const state = createMockWorkspaceState();
+  await installMockApi(page, { state });
+  await openApp(page);
+
+  await sendChatMessage(page, "quick check");
+  await expect(page.locator(".chat-msg--assistant").first()).toBeVisible();
+
+  await page.locator(".folder-pill", { hasText: "Focus" }).first().click();
+  await expect(page).toHaveURL(/#\/folder\/Focus$/);
+  await page.locator("#folder-items-grid .folder-file-tile-shell", { hasText: "Deep Work Checklist" }).first().click();
+  await expect(page).toHaveURL(/#\/item\/n1$/);
+  await page.locator("#item-breadcrumb a.folder-back-link").nth(0).click();
+  await expect(page).toHaveURL(/#\/$/);
+
+  await expect(page.locator(".chat-context-divider")).toHaveCount(0);
+});
+
 test("follow-up question card compacts after user answers", async ({ page }) => {
   const state = createMockWorkspaceState();
   await installMockApi(page, {
@@ -51,8 +69,8 @@ test("follow-up question card compacts after user answers", async ({ page }) => 
                 name: "ask_user_question",
                 result: {
                   question: "What neighborhood should I optimize for?",
-                  options: ["Downtown", "Near transit"],
-                  allowFreeform: true,
+                  options: ["Downtown", "Near transit", "Something else (type it)"],
+                  answerMode: "choices_plus_freeform",
                 },
               },
             },
@@ -77,12 +95,61 @@ test("follow-up question card compacts after user answers", async ({ page }) => 
   await openApp(page);
   await sendChatMessage(page, "Help me pick a coffee shop");
   await expect(page.locator(".chat-user-question")).toBeVisible();
+  await expect(page.locator(".chat-question-option", { hasText: "Something else" })).toHaveCount(0);
+  await expect(page.locator(".chat-msg--assistant .chat-msg-body").first()).toHaveText("");
 
   await sendChatMessage(page, "Downtown Palo Alto");
   const prompt = page.locator(".chat-msg--assistant .chat-user-question").first();
   await expect(prompt).toHaveClass(/is-answered/);
   await expect(prompt).toContainText("Follow-up answered");
-  await expect(prompt).toContainText("Answer: Downtown Palo Alto");
+  await expect(prompt).not.toContainText("Downtown Palo Alto");
+});
+
+test("unanswered follow-up card persists after refresh", async ({ page }) => {
+  const state = createMockWorkspaceState();
+  await installMockApi(page, {
+    state,
+    onChatRequest: async ({ callIndex }) => {
+      if (callIndex === 0) {
+        return {
+          events: [
+            { type: "citations", data: { citations: [] } },
+            {
+              type: "tool_result",
+              data: {
+                name: "ask_user_question",
+                result: {
+                  question: "What outcome should I optimize for tomorrow?",
+                  options: ["Understand Trai", "Run Cauldron locally"],
+                  answerMode: "choices_plus_freeform",
+                },
+              },
+            },
+            { type: "done", data: { done: true } },
+          ],
+        };
+      }
+      return {
+        events: [
+          { type: "citations", data: { citations: [] } },
+          { type: "token", data: { token: "follow-up handled" } },
+          { type: "done", data: { done: true } },
+        ],
+      };
+    },
+  });
+
+  await openApp(page);
+  await sendChatMessage(page, "help me plan tomorrow");
+  await expect(page.locator(".chat-user-question .chat-question-text")).toContainText(
+    "What outcome should I optimize for tomorrow?"
+  );
+
+  await page.reload();
+  await expect(page.locator("#chat-panel-input")).toBeVisible();
+  await expect(page.locator(".chat-user-question .chat-question-text")).toContainText(
+    "What outcome should I optimize for tomorrow?"
+  );
 });
 
 test("source chips are compact by default and expandable", async ({ page }) => {
@@ -207,4 +274,22 @@ test("second turn sends explicit recent chat history", async ({ page }) => {
   expect(String(history[0]?.text || "")).toContain("Help me find a coffee shop");
   expect(history[1]?.role).toBe("assistant");
   expect(String(history[1]?.text || "")).toContain("What city are you in?");
+});
+
+test("chat auth expiry signs user out to the sign-in gate", async ({ page }) => {
+  const state = createMockWorkspaceState();
+  await installMockApi(page, {
+    state,
+    onChatRequest: async () => ({
+      status: 401,
+      payload: { error: "Not authenticated" },
+    }),
+  });
+
+  await openApp(page);
+  await sendChatMessage(page, "help me plan tomorrow");
+
+  await expect(page.locator("#auth-gate-form")).toBeVisible();
+  await expect(page.locator("#auth-gate-title")).toContainText("Sign in to Stash");
+  await expect(page.locator("#chat-panel-input")).toHaveCount(0);
 });

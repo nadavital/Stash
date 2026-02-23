@@ -167,6 +167,69 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         }, delayMs);
       }
 
+      function applyWorkspaceResultPatch(result = null) {
+        if (!note || !result || typeof result !== "object") return false;
+        const patch = result.patch && typeof result.patch === "object" ? result.patch : null;
+        if (!patch) return false;
+
+        const nextNote = { ...note };
+        let changed = false;
+
+        if (typeof patch.content === "string" && patch.content !== nextNote.content) {
+          nextNote.content = patch.content;
+          changed = true;
+        }
+        if (typeof patch.summary === "string" && patch.summary !== nextNote.summary) {
+          nextNote.summary = patch.summary;
+          changed = true;
+        }
+        if (typeof patch.rawContent === "string" && patch.rawContent !== nextNote.rawContent) {
+          nextNote.rawContent = patch.rawContent;
+          changed = true;
+        }
+        if (typeof patch.markdownContent === "string" && patch.markdownContent !== nextNote.markdownContent) {
+          nextNote.markdownContent = patch.markdownContent;
+          changed = true;
+        }
+        if (typeof patch.project === "string" && patch.project !== nextNote.project) {
+          nextNote.project = patch.project;
+          changed = true;
+        }
+        if (Array.isArray(patch.tags)) {
+          const nextTags = patch.tags.map((tag) => String(tag || "").trim()).filter(Boolean);
+          if (JSON.stringify(nextTags) !== JSON.stringify(Array.isArray(nextNote.tags) ? nextNote.tags : [])) {
+            nextNote.tags = nextTags;
+            changed = true;
+          }
+        }
+        if (typeof patch.status === "string" && patch.status !== nextNote.status) {
+          nextNote.status = patch.status;
+          changed = true;
+        }
+        if (Number.isFinite(Number(patch.revision)) && Number(patch.revision) !== Number(nextNote.revision || 0)) {
+          nextNote.revision = Number(patch.revision);
+          changed = true;
+        }
+        if (typeof patch.title === "string") {
+          const nextTitle = patch.title.trim();
+          const currentTitle = String(nextNote?.metadata?.title || "").trim();
+          if (nextTitle && nextTitle !== currentTitle) {
+            nextNote.metadata = {
+              ...(nextNote.metadata || {}),
+              title: nextTitle,
+            };
+            changed = true;
+          }
+        }
+
+        if (!changed) return false;
+
+        note = nextNote;
+        shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+        renderNote();
+        return true;
+      }
+
       shell.setOnWorkspaceAction((action) => {
         const targetNoteId = actionNoteId(action);
         if (!targetNoteId || !note || targetNoteId !== note.id) return;
@@ -176,11 +239,17 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         setRemoteActivity(applyWorkspaceActionToLiveActivity(remoteActivityState, action));
 
         if (phase === "start") {
+          if (!(isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) && !isEditingNote) {
+            applyWorkspaceResultPatch(action?.result);
+          }
           return;
         }
 
         if (action?.error) {
-          scheduleRemoteActivityClear();
+          void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
+            .finally(() => {
+              scheduleRemoteActivityClear();
+            });
           return;
         }
 
@@ -194,6 +263,8 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           toast("Agent updated this file. Changes will refresh after your draft is saved.");
           return;
         }
+
+        applyWorkspaceResultPatch(action?.result);
 
         void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
           .finally(() => {

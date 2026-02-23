@@ -16,7 +16,8 @@
     "import:keep": "node scripts/import_google_keep_takeout.js",
     "db:migrate:pg": "node src/postgres/migrate.js",
     "db:verify:pg": "node scripts/verify_postgres_schema.js",
-    "db:setup:neon": "node scripts/setup_neon.js"
+    "db:setup:neon": "node scripts/setup_neon.js",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "firebase-admin": "^13.6.1",
@@ -24,6 +25,7 @@
     "pg": "^8.18.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.52.0",
     "linkedom": "^0.18.12"
   }
 }

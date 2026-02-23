@@ -481,7 +481,7 @@ class PostgresAuthRepository {
             WHEN 'admin' THEN 2
             ELSE 3
           END ASC,
-          m.created_at ASC
+          m.created_at DESC
         LIMIT $2
       `,
       [normalizedWorkspaceId, boundedLimit]

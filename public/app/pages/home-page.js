@@ -124,7 +124,7 @@ function queryPageElements(mountNode) {
   };
 }
 
-export function createHomePage({ store, apiClient, auth = null, shell }) {
+export function createHomePage({ store, apiClient, auth = null, shell, workspaceSync = null }) {
   return {
     async mount({ mountNode, navigate }) {
       mountNode.innerHTML = renderHomePageContent();
@@ -206,9 +206,28 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
         navigate(`#/item/${note.id}`);
       });
       shell.setOnWorkspaceAction((action) => {
+        if (workspaceSync) {
+          const hydratedRecent = workspaceSync.hydrateNotes(recentNotes);
+          const hydratedSearch = workspaceSync.hydrateNotes(searchResults);
+          const changed =
+            JSON.stringify(hydratedRecent) !== JSON.stringify(recentNotes) ||
+            JSON.stringify(hydratedSearch) !== JSON.stringify(searchResults);
+          if (changed) {
+            recentNotes = hydratedRecent;
+            searchResults = hydratedSearch;
+            renderView();
+          }
+        }
         const phase = String(action?.phase || "").trim().toLowerCase();
-        if (phase && phase !== "done") return;
-        refreshNotes();
+        const name = String(action?.name || "").trim().toLowerCase();
+        const hasError = Boolean(action?.error);
+        const shouldRefresh =
+          hasError ||
+          phase === "error" ||
+          ((phase === "done" || phase === "commit") && (name === "create_note" || name === "create_folder"));
+        if (shouldRefresh) {
+          refreshNotes();
+        }
       });
       // Search toggle
       on(els.toolbarSearchToggle, "click", () => {
@@ -359,11 +378,19 @@ export function createHomePage({ store, apiClient, auth = null, shell }) {
             includeSearch && searchResult?.status === "fulfilled" && Array.isArray(searchResult.value?.items)
               ? searchResult.value.items
               : [];
+          workspaceSync?.ingestNotes(recentNotes);
+          if (searchResults.length > 0) {
+            workspaceSync?.ingestNotes(searchResults);
+          }
+          recentNotes = workspaceSync ? workspaceSync.hydrateNotes(recentNotes) : recentNotes;
+          searchResults = workspaceSync ? workspaceSync.hydrateNotes(searchResults) : searchResults;
           setState({ notes: recentNotes });
           dbFolders =
             foldersResult?.status === "fulfilled" && Array.isArray(foldersResult.value?.items)
               ? foldersResult.value.items.filter((f) => !f.parentId)
               : [];
+          workspaceSync?.ingestFolders(dbFolders);
+          dbFolders = workspaceSync ? workspaceSync.hydrateFolders(dbFolders) : dbFolders;
           setFallbackHint(false);
           renderView();
         } catch (error) {

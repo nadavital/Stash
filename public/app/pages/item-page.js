@@ -55,6 +55,33 @@ function actionPhase(action = null) {
   return String(action?.phase || "").trim().toLowerCase();
 }
 
+function isRevisionConflictStatus(status) {
+  const code = Number(status);
+  return code === 409 || code === 412;
+}
+
+function buildAgentUndoSnapshot(note = null) {
+  if (!note) return null;
+  const title = String(note?.metadata?.title || note?.title || "").trim();
+  return {
+    title,
+    content: String(note?.content || ""),
+    rawContent: String(note?.rawContent || note?.content || ""),
+    markdownContent: String(note?.markdownContent || note?.rawContent || note?.content || ""),
+  };
+}
+
+function noteDiffersFromUndoSnapshot(note = null, snapshot = null) {
+  if (!note || !snapshot) return false;
+  const noteTitle = String(note?.metadata?.title || note?.title || "").trim();
+  return (
+    String(noteTitle) !== String(snapshot.title || "") ||
+    String(note?.content || "") !== String(snapshot.content || "") ||
+    String(note?.rawContent || note?.content || "") !== String(snapshot.rawContent || "") ||
+    String(note?.markdownContent || note?.rawContent || note?.content || "") !== String(snapshot.markdownContent || "")
+  );
+}
+
 function renderItemPageContent() {
   return `
     <section class="page page-item" style="position:relative;">
@@ -97,7 +124,7 @@ function queryPageElements(mountNode) {
   };
 }
 
-export function createItemPage({ store, apiClient, auth = null, shell }) {
+export function createItemPage({ store, apiClient, auth = null, shell, workspaceSync = null }) {
   return {
     async mount({ mountNode, route, navigate }) {
       const itemId = route.itemId || "";
@@ -120,10 +147,17 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
       let fileDraftState = { dirty: false, saving: false };
       let pendingRemoteRefresh = false;
       let remoteRefreshInFlight = false;
+      let queuedRemoteRefreshOptions = null;
       let isEditingNote = false;
       let detailController = null;
       let remoteActivityState = createLiveAgentActivityState();
       let remoteActivityClearTimer = null;
+      let agentUndoState = {
+        available: false,
+        pending: false,
+        snapshot: null,
+      };
+      let pendingAgentUndoSnapshot = null;
 
       function on(target, eventName, handler, options) {
         if (!target) return;
@@ -151,6 +185,18 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         detailController?.setRemoteActivity?.(remoteActivityState);
       }
 
+      function setAgentUndo(state = null) {
+        const snapshot = state?.snapshot || null;
+        const pending = Boolean(state?.pending);
+        const available = Boolean(state?.available && snapshot);
+        agentUndoState = {
+          available,
+          pending,
+          snapshot,
+        };
+        detailController?.setAgentUndo?.(agentUndoState);
+      }
+
       function scheduleRemoteActivityClear(delayMs = 3600) {
         if (remoteActivityClearTimer) {
           clearTimeout(remoteActivityClearTimer);
@@ -167,50 +213,103 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         }, delayMs);
       }
 
-      function applyWorkspaceResultPatch(result = null) {
-        if (!note || !result || typeof result !== "object") return false;
-        const patch = result.patch && typeof result.patch === "object" ? result.patch : null;
-        if (!patch) return false;
+      async function undoLatestAgentUpdate() {
+        if (!note || !isFileSource(note) || !agentUndoState?.available || !agentUndoState?.snapshot) return;
+        const snapshot = agentUndoState.snapshot;
+        setAgentUndo({ ...agentUndoState, pending: true });
+        try {
+          const result = await apiClient.updateNoteExtracted(note.id, {
+            title: snapshot.title,
+            content: snapshot.content,
+            rawContent: snapshot.rawContent,
+            markdownContent: snapshot.markdownContent,
+            requeueEnrichment: false,
+            baseRevision: note?.revision,
+          });
+          if (!isMounted) return;
+          if (result?.note) {
+            note = result.note;
+            workspaceSync?.ingestNotes([note]);
+            shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+          }
+          setAgentUndo({ available: false, pending: false, snapshot: null });
+          pendingAgentUndoSnapshot = null;
+          toast("Undid AI update");
+          renderNote();
+        } catch (err) {
+          if (isRevisionConflictStatus(err?.status)) {
+            await refreshCurrentNote({ refreshVersions: true });
+          }
+          setAgentUndo({ ...agentUndoState, pending: false });
+          toast("Couldn't undo AI update right now.", "error");
+        }
+      }
+
+      function applyWorkspaceActionPatch(action = null) {
+        if (!note || !action || typeof action !== "object") return false;
+        const patch = action.patch && typeof action.patch === "object"
+          ? action.patch
+          : action.result && typeof action.result?.patch === "object"
+            ? action.result.patch
+            : null;
+        const nextRevisionValue = Number(action.nextRevision);
+        const patchRevisionValue = Number(patch?.revision);
+        const expectedRevision = Number.isFinite(nextRevisionValue) && nextRevisionValue > 0
+          ? nextRevisionValue
+          : (Number.isFinite(patchRevisionValue) && patchRevisionValue > 0 ? patchRevisionValue : null);
+        const currentRevision = Number(note?.revision || 0);
+        if (
+          Number.isFinite(expectedRevision) &&
+          expectedRevision > 0 &&
+          currentRevision > 0 &&
+          expectedRevision < currentRevision
+        ) {
+          return false;
+        }
+        if (!patch && !Number.isFinite(nextRevisionValue)) return false;
 
         const nextNote = { ...note };
         let changed = false;
 
-        if (typeof patch.content === "string" && patch.content !== nextNote.content) {
+        if (typeof patch?.content === "string" && patch.content !== nextNote.content) {
           nextNote.content = patch.content;
           changed = true;
         }
-        if (typeof patch.summary === "string" && patch.summary !== nextNote.summary) {
+        if (typeof patch?.summary === "string" && patch.summary !== nextNote.summary) {
           nextNote.summary = patch.summary;
           changed = true;
         }
-        if (typeof patch.rawContent === "string" && patch.rawContent !== nextNote.rawContent) {
+        if (typeof patch?.rawContent === "string" && patch.rawContent !== nextNote.rawContent) {
           nextNote.rawContent = patch.rawContent;
           changed = true;
         }
-        if (typeof patch.markdownContent === "string" && patch.markdownContent !== nextNote.markdownContent) {
+        if (typeof patch?.markdownContent === "string" && patch.markdownContent !== nextNote.markdownContent) {
           nextNote.markdownContent = patch.markdownContent;
           changed = true;
         }
-        if (typeof patch.project === "string" && patch.project !== nextNote.project) {
+        if (typeof patch?.project === "string" && patch.project !== nextNote.project) {
           nextNote.project = patch.project;
           changed = true;
         }
-        if (Array.isArray(patch.tags)) {
+        if (Array.isArray(patch?.tags)) {
           const nextTags = patch.tags.map((tag) => String(tag || "").trim()).filter(Boolean);
           if (JSON.stringify(nextTags) !== JSON.stringify(Array.isArray(nextNote.tags) ? nextNote.tags : [])) {
             nextNote.tags = nextTags;
             changed = true;
           }
         }
-        if (typeof patch.status === "string" && patch.status !== nextNote.status) {
+        if (typeof patch?.status === "string" && patch.status !== nextNote.status) {
           nextNote.status = patch.status;
           changed = true;
         }
-        if (Number.isFinite(Number(patch.revision)) && Number(patch.revision) !== Number(nextNote.revision || 0)) {
+        if (Number.isFinite(nextRevisionValue) && nextRevisionValue > 0 && nextRevisionValue !== Number(nextNote.revision || 0)) {
+          nextNote.revision = nextRevisionValue;
+          changed = true;
+        } else if (Number.isFinite(Number(patch?.revision)) && Number(patch.revision) !== Number(nextNote.revision || 0)) {
           nextNote.revision = Number(patch.revision);
           changed = true;
         }
-        if (typeof patch.title === "string") {
+        if (typeof patch?.title === "string") {
           const nextTitle = patch.title.trim();
           const currentTitle = String(nextNote?.metadata?.title || "").trim();
           if (nextTitle && nextTitle !== currentTitle) {
@@ -230,17 +329,53 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         return true;
       }
 
+      function hydrateNoteFromWorkspaceSync() {
+        if (!note || !workspaceSync) return false;
+        const canonical = workspaceSync.getNoteById(note.id);
+        if (!canonical) return false;
+        const nextNote = {
+          ...note,
+          ...canonical,
+          metadata: {
+            ...(note.metadata || {}),
+            ...(canonical.metadata || {}),
+          },
+        };
+        const changed = JSON.stringify({
+          title: String(note?.metadata?.title || ""),
+          content: String(note?.content || ""),
+          project: String(note?.project || ""),
+          summary: String(note?.summary || ""),
+          revision: Number(note?.revision || 0),
+          status: String(note?.status || ""),
+        }) !== JSON.stringify({
+          title: String(nextNote?.metadata?.title || ""),
+          content: String(nextNote?.content || ""),
+          project: String(nextNote?.project || ""),
+          summary: String(nextNote?.summary || ""),
+          revision: Number(nextNote?.revision || 0),
+          status: String(nextNote?.status || ""),
+        });
+        if (!changed) return false;
+        note = nextNote;
+        shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+        renderNote();
+        return true;
+      }
+
       shell.setOnWorkspaceAction((action) => {
         const targetNoteId = actionNoteId(action);
         if (!targetNoteId || !note || targetNoteId !== note.id) return;
         const phase = actionPhase(action);
         if (!phase) return;
+        const actionId = String(action?.actionId || "").trim();
 
         setRemoteActivity(applyWorkspaceActionToLiveActivity(remoteActivityState, action));
 
         if (phase === "start") {
           if (!(isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) && !isEditingNote) {
-            applyWorkspaceResultPatch(action?.result);
+            applyWorkspaceActionPatch(action);
+            hydrateNoteFromWorkspaceSync();
           }
           return;
         }
@@ -255,18 +390,36 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
 
         if (isFileSource(note) && (fileDraftState.dirty || fileDraftState.saving)) {
           pendingRemoteRefresh = true;
+          if (!pendingAgentUndoSnapshot) {
+            pendingAgentUndoSnapshot = buildAgentUndoSnapshot(note);
+          }
           setRemoteActivity(pushLiveAgentActivityEntry(remoteActivityState, {
             actionName: "remote_update",
-            text: "Agent update queued until your draft is saved",
+            text: "Agent update pending",
             status: "queued",
           }));
-          toast("Agent updated this file. Changes will refresh after your draft is saved.");
           return;
         }
 
-        applyWorkspaceResultPatch(action?.result);
+        if (isFileSource(note) && (phase === "commit" || phase === "done")) {
+          const snapshot = buildAgentUndoSnapshot(note);
+          if (snapshot && actionId) {
+            pendingAgentUndoSnapshot = snapshot;
+          } else if (snapshot && !pendingAgentUndoSnapshot) {
+            pendingAgentUndoSnapshot = snapshot;
+          }
+        }
 
-        void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
+        applyWorkspaceActionPatch(action);
+        hydrateNoteFromWorkspaceSync();
+        const minRevision = Number(note?.revision || 0);
+
+        void refreshCurrentNote({
+          refreshVersions: true,
+          clearRemoteActivity: false,
+          markAgentUpdated: true,
+          minRevision: Number.isFinite(minRevision) && minRevision > 0 ? minRevision : 0,
+        })
           .finally(() => {
             scheduleRemoteActivityClear();
           });
@@ -325,10 +478,11 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           try {
             const result = await apiClient.addNoteComment(note.id, { text });
             if (!isMounted) return null;
-            if (result?.note) {
-              note = result.note?.note || result.note;
-              shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
-            }
+          if (result?.note) {
+            note = result.note?.note || result.note;
+            workspaceSync?.ingestNotes([note]);
+            shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+          }
             const refreshedVersions = await apiClient.fetchNoteVersions(note.id).catch(() => null);
             if (refreshedVersions?.items) versions = refreshedVersions.items;
             toast("Comment added");
@@ -425,6 +579,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           if (!isMounted) return;
           if (result?.note) {
             note = result.note;
+            workspaceSync?.ingestNotes([note]);
             shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
           }
           try {
@@ -435,7 +590,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           toast("Saved");
           renderNote();
         } catch (err) {
-          if (err?.status === 409) {
+          if (isRevisionConflictStatus(err?.status)) {
             toast("This item changed elsewhere. Reloading latest version...", "error");
             await refreshCurrentNote({ refreshVersions: true });
             return;
@@ -494,6 +649,8 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           await apiClient.batchMoveNotes([note.id], target);
           if (!isMounted) return;
           note.project = target;
+          workspaceSync?.ingestNotes([note]);
+          shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
           toast("Moved");
           renderNote();
         } catch {
@@ -539,6 +696,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           if (!isMounted) return;
           if (result?.note) {
             note = { ...note, ...result.note };
+            workspaceSync?.ingestNotes([note]);
           } else {
             note.status = "pending";
           }
@@ -574,8 +732,24 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         setActionButtonMarkup(activityBtn, { icon: ACTIVITY_ICON, label: activityLabel });
       }
 
-      async function refreshCurrentNote({ refreshVersions = false, clearRemoteActivity = false } = {}) {
-        if (!note || remoteRefreshInFlight) return;
+      async function refreshCurrentNote({
+        refreshVersions = false,
+        clearRemoteActivity = false,
+        markAgentUpdated = false,
+        minRevision = 0,
+      } = {}) {
+        if (!note) return;
+        if (remoteRefreshInFlight) {
+          const queued = queuedRemoteRefreshOptions || {};
+          queuedRemoteRefreshOptions = {
+            refreshVersions: Boolean(queued.refreshVersions || refreshVersions),
+            clearRemoteActivity: Boolean(queued.clearRemoteActivity || clearRemoteActivity),
+            markAgentUpdated: Boolean(queued.markAgentUpdated || markAgentUpdated),
+            minRevision: Math.max(Number(queued.minRevision || 0), Number(minRevision || 0)),
+          };
+          return;
+        }
+        const beforeRefresh = note ? { ...note } : null;
         remoteRefreshInFlight = true;
         try {
           const [noteResult, versionsResult] = await Promise.all([
@@ -584,8 +758,26 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           ]);
           if (!isMounted) return;
           if (noteResult?.note) {
-            note = noteResult.note;
-            shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+            const currentRevision = Number(note?.revision || 0);
+            const canonicalRevision = Number(workspaceSync?.getNoteById(note.id)?.revision || 0);
+            const requiredRevision = Math.max(currentRevision, canonicalRevision, Number(minRevision || 0));
+            const fetchedRevision = Number(noteResult.note?.revision || 0);
+            const hasStaleFetch =
+              fetchedRevision > 0 &&
+              requiredRevision > 0 &&
+              fetchedRevision < requiredRevision;
+            if (!hasStaleFetch) {
+              note = noteResult.note;
+              workspaceSync?.ingestNotes([note]);
+              shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
+            }
+            if (markAgentUpdated && isFileSource(note)) {
+              const snapshot = pendingAgentUndoSnapshot || buildAgentUndoSnapshot(beforeRefresh);
+              if (snapshot && noteDiffersFromUndoSnapshot(note, snapshot)) {
+                setAgentUndo({ available: true, pending: false, snapshot });
+              }
+              pendingAgentUndoSnapshot = null;
+            }
           }
           if (versionsResult?.items) {
             versions = versionsResult.items;
@@ -599,6 +791,11 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           if (clearRemoteActivity) {
             setRemoteActivity(createLiveAgentActivityState());
           }
+          if (queuedRemoteRefreshOptions) {
+            const nextOptions = { ...queuedRemoteRefreshOptions };
+            queuedRemoteRefreshOptions = null;
+            void refreshCurrentNote(nextOptions);
+          }
         }
       }
 
@@ -611,6 +808,8 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
           relatedNotes,
           isEditing: isEditingNote,
           remoteActivity: remoteActivityState,
+          agentUndo: agentUndoState,
+          onUndoAgentUpdate: undoLatestAgentUpdate,
           onNavigate(id) {
             navigate(`#/item/${encodeURIComponent(id)}`);
           },
@@ -628,11 +827,12 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
                 if (!isMounted) return result;
                 if (result?.note) {
                   note = result.note;
+                  workspaceSync?.ingestNotes([note]);
                   shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
                 }
                 return result;
               } catch (err) {
-                if (err?.status === 409) {
+                if (isRevisionConflictStatus(err?.status)) {
                   let latestNote = err?.payload?.conflict?.currentNote || null;
                   if (!latestNote) {
                     try {
@@ -644,6 +844,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
                   }
                   if (latestNote) {
                     note = latestNote;
+                    workspaceSync?.ingestNotes([note]);
                     shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
                   }
                   return {
@@ -664,7 +865,13 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
             };
             if (pendingRemoteRefresh && !fileDraftState.dirty && !fileDraftState.saving) {
               pendingRemoteRefresh = false;
-              void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
+              const minRevision = Number(note?.revision || 0);
+              void refreshCurrentNote({
+                refreshVersions: true,
+                clearRemoteActivity: false,
+                markAgentUpdated: true,
+                minRevision: Number.isFinite(minRevision) && minRevision > 0 ? minRevision : 0,
+              })
                 .finally(() => {
                   scheduleRemoteActivityClear();
                 });
@@ -705,6 +912,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
 
         if (noteResult.status === "fulfilled" && noteResult.value?.note) {
           note = noteResult.value.note;
+          workspaceSync?.ingestNotes([note]);
         } else {
           // Fallback: try store (note was loaded on previous page)
           note = findNoteInStore();
@@ -758,7 +966,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
               pendingRemoteRefresh = true;
               setRemoteActivity(pushLiveAgentActivityEntry(remoteActivityState, {
                 actionName: "remote_update",
-                text: "Remote update queued until your draft is saved",
+                text: "Agent update pending",
                 status: "queued",
               }));
               return;
@@ -768,11 +976,20 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
               text: "Applying remote workspace update...",
               status: "running",
             }));
-            void refreshCurrentNote({ refreshVersions: true, clearRemoteActivity: false })
+            if (!pendingAgentUndoSnapshot) {
+              pendingAgentUndoSnapshot = buildAgentUndoSnapshot(note);
+            }
+            const minRevision = Number(note?.revision || 0);
+            void refreshCurrentNote({
+              refreshVersions: true,
+              clearRemoteActivity: false,
+              markAgentUpdated: true,
+              minRevision: Number.isFinite(minRevision) && minRevision > 0 ? minRevision : 0,
+            })
               .finally(() => {
                 setRemoteActivity(pushLiveAgentActivityEntry(remoteActivityState, {
                   actionName: "remote_update",
-                  text: "Remote workspace update applied",
+                  text: "Updated by AI just now",
                   status: "success",
                 }));
                 scheduleRemoteActivityClear();
@@ -786,6 +1003,7 @@ export function createItemPage({ store, apiClient, auth = null, shell }) {
         }
         if (event.type === "job:complete" && event.result?.id === note.id) {
           note = { ...note, ...event.result, status: "ready" };
+          workspaceSync?.ingestNotes([note]);
           shell.setItemContext(note.id, buildNoteTitle(note), note.project || "");
           renderNote();
         }

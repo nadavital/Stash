@@ -194,6 +194,82 @@ export function initChatPanel(
     return next;
   }
 
+  function serializeErrorForDebug(error = null) {
+    const message = String(error?.message || error || "").trim();
+    const name = String(error?.name || "").trim();
+    const status = Number(error?.status || error?.payload?.status || 0);
+    const payload = error?.payload && typeof error.payload === "object" ? { ...error.payload } : null;
+    const stack = typeof error?.stack === "string"
+      ? error.stack.split("\n").slice(0, 5).join("\n")
+      : "";
+    if (!message && !name && !status && !payload && !stack) return null;
+    return {
+      ...(name ? { name } : {}),
+      ...(message ? { message } : {}),
+      ...(status ? { status } : {}),
+      ...(payload ? { payload } : {}),
+      ...(stack ? { stack } : {}),
+      at: new Date().toISOString(),
+    };
+  }
+
+  function extractUserFacingErrorText(text = "") {
+    const value = String(text || "").trim();
+    if (!value) return "";
+    const normalized = value.toLowerCase();
+    if (
+      normalized.startsWith("i hit a temporary issue") ||
+      normalized.startsWith("failed to get answer") ||
+      normalized.startsWith("session expired")
+    ) {
+      return value;
+    }
+    return "";
+  }
+
+  function toToolErrorFallbackMessage(errorText = "") {
+    const normalized = String(errorText || "").trim();
+    if (!normalized) return "";
+    if (/revision conflict/i.test(normalized)) {
+      return "I couldn't save that update because the item changed while I was editing it. Please retry.";
+    }
+    return "I hit a temporary issue while completing that. Please retry your last message.";
+  }
+
+  function buildLastDebugErrorSummary(traces = []) {
+    if (!Array.isArray(traces) || traces.length === 0) return null;
+    for (let index = traces.length - 1; index >= 0; index -= 1) {
+      const trace = traces[index];
+      if (!trace || typeof trace !== "object") continue;
+      const events = Array.isArray(trace.events) ? trace.events : [];
+      const debugErrorEvent = [...events]
+        .reverse()
+        .find((entry) => entry?.type === "debug_error" && entry?.error);
+      const toolErrorEvent = [...events]
+        .reverse()
+        .find((entry) => entry?.type === "tool_result" && entry?.ok === false && entry?.error);
+      const userFacingMessage = String(
+        trace.userFacingError || extractUserFacingErrorText(trace.assistantText || "")
+      ).trim();
+      const message = String(
+        debugErrorEvent?.error?.message
+          || trace.error
+          || toolErrorEvent?.error
+          || userFacingMessage
+      ).trim();
+      if (!message && !userFacingMessage) continue;
+      return {
+        traceId: String(trace.id || "").trim(),
+        status: String(trace.status || "").trim() || "unknown",
+        finishedAt: trace.finishedAt || trace.startedAt || "",
+        message: message || userFacingMessage,
+        ...(userFacingMessage ? { userFacingMessage } : {}),
+        ...(debugErrorEvent?.error ? { detail: debugErrorEvent.error } : trace.errorDetail ? { detail: trace.errorDetail } : {}),
+      };
+    }
+    return null;
+  }
+
   function pushDebugTrace(entry = null) {
     if (!isLocalRuntime || !entry || typeof entry !== "object") return;
     debugTraces.push(entry);
@@ -218,6 +294,7 @@ export function initChatPanel(
       citations: Array.isArray(state.chatCitations) ? state.chatCitations : [],
       pendingFollowUps: Array.isArray(state.chatPendingFollowUps) ? state.chatPendingFollowUps : [],
       traces: debugTraces,
+      lastError: buildLastDebugErrorSummary(debugTraces),
     };
     const text = JSON.stringify(payload, null, 2);
     try {
@@ -301,12 +378,12 @@ export function initChatPanel(
       : (filteredOptions.length >= 2 ? "choices_plus_freeform" : "freeform_only");
     let resolvedMode =
       answerMode === "choices_only" && filteredOptions.length === 0 ? "freeform_only" : answerMode;
-    let resolvedOptions = resolvedMode === "freeform_only" ? [] : filteredOptions;
-    if (resolvedMode === "choices_plus_freeform") {
-      resolvedOptions = resolvedOptions.filter((option) => !isGenericOtherOption(option));
-    }
-    if (resolvedMode !== "freeform_only" && resolvedOptions.length === 0) {
+    let resolvedOptions = resolvedMode === "freeform_only"
+      ? []
+      : filteredOptions.filter((option) => !isGenericOtherOption(option));
+    if (resolvedMode !== "freeform_only" && resolvedOptions.length < 2) {
       resolvedMode = "freeform_only";
+      resolvedOptions = [];
     }
     return {
       question,
@@ -325,11 +402,21 @@ export function initChatPanel(
   function isGenericOtherOption(option = "") {
     const value = String(option || "").trim().toLowerCase();
     if (!value) return false;
-    return /^(other|something else|anything else|else|another option|not sure|none of these|none)\b/i.test(value);
+    return /^(other|something else|anything else|else|another option|not sure|none of these|none|custom|type it)\b/i.test(value);
+  }
+
+  function stripInternalReferenceTokens(value = "") {
+    return String(value || "")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1")
+      .replace(/\b(note|item)\s+N\d+\b/gi, "$1")
+      .replace(/\(\s*N\d+\s*\)/gi, "")
+      .replace(/\bN\d+\b/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
   }
 
   function normalizeSingleSentence(value, maxLen = 140) {
-    const text = String(value || "")
+    const text = stripInternalReferenceTokens(value)
       .replace(/\s+/g, " ")
       .trim();
     if (!text) return "";
@@ -441,7 +528,7 @@ export function initChatPanel(
     prompt.querySelector(".chat-question-hint")?.remove();
     const label = prompt.querySelector(".chat-question-label");
     if (label) {
-      label.textContent = "Follow-up answered";
+      label.textContent = "Answered";
     }
   }
 
@@ -480,7 +567,7 @@ export function initChatPanel(
   }
 
   function formatAssistantDisplayText(rawText = "") {
-    let text = String(rawText || "");
+    let text = stripInternalReferenceTokens(rawText);
     // Remove parenthesized markdown links like: ([example.com](https://example.com))
     text = text.replace(/\(\s*\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\s*\)/gi, "");
     // Replace remaining markdown links with label-only text.
@@ -1229,14 +1316,21 @@ export function initChatPanel(
 
     const typingEl = document.createElement("div");
     typingEl.className = "chat-typing-indicator";
-    typingEl.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    typingEl.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="chat-typing-label"></span>';
     els.chatPanelMessages?.appendChild(typingEl);
     els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
 
     let typingRemoved = false;
+    function setTypingLabel(label = "") {
+      const nextLabel = String(label || "").trim();
+      const labelEl = typingEl.querySelector(".chat-typing-label");
+      if (!labelEl) return;
+      labelEl.textContent = nextLabel || "Working...";
+    }
     function removeTyping() {
       if (!typingRemoved) { typingEl.remove(); typingRemoved = true; }
     }
+    setTypingLabel("Generating response...");
 
     const assistantMessageId = createMessageId();
     const assistantMsg = addMessage("assistant", "", assistantMessageId);
@@ -1245,6 +1339,25 @@ export function initChatPanel(
     let deferredWebSources = [];
     let deferredAskUserQuestions = [];
     let recoveryPromise = null;
+    const seenWorkspaceActionEvents = new Set();
+
+    function emitWorkspaceAction(phase, payload = null) {
+      if (!payload || typeof payload !== "object" || typeof onWorkspaceAction !== "function") return;
+      const actionId = String(payload.actionId || "").trim();
+      const name = String(payload.name || "").trim();
+      const dedupeKey = `${phase}:${actionId}:${name}`;
+      if (actionId && seenWorkspaceActionEvents.has(dedupeKey)) return;
+      if (actionId) seenWorkspaceActionEvents.add(dedupeKey);
+      const entityType = String(payload.entityType || "").trim().toLowerCase();
+      const entityId = String(payload.entityId || "").trim();
+      const resolvedEntityId = entityId || (entityType === "note" ? String(contextNoteId || "").trim() : "");
+      onWorkspaceAction({
+        ...payload,
+        phase,
+        ...(entityType === "note" && resolvedEntityId ? { noteId: resolvedEntityId, entityId: resolvedEntityId } : {}),
+        ...(entityType === "folder" && entityId ? { folderId: entityId } : {}),
+      });
+    }
 
     const requestPayload = {
       question: question || "Save this attachment to Stash.",
@@ -1280,9 +1393,7 @@ export function initChatPanel(
             deferredWebSources = Array.isArray(sources) ? sources : [];
           },
           onToken(token) {
-            removeTyping();
-            const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
-            if (toolStatus) toolStatus.remove();
+            setTypingLabel("Generating response...");
             setPendingState(true, "Generating response...");
             debugTrace.tokenCount += String(token || "").length;
             if (assistantMsg) {
@@ -1291,7 +1402,6 @@ export function initChatPanel(
             }
           },
           onToolCall(name, _status, noteId, toolEvent = null) {
-            removeTyping();
             const statusMap = {
               create_note: "Saving...",
               create_folder: "Creating folder...",
@@ -1306,6 +1416,7 @@ export function initChatPanel(
               ask_user_question: "Preparing a follow-up question...",
             };
             const pendingLabel = statusMap[name] || "Working...";
+            setTypingLabel(pendingLabel);
             setPendingState(true, pendingLabel);
             debugTrace.events.push({
               type: "tool_call",
@@ -1313,32 +1424,9 @@ export function initChatPanel(
               noteId: String(noteId || "").trim(),
               at: new Date().toISOString(),
             });
-            const statusEl = document.createElement("span");
-            statusEl.className = "chat-tool-status";
-            statusEl.textContent = pendingLabel;
-            if (assistantMsg) {
-              assistantMsg.appendChild(statusEl);
-              els.chatPanelMessages.scrollTop = els.chatPanelMessages.scrollHeight;
-            }
-            if (
-              (name === "update_note" || name === "update_note_markdown") &&
-              noteId &&
-              typeof onWorkspaceAction === "function"
-            ) {
-              const patch = toolEvent && typeof toolEvent === "object" && toolEvent.patch && typeof toolEvent.patch === "object"
-                ? toolEvent.patch
-                : null;
-              onWorkspaceAction({
-                phase: "start",
-                name,
-                noteId: String(noteId || "").trim(),
-                ...(patch ? { result: { patch } } : {}),
-              });
-            }
           },
-          onToolResult(name, result, error, noteIdFromEvent) {
-            const statusEl = assistantMsg?.querySelector(".chat-tool-status");
-            if (statusEl) statusEl.remove();
+          onToolResult(name, result, error, noteIdFromEvent, toolEvent = null) {
+            setTypingLabel(error ? "Recovering from tool error..." : "Finalizing response...");
             setPendingState(true, error ? "Recovering from tool error..." : "Finalizing response...");
             if (!error && name === "ask_user_question" && result && typeof result === "object") {
               if (deferredAskUserQuestions.length < 4) {
@@ -1365,30 +1453,41 @@ export function initChatPanel(
                 })
                 .catch(() => {});
             }
-            if (
-              (name === "create_note" ||
-                name === "create_folder" ||
-                name === "update_note" ||
-                name === "update_note_markdown" ||
-                name === "add_note_comment" ||
-                name === "restore_note_version" ||
-                name === "retry_note_enrichment") &&
-              typeof onWorkspaceAction === "function"
-            ) {
-              const resolvedNoteId = String(result?.noteId || noteIdFromEvent || "").trim();
-              onWorkspaceAction({
-                phase: "done",
-                name,
-                noteId: resolvedNoteId,
-                result: result || null,
-                error: error || null,
-              });
-            }
+          },
+          onWorkspaceActionStart(eventPayload) {
+            debugTrace.events.push({
+              type: "workspace_action_start",
+              at: new Date().toISOString(),
+              payload: eventPayload || null,
+            });
+            emitWorkspaceAction("start", eventPayload);
+          },
+          onWorkspaceActionProgress(eventPayload) {
+            debugTrace.events.push({
+              type: "workspace_action_progress",
+              at: new Date().toISOString(),
+              payload: eventPayload || null,
+            });
+            emitWorkspaceAction("progress", eventPayload);
+          },
+          onWorkspaceActionCommit(eventPayload) {
+            debugTrace.events.push({
+              type: "workspace_action_commit",
+              at: new Date().toISOString(),
+              payload: eventPayload || null,
+            });
+            emitWorkspaceAction("commit", eventPayload);
+          },
+          onWorkspaceActionError(eventPayload) {
+            debugTrace.events.push({
+              type: "workspace_action_error",
+              at: new Date().toISOString(),
+              payload: eventPayload || null,
+            });
+            emitWorkspaceAction("error", eventPayload);
           },
           onDone() {
             removeTyping();
-            const toolStatus = assistantMsg?.querySelector(".chat-tool-status");
-            if (toolStatus) toolStatus.remove();
             if (assistantMsg && deferredAskUserQuestions.length > 0) {
               const assistantTextForPrompt = getMessageRawText(assistantMsg);
               deferredAskUserQuestions.forEach((questionPayload) => {
@@ -1405,9 +1504,21 @@ export function initChatPanel(
               setMessageBodyText(assistantMsg, "assistant", "");
             }
             if (assistantMsg && !getMessageRawText(assistantMsg).trim() && !hasQuestionPrompt) {
-              setMessageBodyText(assistantMsg, "assistant", "No answer generated.");
+              const lastToolError = [...(debugTrace.events || [])]
+                .reverse()
+                .find((event) => event?.type === "tool_result" && event?.ok === false && event?.error);
+              const fallbackMessage = toToolErrorFallbackMessage(lastToolError?.error || "");
+              setMessageBodyText(
+                assistantMsg,
+                "assistant",
+                fallbackMessage || "No answer generated."
+              );
             }
             const assistantText = getMessageRawText(assistantMsg);
+            const userFacingError = extractUserFacingErrorText(assistantText);
+            if (userFacingError) {
+              debugTrace.userFacingError = userFacingError;
+            }
             const renderedSources = renderSourcesForAnswer({
               assistantText,
               citations: deferredCitations,
@@ -1428,11 +1539,25 @@ export function initChatPanel(
               trace,
             });
           },
+          onDebugError(errorPayload) {
+            if (!errorPayload || typeof errorPayload !== "object") return;
+            debugTrace.events.push({
+              type: "debug_error",
+              at: new Date().toISOString(),
+              error: errorPayload,
+            });
+            const message = String(errorPayload.message || "").trim();
+            if (message && !debugTrace.error) {
+              debugTrace.error = message;
+            }
+            debugTrace.errorDetail = errorPayload;
+          },
           onError(streamError) {
-            removeTyping();
             const statusCode = Number(streamError?.status || streamError?.payload?.status || 0);
             const authExpired = statusCode === 401 || /not authenticated/i.test(String(streamError?.message || ""));
+            const serializedError = serializeErrorForDebug(streamError);
             if (authExpired) {
+              removeTyping();
               const authText = "Session expired. Please sign in again.";
               if (assistantMsg) setMessageBodyText(assistantMsg, "assistant", authText);
               updateLastAssistantInStore(authText);
@@ -1440,12 +1565,16 @@ export function initChatPanel(
               if (typeof onAuthExpired === "function") onAuthExpired();
               debugTrace.status = "failed";
               debugTrace.error = authText;
+              debugTrace.userFacingError = authText;
+              if (serializedError) debugTrace.errorDetail = serializedError;
               debugTrace.finishedAt = new Date().toISOString();
               return;
             }
+            setTypingLabel("Recovering response...");
             setPendingState(true, "Recovering response...");
             debugTrace.status = "recovering";
             debugTrace.error = "Streaming error; switched to fallback ask";
+            if (serializedError) debugTrace.errorDetail = serializedError;
             debugTrace.finishedAt = new Date().toISOString();
             recoveryPromise = fallbackAsk(
               question || "Save this attachment to Stash.",
@@ -1464,10 +1593,12 @@ export function initChatPanel(
         await recoveryPromise;
       }
       return true;
-    } catch {
-      removeTyping();
+    } catch (streamSetupError) {
+      setTypingLabel("Recovering response...");
       debugTrace.status = "recovering";
       debugTrace.error = "Streaming request failed before events; switched to fallback ask";
+      const serializedError = serializeErrorForDebug(streamSetupError);
+      if (serializedError) debugTrace.errorDetail = serializedError;
       debugTrace.finishedAt = new Date().toISOString();
       await fallbackAsk(
         question || "Save this attachment to Stash.",
@@ -1481,6 +1612,7 @@ export function initChatPanel(
       );
       return true;
     } finally {
+      removeTyping();
       isAsking = false;
       setPendingState(false);
     }
@@ -1535,6 +1667,13 @@ export function initChatPanel(
         debugTrace.status = "completed-fallback";
         debugTrace.finishedAt = new Date().toISOString();
         debugTrace.assistantText = resultText;
+        const userFacingError = extractUserFacingErrorText(resultText);
+        if (userFacingError) {
+          debugTrace.userFacingError = userFacingError;
+          if (!debugTrace.error) {
+            debugTrace.error = "Server returned fallback error text";
+          }
+        }
       }
     } catch (error) {
       const statusCode = Number(error?.status || error?.payload?.status || 0);
@@ -1550,6 +1689,9 @@ export function initChatPanel(
         debugTrace.status = "failed";
         debugTrace.finishedAt = new Date().toISOString();
         debugTrace.error = String(error?.message || error || "Fallback ask failed");
+        debugTrace.userFacingError = failureText;
+        const serializedError = serializeErrorForDebug(error);
+        if (serializedError) debugTrace.errorDetail = serializedError;
       }
     }
   }

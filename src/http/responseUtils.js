@@ -1,9 +1,10 @@
-export function sendJson(res, statusCode, payload) {
+export function sendJson(res, statusCode, payload, extraHeaders = null) {
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
     "Access-Control-Allow-Origin": "*",
+    ...(extraHeaders && typeof extraHeaders === "object" ? extraHeaders : {}),
   });
   res.end(body);
 }

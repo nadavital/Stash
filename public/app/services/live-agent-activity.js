@@ -16,6 +16,20 @@ const ACTION_LABELS = Object.freeze({
   list_folder_collaborators: "Loading collaborators",
 });
 
+const NOTE_MUTATION_ACTIONS = new Set([
+  "create_note",
+  "update_note",
+  "update_note_markdown",
+  "update_note_attachment",
+  "add_note_comment",
+  "restore_note_version",
+  "retry_note_enrichment",
+]);
+
+function isNoteMutationAction(actionName = "") {
+  return NOTE_MUTATION_ACTIONS.has(String(actionName || "").trim());
+}
+
 function normalizeStatus(value, fallback = "success") {
   const normalized = String(value || "").trim().toLowerCase();
   if (["running", "success", "error", "queued"].includes(normalized)) {
@@ -30,6 +44,7 @@ function normalizeEntries(entries = []) {
     .filter((entry) => entry && typeof entry === "object")
     .map((entry) => ({
       id: String(entry.id || "").trim(),
+      actionId: String(entry.actionId || "").trim(),
       actionName: String(entry.actionName || "").trim(),
       text: String(entry.text || "").trim(),
       status: normalizeStatus(entry.status, "success"),
@@ -56,6 +71,7 @@ function trimEntries(entries = [], max = 8) {
 
 function createEntry({
   id = "",
+  actionId = "",
   actionName = "",
   text = "",
   status = "success",
@@ -65,6 +81,7 @@ function createEntry({
   if (!normalizedText) return null;
   return {
     id: String(id || "").trim() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    actionId: String(actionId || "").trim(),
     actionName: String(actionName || "").trim(),
     text: normalizedText,
     status: normalizeStatus(status, "success"),
@@ -78,10 +95,15 @@ function labelForAction(name = "") {
   return ACTION_LABELS[normalized] || "Working";
 }
 
-function withUpdatedEntry(entries = [], actionName = "", updater) {
+function withUpdatedEntry(entries = [], actionName = "", actionId = "", updater) {
   const nextEntries = [...entries];
+  const normalizedActionId = String(actionId || "").trim();
   for (let i = 0; i < nextEntries.length; i += 1) {
-    if (nextEntries[i].actionName !== actionName) continue;
+    if (normalizedActionId) {
+      if (String(nextEntries[i].actionId || "").trim() !== normalizedActionId) continue;
+    } else if (nextEntries[i].actionName !== actionName) {
+      continue;
+    }
     if (nextEntries[i].status !== "running") continue;
     const updated = updater(nextEntries[i], i);
     if (updated) {
@@ -103,11 +125,13 @@ export function createLiveAgentActivityState() {
 export function pushLiveAgentActivityEntry(state = null, {
   text = "",
   status = "success",
+  actionId = "",
   actionName = "",
   now = Date.now(),
 } = {}) {
   const base = normalizeState(state);
   const entry = createEntry({
+    actionId,
     actionName,
     text,
     status,
@@ -125,34 +149,55 @@ export function pushLiveAgentActivityEntry(state = null, {
 export function applyWorkspaceActionToLiveActivity(state = null, action = null, now = Date.now()) {
   const base = normalizeState(state);
   const actionName = String(action?.name || "").trim();
+  const actionId = String(action?.actionId || "").trim();
   const phase = String(action?.phase || "").trim().toLowerCase();
   if (!actionName || !phase) return base;
 
   const label = labelForAction(actionName);
   const stamp = makeTimestamp(now);
   const errorText = String(action?.error || "").trim();
+  const noteMutation = isNoteMutationAction(actionName);
 
-  if (phase === "start") {
-    const started = createEntry({
-      actionName,
-      text: `${label}...`,
+  if (phase === "start" || phase === "progress") {
+    const runningText = noteMutation ? "Agent editing..." : `${label}...`;
+    let entries = withUpdatedEntry(base.entries, actionName, actionId, (entry) => ({
+      ...entry,
       status: "running",
+      text: runningText,
       updatedAt: stamp,
-    });
-    if (!started) return base;
-    const entries = trimEntries([started, ...base.entries]);
+    }));
+    const hasRunningEntry = entries.some((entry) => (
+      (actionId ? String(entry.actionId || "").trim() === actionId : entry.actionName === actionName) &&
+      entry.status === "running"
+    ));
+    if (!hasRunningEntry) {
+      const started = createEntry({
+        actionId,
+        actionName,
+        text: runningText,
+        status: "running",
+        updatedAt: stamp,
+      });
+      if (started) {
+        entries = [started, ...entries];
+      }
+    }
+    entries = trimEntries(entries);
     return {
       active: true,
-      text: started.text,
+      text: runningText,
       entries,
     };
   }
 
-  if (phase !== "done") return base;
+  if (phase !== "commit" && phase !== "done" && phase !== "error") return base;
 
-  const doneStatus = errorText ? "error" : "success";
-  const doneText = errorText ? `${label} failed` : `${label} done`;
-  let entries = withUpdatedEntry(base.entries, actionName, (entry) => ({
+  const doneStatus = phase === "error" || errorText ? "error" : "success";
+  const doneText = doneStatus === "error"
+    ? (noteMutation ? "Couldn’t apply AI update" : `${label} failed`)
+    : (noteMutation ? "Updated by AI just now" : `${label} done`);
+
+  let entries = withUpdatedEntry(base.entries, actionName, actionId, (entry) => ({
     ...entry,
     status: doneStatus,
     text: doneText,
@@ -160,12 +205,13 @@ export function applyWorkspaceActionToLiveActivity(state = null, action = null, 
   }));
 
   const updatedExisting = entries.some((entry) => (
-    entry.actionName === actionName &&
+    (actionId ? String(entry.actionId || "").trim() === actionId : entry.actionName === actionName) &&
     entry.updatedAt === stamp &&
     entry.text === doneText
   ));
   if (!updatedExisting) {
     const completed = createEntry({
+      actionId,
       actionName,
       text: doneText,
       status: doneStatus,
@@ -183,4 +229,3 @@ export function applyWorkspaceActionToLiveActivity(state = null, action = null, 
     entries,
   };
 }
-

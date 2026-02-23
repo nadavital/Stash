@@ -43,6 +43,7 @@ export function initAppShell(els, { store, apiClient, auth }) {
   let _toastFn = () => {};
   let _onOpenCitationFn = () => {};
   let _onWorkspaceActionFn = () => {};
+  let _onWorkspaceActionGlobalFn = () => {};
 
   // Persistent: chat panel
   const chatPanel = initChatPanel(els, {
@@ -50,7 +51,10 @@ export function initAppShell(els, { store, apiClient, auth }) {
     store,
     toast: (msg, tone) => _toastFn(msg, tone),
     onOpenCitation: (note) => _onOpenCitationFn(note),
-    onWorkspaceAction: (action) => _onWorkspaceActionFn(action),
+    onWorkspaceAction: (action) => {
+      _onWorkspaceActionGlobalFn(action);
+      _onWorkspaceActionFn(action);
+    },
     onAuthExpired: () => auth?.onSignOut?.(),
   });
   disposers.push(chatPanel.dispose);
@@ -96,6 +100,9 @@ export function initAppShell(els, { store, apiClient, auth }) {
     },
     setOnWorkspaceAction(fn) {
       _onWorkspaceActionFn = fn || (() => {});
+    },
+    setOnWorkspaceActionGlobal(fn) {
+      _onWorkspaceActionGlobalFn = fn || (() => {});
     },
     toggleChat() {
       const chatPanelEl = els.appShell?.querySelector(".app-shell-chat-panel");

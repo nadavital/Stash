@@ -68,7 +68,7 @@ test("follow-up question card compacts after user answers", async ({ page }) => 
               data: {
                 name: "ask_user_question",
                 result: {
-                  question: "What neighborhood should I optimize for?",
+                  question: "Which folder should I move note N1 into?",
                   options: ["Downtown", "Near transit", "Something else (type it)"],
                   answerMode: "choices_plus_freeform",
                 },
@@ -76,7 +76,7 @@ test("follow-up question card compacts after user answers", async ({ page }) => 
             },
             {
               type: "token",
-              data: { token: "What neighborhood should I optimize for?" },
+              data: { token: "Which folder should I move note N1 into?" },
             },
             { type: "done", data: { done: true } },
           ],
@@ -95,13 +95,16 @@ test("follow-up question card compacts after user answers", async ({ page }) => 
   await openApp(page);
   await sendChatMessage(page, "Help me pick a coffee shop");
   await expect(page.locator(".chat-user-question")).toBeVisible();
+  await expect(page.locator(".chat-user-question .chat-question-text")).toContainText(
+    "Which folder should I move note into?"
+  );
   await expect(page.locator(".chat-question-option", { hasText: "Something else" })).toHaveCount(0);
   await expect(page.locator(".chat-msg--assistant .chat-msg-body").first()).toHaveText("");
 
   await sendChatMessage(page, "Downtown Palo Alto");
   const prompt = page.locator(".chat-msg--assistant .chat-user-question").first();
   await expect(prompt).toHaveClass(/is-answered/);
-  await expect(prompt).toContainText("Follow-up answered");
+  await expect(prompt).toContainText("Answered");
   await expect(prompt).not.toContainText("Downtown Palo Alto");
 });
 

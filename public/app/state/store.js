@@ -4,6 +4,8 @@ const DEFAULT_STATE = {
   imageDataUrl: null,
   imageName: "",
   notes: [],
+  notesById: {},
+  foldersById: {},
   renderedItems: [],
   loading: false,
   fallbackActive: false,

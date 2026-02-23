@@ -168,7 +168,7 @@ function queryPageElements(mountNode) {
   };
 }
 
-export function createFolderPage({ store, apiClient, auth = null, shell }) {
+export function createFolderPage({ store, apiClient, auth = null, shell, workspaceSync = null }) {
   return {
     async mount({ mountNode, route, navigate }) {
       const folderName = route.folderId || "general";
@@ -361,9 +361,34 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
         navigate(`#/item/${note.id}`);
       });
       shell.setOnWorkspaceAction((action) => {
+        if (workspaceSync) {
+          const currentFolder = String(folderMeta.name || "").trim().toLowerCase();
+          const hydratedRecent = workspaceSync
+            .hydrateNotes(recentNotes)
+            .filter((note) => String(note?.project || "").trim().toLowerCase() === currentFolder);
+          const hydratedSearch = workspaceSync
+            .hydrateNotes(searchResults)
+            .filter((note) => String(note?.project || "").trim().toLowerCase() === currentFolder);
+          const changed =
+            JSON.stringify(hydratedRecent) !== JSON.stringify(recentNotes) ||
+            JSON.stringify(hydratedSearch) !== JSON.stringify(searchResults);
+          if (changed) {
+            recentNotes = hydratedRecent;
+            searchResults = hydratedSearch;
+            renderView();
+          }
+        }
         const phase = String(action?.phase || "").trim().toLowerCase();
-        if (phase && phase !== "done") return;
-        refreshNotes();
+        const name = String(action?.name || "").trim().toLowerCase();
+        const hasError = Boolean(action?.error);
+        const shouldRefresh =
+          hasError ||
+          phase === "error" ||
+          ((phase === "done" || phase === "commit") &&
+            (name === "create_note" || name === "create_folder" || name === "update_note" || name === "update_note_attachment"));
+        if (shouldRefresh) {
+          refreshNotes();
+        }
       });
 
       const cleanupFolderActivityModal = initFolderActivityModal(els, {
@@ -595,15 +620,24 @@ export function createFolderPage({ store, apiClient, auth = null, shell }) {
             includeSearch && searchResult?.status === "fulfilled" && Array.isArray(searchResult.value?.items)
               ? searchResult.value.items
               : [];
+          workspaceSync?.ingestNotes(recentNotes);
+          if (searchResults.length > 0) {
+            workspaceSync?.ingestNotes(searchResults);
+          }
+          recentNotes = workspaceSync ? workspaceSync.hydrateNotes(recentNotes) : recentNotes;
+          searchResults = workspaceSync ? workspaceSync.hydrateNotes(searchResults) : searchResults;
           setState({ notes: recentNotes });
 
           if (folderMetaResult?.status === "fulfilled" && folderMetaResult.value?.folder) {
             dbFolderMeta = folderMetaResult.value.folder;
             folderMeta = normalizeRuntimeFolderMeta(dbFolderMeta, folderMeta.name);
+            workspaceSync?.ingestFolders([dbFolderMeta]);
             syncFolderHeader(folderMeta, mountNode);
             try {
               const childrenResult = await apiClient.fetchSubfolders(dbFolderMeta.id);
               subFolders = Array.isArray(childrenResult?.items) ? childrenResult.items : [];
+              workspaceSync?.ingestFolders(subFolders);
+              subFolders = workspaceSync ? workspaceSync.hydrateFolders(subFolders) : subFolders;
             } catch { subFolders = []; }
             if (dbFolderMeta.parentId) {
               updateBreadcrumb({ ...dbFolderMeta, color: folderMeta.color }, mountNode);

@@ -497,7 +497,7 @@ describe("API Integration", () => {
     await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
   });
 
-  it("PUT /api/notes/:id returns 409 for stale baseRevision", async () => {
+  it("PUT /api/notes/:id returns 412 for stale baseRevision", async () => {
     const { body: created } = await jsonFetch("/api/notes", {
       method: "POST",
       body: { content: "Revision test", sourceType: "text", project: "TestRevision" },
@@ -522,10 +522,73 @@ describe("API Integration", () => {
         baseRevision: initialRevision,
       },
     });
-    assert.equal(staleUpdate.status, 409);
+    assert.equal(staleUpdate.status, 412);
     assert.equal(Number(staleUpdate.body?.conflict?.baseRevision || 0), initialRevision);
     assert.equal(Number(staleUpdate.body?.conflict?.currentRevision || 0), initialRevision + 1);
     assert.equal(String(staleUpdate.body?.conflict?.currentNote?.id || ""), id);
+
+    await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  });
+
+  it("PUT /api/notes/:id accepts If-Match and returns ETag", async () => {
+    const { body: created, headers: createdHeaders } = await jsonFetch("/api/notes", {
+      method: "POST",
+      body: { content: "If-Match revision test", sourceType: "text", project: "TestIfMatch" },
+    });
+    const id = created.note.id;
+    const initialRevision = Number(created.note?.revision || 1);
+    assert.ok(String(createdHeaders?.etag || "").trim());
+
+    const firstUpdate = await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: {
+        "If-Match": `"${initialRevision}"`,
+      },
+      body: {
+        content: "If-Match revision test v2",
+      },
+    });
+    assert.equal(firstUpdate.status, 200);
+    assert.equal(Number(firstUpdate.body.note?.revision || 0), initialRevision + 1);
+    assert.ok(String(firstUpdate.headers?.etag || "").trim());
+
+    const staleUpdate = await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: {
+        "If-Match": `"${initialRevision}"`,
+      },
+      body: {
+        content: "If-Match stale write",
+      },
+    });
+    assert.equal(staleUpdate.status, 412);
+    assert.equal(Number(staleUpdate.body?.conflict?.baseRevision || 0), initialRevision);
+    assert.equal(Number(staleUpdate.body?.conflict?.currentRevision || 0), initialRevision + 1);
+    assert.ok(String(staleUpdate.headers?.etag || "").trim());
+
+    await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  });
+
+  it("PUT /api/notes/:id rejects mismatched If-Match and baseRevision", async () => {
+    const { body: created } = await jsonFetch("/api/notes", {
+      method: "POST",
+      body: { content: "Mismatch guard test", sourceType: "text", project: "TestIfMatch" },
+    });
+    const id = created.note.id;
+    const initialRevision = Number(created.note?.revision || 1);
+
+    const badUpdate = await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: {
+        "If-Match": `"${initialRevision + 1}"`,
+      },
+      body: {
+        content: "should fail",
+        baseRevision: initialRevision,
+      },
+    });
+    assert.equal(badUpdate.status, 400);
+    assert.match(String(badUpdate.body?.error || ""), /If-Match revision does not match baseRevision/i);
 
     await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
   });
@@ -563,7 +626,7 @@ describe("API Integration", () => {
     await jsonFetch(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" });
   });
 
-  it("PUT /api/notes/:id/extracted returns 409 for stale baseRevision", async () => {
+  it("PUT /api/notes/:id/extracted returns 412 for stale baseRevision", async () => {
     const fileDataUrl = "data:text/markdown;base64,IyBSZXZpc2lvbiBUZXN0IEZpbGUK";
     const { body: created } = await jsonFetch("/api/notes", {
       method: "POST",
@@ -602,7 +665,7 @@ describe("API Integration", () => {
         requeueEnrichment: false,
       },
     });
-    assert.equal(staleUpdate.status, 409);
+    assert.equal(staleUpdate.status, 412);
     assert.equal(Number(staleUpdate.body?.conflict?.baseRevision || 0), initialRevision);
     assert.equal(Number(staleUpdate.body?.conflict?.currentRevision || 0), initialRevision + 1);
     assert.equal(String(staleUpdate.body?.conflict?.currentNote?.id || ""), id);

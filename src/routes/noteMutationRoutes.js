@@ -1,3 +1,73 @@
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1 || Math.floor(parsed) !== parsed) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseIfMatchRevision(req) {
+  const rawHeader = req?.headers?.["if-match"];
+  const normalizedRaw = Array.isArray(rawHeader) ? String(rawHeader[0] || "").trim() : String(rawHeader || "").trim();
+  if (!normalizedRaw) {
+    return { value: null, error: "" };
+  }
+  if (normalizedRaw === "*") {
+    return { value: null, error: 'If-Match "*" is not supported; send a concrete revision.' };
+  }
+
+  const firstTag = normalizedRaw.split(",")[0]?.trim() || "";
+  if (!firstTag) {
+    return { value: null, error: "Invalid If-Match header." };
+  }
+  const weakStripped = firstTag.replace(/^W\//i, "").trim();
+  const unquoted = weakStripped.startsWith("\"") && weakStripped.endsWith("\"")
+    ? weakStripped.slice(1, -1).trim()
+    : weakStripped;
+  const withoutPrefix = unquoted.startsWith("rev-") ? unquoted.slice(4) : unquoted;
+  const parsed = parsePositiveInteger(withoutPrefix);
+  if (!parsed) {
+    return { value: null, error: "If-Match must be a positive integer revision (example: \"3\")." };
+  }
+  return { value: parsed, error: "" };
+}
+
+function resolveBaseRevision(req, body = {}) {
+  const headerRevision = parseIfMatchRevision(req);
+  if (headerRevision.error) {
+    return { value: undefined, error: headerRevision.error };
+  }
+
+  let bodyRevision = null;
+  if (body?.baseRevision !== undefined) {
+    bodyRevision = parsePositiveInteger(body.baseRevision);
+    if (!bodyRevision) {
+      return { value: undefined, error: "baseRevision must be a positive integer" };
+    }
+  }
+
+  if (headerRevision.value !== null && bodyRevision !== null && headerRevision.value !== bodyRevision) {
+    return { value: undefined, error: "If-Match revision does not match baseRevision body value" };
+  }
+
+  if (headerRevision.value !== null) {
+    return { value: headerRevision.value, error: "" };
+  }
+  if (bodyRevision !== null) {
+    return { value: bodyRevision, error: "" };
+  }
+  return { value: undefined, error: "" };
+}
+
+function isRevisionConflictError(error) {
+  return String(error?.code || "").trim().toUpperCase() === "REVISION_CONFLICT" || Boolean(error?.conflict);
+}
+
+function buildNoteEtag(revision) {
+  const parsed = parsePositiveInteger(revision);
+  return parsed ? `"${parsed}"` : "";
+}
+
 export async function handleNoteMutationRoutes(req, res, url, context) {
   const {
     actor,
@@ -95,7 +165,6 @@ export async function handleNoteMutationRoutes(req, res, url, context) {
     const hasContent = body.content !== undefined;
     const hasRawContent = body.rawContent !== undefined;
     const hasMarkdownContent = body.markdownContent !== undefined;
-    const hasBaseRevision = body.baseRevision !== undefined;
     if (!hasTitle && !hasContent && !hasRawContent && !hasMarkdownContent) {
       sendJson(res, 400, { error: "Nothing to update" });
       return true;
@@ -116,12 +185,10 @@ export async function handleNoteMutationRoutes(req, res, url, context) {
       sendJson(res, 400, { error: "markdownContent must be a string or null" });
       return true;
     }
-    if (hasBaseRevision) {
-      const parsedBaseRevision = Number(body.baseRevision);
-      if (!Number.isFinite(parsedBaseRevision) || parsedBaseRevision < 1) {
-        sendJson(res, 400, { error: "baseRevision must be a positive integer" });
-        return true;
-      }
+    const resolvedBaseRevision = resolveBaseRevision(req, body);
+    if (resolvedBaseRevision.error) {
+      sendJson(res, 400, { error: resolvedBaseRevision.error });
+      return true;
     }
     try {
       const note = await updateMemoryExtractedContent({
@@ -130,20 +197,26 @@ export async function handleNoteMutationRoutes(req, res, url, context) {
         content: body.content,
         rawContent: body.rawContent,
         markdownContent: body.markdownContent,
-        baseRevision: body.baseRevision,
+        baseRevision: resolvedBaseRevision.value,
         requeueEnrichment: body.requeueEnrichment === true,
         actor,
       });
-      sendJson(res, 200, { note });
+      const etag = buildNoteEtag(note?.revision);
+      sendJson(res, 200, { note }, etag ? { ETag: etag } : null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Update extracted content failed";
+      const statusCode = isRevisionConflictError(err)
+        ? 412
+        : resolveErrorStatus(err, msg.includes("not found") ? 404 : 400);
+      const etag = buildNoteEtag(err?.conflict?.currentRevision);
       sendJson(
         res,
-        resolveErrorStatus(err, msg.includes("not found") ? 404 : 400),
+        statusCode,
         {
           error: msg,
           ...(err?.conflict ? { conflict: err.conflict } : {}),
-        }
+        },
+        etag ? { ETag: etag } : null
       );
     }
     return true;
@@ -162,12 +235,10 @@ export async function handleNoteMutationRoutes(req, res, url, context) {
       sendJson(res, 400, { error: validation.errors.join("; ") });
       return true;
     }
-    if (body.baseRevision !== undefined) {
-      const parsedBaseRevision = Number(body.baseRevision);
-      if (!Number.isFinite(parsedBaseRevision) || parsedBaseRevision < 1) {
-        sendJson(res, 400, { error: "baseRevision must be a positive integer" });
-        return true;
-      }
+    const resolvedBaseRevision = resolveBaseRevision(req, body);
+    if (resolvedBaseRevision.error) {
+      sendJson(res, 400, { error: resolvedBaseRevision.error });
+      return true;
     }
     try {
       const note = await updateMemory({
@@ -177,19 +248,25 @@ export async function handleNoteMutationRoutes(req, res, url, context) {
         summary: body.summary,
         tags: body.tags,
         project: body.project,
-        baseRevision: body.baseRevision,
+        baseRevision: resolvedBaseRevision.value,
         actor,
       });
-      sendJson(res, 200, { note });
+      const etag = buildNoteEtag(note?.revision);
+      sendJson(res, 200, { note }, etag ? { ETag: etag } : null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Update failed";
+      const statusCode = isRevisionConflictError(err)
+        ? 412
+        : resolveErrorStatus(err, msg.includes("not found") ? 404 : 400);
+      const etag = buildNoteEtag(err?.conflict?.currentRevision);
       sendJson(
         res,
-        resolveErrorStatus(err, msg.includes("not found") ? 404 : 400),
+        statusCode,
         {
           error: msg,
           ...(err?.conflict ? { conflict: err.conflict } : {}),
-        }
+        },
+        etag ? { ETag: etag } : null
       );
     }
     return true;

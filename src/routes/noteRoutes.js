@@ -1,3 +1,9 @@
+function buildNoteEtag(revision) {
+  const parsed = Number(revision);
+  if (!Number.isFinite(parsed) || parsed < 1) return "";
+  return `"${Math.floor(parsed)}"`;
+}
+
 export async function handleNoteRoutes(req, res, url, context) {
   const {
     actor,
@@ -84,7 +90,8 @@ export async function handleNoteRoutes(req, res, url, context) {
     }
     try {
       const note = await getMemoryById({ id, actor });
-      sendJson(res, 200, { note });
+      const etag = buildNoteEtag(note?.revision);
+      sendJson(res, 200, { note }, etag ? { ETag: etag } : null);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Fetch failed";
       const statusCode = resolveErrorStatus(error, msg.includes("not found") ? 404 : 400);
@@ -210,7 +217,8 @@ export async function handleNoteRoutes(req, res, url, context) {
       },
       actor,
     });
-    sendJson(res, 201, { note });
+    const etag = buildNoteEtag(note?.revision);
+    sendJson(res, 201, { note }, etag ? { ETag: etag } : null);
     return true;
   }
 

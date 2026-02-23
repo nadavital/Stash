@@ -78,6 +78,8 @@ export function buildItemActivityEntries(note, versions = []) {
  * @param {(payload) => Promise}      opts.onEdit
  * @param {(state: {dirty: boolean, saving: boolean}) => void} [opts.onFileDraftStateChange]
  * @param {{active?: boolean, text?: string, entries?: Array<{text?: string, status?: string}>}} [opts.remoteActivity]
+ * @param {{available?: boolean, pending?: boolean}} [opts.agentUndo]
+ * @param {() => Promise<void>|void} [opts.onUndoAgentUpdate]
  */
 export function renderItemDetail(container, note, {
   relatedNotes = [],
@@ -86,6 +88,8 @@ export function renderItemDetail(container, note, {
   onEdit,
   onFileDraftStateChange,
   remoteActivity = null,
+  agentUndo = null,
+  onUndoAgentUpdate = null,
 }) {
   if (!note || !container) return;
 
@@ -254,11 +258,13 @@ export function renderItemDetail(container, note, {
     liveStatus.className = "item-file-live-status";
     liveStatus.textContent = "All changes saved";
 
-    liveSignals.append(liveRemote, liveStatus);
-    liveHeader.append(liveTitle, liveSignals);
+    const liveUndoBtn = document.createElement("button");
+    liveUndoBtn.type = "button";
+    liveUndoBtn.className = "item-file-live-undo hidden";
+    liveUndoBtn.textContent = "Undo";
 
-    const liveActivityList = document.createElement("ul");
-    liveActivityList.className = "item-file-live-activity hidden";
+    liveSignals.append(liveRemote, liveStatus, liveUndoBtn);
+    liveHeader.append(liveTitle, liveSignals);
 
     titleEl.classList.add("item-title--editable");
     titleEl.contentEditable = "true";
@@ -275,6 +281,7 @@ export function renderItemDetail(container, note, {
     let baselineTitle = String(titleEl.textContent || "").replace(/\s+/g, " ").trim();
     let inflight = false;
     let queued = false;
+    let undoPending = false;
 
     function readTitleText() {
       return String(titleEl.textContent || "").replace(/\s+/g, " ").trim();
@@ -310,50 +317,30 @@ export function renderItemDetail(container, note, {
     function setRemoteActivityState(state = null) {
       const active = Boolean(state?.active);
       const label = String(state?.text || "").trim();
-      const entries = Array.isArray(state?.entries)
-        ? state.entries
-            .map((entry) => ({
-              text: String(entry?.text || "").trim(),
-              status: String(entry?.status || "").trim().toLowerCase(),
-            }))
-            .filter((entry) => entry.text)
-            .slice(0, 6)
-        : [];
-      if (!active || !label) {
+      const displayText = active ? "Agent editing..." : label;
+      if (!displayText) {
         liveRemote.classList.add("hidden");
         liveRemote.classList.remove("is-active");
         liveRemote.textContent = "";
       } else {
-        liveRemote.textContent = label;
+        liveRemote.textContent = displayText;
         liveRemote.classList.remove("hidden");
-        liveRemote.classList.add("is-active");
+        liveRemote.classList.toggle("is-active", active);
       }
-      liveActivityList.innerHTML = "";
-      if (!entries.length) {
-        liveActivityList.classList.add("hidden");
+    }
+
+    function setUndoState(state = null) {
+      const available = Boolean(state?.available);
+      const pending = Boolean(state?.pending || undoPending);
+      if (!available) {
+        liveUndoBtn.classList.add("hidden");
+        liveUndoBtn.disabled = false;
+        liveUndoBtn.textContent = "Undo";
         return;
       }
-
-      liveActivityList.classList.remove("hidden");
-      entries.forEach((entry) => {
-        const row = document.createElement("li");
-        row.className = "item-file-live-activity-entry";
-
-        const textEl = document.createElement("span");
-        textEl.className = "item-file-live-activity-text";
-        textEl.textContent = entry.text;
-
-        const statusEl = document.createElement("span");
-        statusEl.className = "item-file-live-activity-status";
-        const normalizedStatus = ["running", "success", "error", "queued"].includes(entry.status)
-          ? entry.status
-          : "success";
-        statusEl.dataset.status = normalizedStatus;
-        statusEl.textContent = normalizedStatus;
-
-        row.append(textEl, statusEl);
-        liveActivityList.appendChild(row);
-      });
+      liveUndoBtn.classList.remove("hidden");
+      liveUndoBtn.disabled = pending;
+      liveUndoBtn.textContent = pending ? "Undoing..." : "Undo";
     }
 
     async function flushDraft(force = false) {
@@ -429,7 +416,7 @@ export function renderItemDetail(container, note, {
               break;
             }
 
-            updateLiveStatus("Remote edits detected. Auto-merging...", "saving");
+            updateLiveStatus("Another update came in. Syncing...", "saving");
             continue;
           }
 
@@ -453,9 +440,9 @@ export function renderItemDetail(container, note, {
         if (finalized) {
           updateLiveStatus(remoteOnlyRebase ? "Remote edits applied" : "All changes saved");
         } else if (sawConflict) {
-          updateLiveStatus("Remote edits conflict with your draft. Keep typing to resolve.", "error");
+          updateLiveStatus("Couldn’t sync automatically. Your draft is still safe.", "error");
         } else {
-          updateLiveStatus("Revision conflict. Keep typing to retry.", "error");
+          updateLiveStatus("Update couldn’t be applied yet. We’ll keep retrying.", "error");
         }
       } catch {
         updateLiveStatus("Save failed. Keep typing to retry.", "error");
@@ -511,12 +498,29 @@ export function renderItemDetail(container, note, {
       }
     };
 
+    liveUndoBtn.addEventListener("click", async () => {
+      if (undoPending || typeof onUndoAgentUpdate !== "function") return;
+      undoPending = true;
+      setUndoState(agentUndo);
+      try {
+        await onUndoAgentUpdate();
+      } finally {
+        undoPending = false;
+        setUndoState(agentUndo);
+      }
+    });
+
     editController.setRemoteActivity = (state) => {
       setRemoteActivityState(state);
     };
+    editController.setAgentUndo = (state) => {
+      agentUndo = state || null;
+      setUndoState(agentUndo);
+    };
     setRemoteActivityState(remoteActivity);
+    setUndoState(agentUndo);
     reportDraftState();
-    liveSection.append(liveHeader, liveActivityList, fileEditor.element);
+    liveSection.append(liveHeader, fileEditor.element);
     wrap.appendChild(liveSection);
   } else if (displayContent) {
     contentSection = document.createElement("div");

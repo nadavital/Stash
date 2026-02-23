@@ -62,3 +62,36 @@ Chat is one control surface, not the memory system.
 - Chat now auto-sends scoped context from route state (item -> `scope=item`, folder -> `scope=project`).
 - Streaming tool calls now inherit request scope/working set defaults to avoid context drift.
 - Next engineering step: UI surface for explicit scope switching and working-set management controls.
+
+## Next implementation checkpoint (2026-02-23)
+
+### Agent-controlled chat context (active)
+
+- [x] Replace heuristic intent routing with model-driven tool selection.
+- [x] Stop injecting full memory snippets into the user turn by default.
+- [x] Add a compact workspace context capsule to prompt instructions (scope, route, active item/folder, working set).
+- [x] Keep web search available and model-decided, without hardcoded conversational domains.
+- [x] Keep full current session chat history flowing through every turn (windowed for safety).
+- [x] Fix `get_note_raw_content` fallback so text notes with empty extracted fields are still readable/editable by agent tools.
+
+### Memory layering completeness (planned)
+
+- [ ] Add folder-level summary.
+- [ ] Add workspace-level summary.
+- [ ] Add user-level preference/profile summary.
+- [ ] Include layered summaries in context capsule before requesting full item content.
+
+### UX and reliability follow-through (planned)
+
+- [ ] Persist unresolved follow-up question cards across refresh and route changes.
+- [ ] Keep one in-chat pending indicator only (no duplicate loading affordances).
+- [ ] Ensure route context headers remain seamless while navigating.
+- [ ] On auth expiry, force clear sign-in transition (no partial stale chat state).
+- [ ] Add richer chat-debug payloads for request/response/tool and failure diagnosis.
+
+### Live collaboration and syncing (active)
+
+- [ ] Continue workspace sync adoption from page-local state to canonical store selectors.
+- [ ] Ensure breadcrumb/title/folder membership update instantly on chat mutations.
+- [ ] Expand streamed workspace action events for note + folder mutation visibility.
+- [ ] Add tests for move/retitle/live-edit refresh consistency.

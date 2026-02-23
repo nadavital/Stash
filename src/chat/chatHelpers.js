@@ -50,7 +50,7 @@ export function normalizeRecentChatMessages(rawMessages, max = 12) {
 export function isLikelyExternalInfoRequest(text = "") {
   const normalized = String(text || "").toLowerCase();
   if (!normalized.trim()) return false;
-  return /\b(coffee|cafe|restaurant|bar|date night|brunch|dinner|lunch|near me|open now|weather|traffic|flight|hotel|airbnb|event|concert|museum|park|things to do|itinerary|plan a trip|recommend)\b/.test(normalized);
+  return /\b(coffee|cafe|restaurant|bar|date night|brunch|dinner|lunch|near me|open now|weather|traffic|flight|hotel|airbnb|event|concert|museum|park|things to do|itinerary|plan a trip|recommend|look (?:it )?up|search (?:the )?(?:web|internet)|google|find online|check online|latest|current|today|right now|on github|github repo)\b/.test(normalized);
 }
 
 export function buildRecentConversationBlock(messages = [], maxMessages = 8, maxCharsPerMessage = 280) {

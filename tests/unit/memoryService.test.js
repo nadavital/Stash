@@ -5,15 +5,18 @@ let tokenize;
 let buildBm25Index;
 let lexicalScore;
 let resolveEnrichmentProject;
+let createMemoryQueryOps;
 
 before(async () => {
   process.env.DB_PROVIDER = process.env.DB_PROVIDER || "postgres";
   process.env.DATABASE_URL = process.env.DATABASE_URL || "postgres://example:example@localhost:5432/stash_test";
   const memoryService = await import("../../src/memoryService.js");
+  const queryMemoryOps = await import("../../src/memory/queryMemoryOps.js");
   tokenize = memoryService.tokenize;
   buildBm25Index = memoryService.buildBm25Index;
   lexicalScore = memoryService.lexicalScore;
   resolveEnrichmentProject = memoryService.resolveEnrichmentProject;
+  createMemoryQueryOps = queryMemoryOps.createMemoryQueryOps;
 });
 
 describe("tokenize", () => {
@@ -165,5 +168,108 @@ describe("resolveEnrichmentProject", () => {
       enrichmentProject: "AI Folder",
     });
     assert.equal(result, "AI Folder");
+  });
+});
+
+describe("getMemoryRawContent", () => {
+  function makeQueryOpsForNote(note) {
+    return createMemoryQueryOps({
+      resolveActor(actor) {
+        return actor || { workspaceId: "w1", userId: "u1", role: "owner" };
+      },
+      listVisibleNotesForActor: async () => [],
+      clampInt(value, min, max, fallback) {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return fallback;
+        return Math.max(min, Math.min(max, Math.floor(parsed)));
+      },
+      noteRepo: {
+        async getNoteById() {
+          return note;
+        },
+      },
+      assertCanReadNote: async () => {},
+      listSearchCandidatesForActor: async () => [],
+      tokenize: () => [],
+      buildBm25Index: () => ({ N: 0, termFreqs: [], avgDocLength: 0, docFreq: new Map() }),
+      bm25ScoreFromIndex: () => 0,
+      lexicalScore: () => 0,
+      normalizeScores: () => new Map(),
+      makeExcerpt: () => "",
+      getConsolidatedMemoryFilePath: () => "",
+      makeConsolidatedTemplate: () => "",
+      fs: {
+        readFile: async () => "",
+        writeFile: async () => {},
+      },
+      isWorkspaceManager: () => true,
+      collaborationRepo: {
+        listFolderMembershipsForUser: async () => [],
+      },
+      folderRepo: {
+        listAllFolders: async () => [],
+      },
+      normalizeFolderMemberRole: (role) => role,
+      roleAtLeast: () => false,
+      materializeCitation: () => ({}),
+      normalizeMemoryScope: (scope) => scope,
+      normalizeWorkingSetIds: (ids) => (Array.isArray(ids) ? ids : []),
+      createEmbedding: async () => [],
+      embeddingCache: new Map(),
+      pseudoEmbedding: () => [],
+      cosineSimilarity: () => 0,
+    });
+  }
+
+  it("falls back to top-level content when extracted fields are empty for text notes", async () => {
+    const note = {
+      id: "n1",
+      sourceType: "text",
+      content: "# Brainstorm template\n\n- item",
+      rawContent: "",
+      markdownContent: "",
+      summary: "template",
+      project: "text files",
+      fileName: "",
+      fileMime: "",
+      createdAt: "2026-02-23T00:00:00.000Z",
+      metadata: { title: "Brainstorm Template" },
+    };
+    const ops = makeQueryOpsForNote(note);
+    const result = await ops.getMemoryRawContent({
+      id: "n1",
+      includeMarkdown: true,
+      actor: { workspaceId: "w1", userId: "u1", role: "owner" },
+    });
+
+    assert.equal(result.rawContent, note.content);
+    assert.equal(result.markdownContent, note.content);
+    assert.equal(result.content, note.content);
+  });
+
+  it("does not backfill extracted fields from top-level content for file notes", async () => {
+    const note = {
+      id: "n2",
+      sourceType: "file",
+      content: "User caption",
+      rawContent: "",
+      markdownContent: "",
+      summary: "file summary",
+      project: "uploads",
+      fileName: "spec.pdf",
+      fileMime: "application/pdf",
+      createdAt: "2026-02-23T00:00:00.000Z",
+      metadata: { title: "Spec PDF" },
+    };
+    const ops = makeQueryOpsForNote(note);
+    const result = await ops.getMemoryRawContent({
+      id: "n2",
+      includeMarkdown: true,
+      actor: { workspaceId: "w1", userId: "u1", role: "owner" },
+    });
+
+    assert.equal(result.content, note.content);
+    assert.equal(result.rawContent, "");
+    assert.equal(result.markdownContent, "");
   });
 });

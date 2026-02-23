@@ -12,10 +12,8 @@ export async function handleChatRoutes(req, res, url, context) {
     readJsonBody,
     parseWorkingSetIds,
     normalizeRecentChatMessages,
-    isLikelyExternalInfoRequest,
     extractDomainsFromText,
     extractDomainFromUrl,
-    searchMemories,
     noteRepo,
     buildChatWebSearchTool,
     CHAT_TOOLS,
@@ -23,7 +21,6 @@ export async function handleChatRoutes(req, res, url, context) {
     createCitationNoteNameAliasMap,
     createStreamingResponse,
     extractOutputUrlCitations,
-    buildCitationBlock,
     CHAT_SYSTEM_PROMPT,
     createAgentToolHarness,
     resolveAgentToolArgs,
@@ -58,8 +55,8 @@ export async function handleChatRoutes(req, res, url, context) {
       }
       const {
         contextNoteId,
+        contextNote,
         contextNoteSourceUrl,
-        likelyExternalIntent,
         citations,
         webSearchDomains,
       } = await resolveStreamingChatSearchContext({
@@ -68,10 +65,7 @@ export async function handleChatRoutes(req, res, url, context) {
         question,
         scope,
         workingSetIds,
-        recentMessages,
-        searchMemories,
         noteRepo,
-        isLikelyExternalInfoRequest,
         extractDomainsFromText,
         extractDomainFromUrl,
       });
@@ -98,11 +92,10 @@ export async function handleChatRoutes(req, res, url, context) {
           scope,
           workingSetIds,
           project: String(body.project || ""),
-          likelyExternalIntent,
           contextNoteId,
+          contextNote,
           contextNoteSourceUrl,
           hasAttachment,
-          buildCitationBlock,
           CHAT_SYSTEM_PROMPT,
         });
         const harness = createAgentToolHarness({
@@ -145,16 +138,20 @@ export async function handleChatRoutes(req, res, url, context) {
         });
         res.end();
       } catch (error) {
+        const streamErrorMessage = error instanceof Error ? error.message : String(error);
         logger.error("chat_stream_failed", {
-          error: error instanceof Error ? error.message : String(error),
-          likelyExternalIntent,
+          error: streamErrorMessage,
           scope,
           hasAttachment,
         });
-        // Fallback: never switch to off-topic memory summaries on stream errors.
-        const fallbackText = likelyExternalIntent
-          ? "I hit a temporary issue while fetching live results. Please try again in a moment."
-          : "I hit a temporary issue while completing that. Please retry your last message.";
+        writeSseEvent(res, "debug_error", {
+          code: "chat_stream_failed",
+          message: streamErrorMessage,
+          scope,
+          hasAttachment,
+          at: new Date().toISOString(),
+        });
+        const fallbackText = "I hit a temporary issue while completing that. Please retry your last message.";
         writeSseEvent(res, "token", { token: fallbackText });
         writeSseEvent(res, "done", { done: true });
         res.end();

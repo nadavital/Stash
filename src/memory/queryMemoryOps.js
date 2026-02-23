@@ -70,16 +70,30 @@ export function createMemoryQueryOps({
     await assertCanReadNote(note, actorContext);
 
     const boundedMax = clampInt(maxChars, 200, 200000, 12000);
+    const normalizedSourceType = String(note.sourceType || "").trim().toLowerCase();
+    const topLevelContent = String(note.content || "");
+    const extractedRawContent = String(note.rawContent || "");
+    const extractedMarkdownContent = String(note.markdownContent || "");
+    const allowContentFallbackForExtracted = !["file", "image"].includes(normalizedSourceType);
+    const fallbackExtractedContent = allowContentFallbackForExtracted ? topLevelContent : "";
+    const resolvedRawContent = extractedRawContent || fallbackExtractedContent;
+    const resolvedMarkdownContent =
+      extractedMarkdownContent || extractedRawContent || fallbackExtractedContent;
+
     return {
       id: note.id,
+      revision: Number(note.revision || 0) || 0,
       sourceType: note.sourceType,
       fileName: note.fileName,
       fileMime: note.fileMime,
       project: note.project,
       createdAt: note.createdAt,
-      rawContent: String(note.rawContent || "").slice(0, boundedMax),
+      title: String(note?.metadata?.title || "").trim(),
+      summary: String(note.summary || ""),
+      content: topLevelContent.slice(0, boundedMax),
+      rawContent: resolvedRawContent.slice(0, boundedMax),
       markdownContent: includeMarkdown
-        ? String(note.markdownContent || "").slice(0, boundedMax)
+        ? resolvedMarkdownContent.slice(0, boundedMax)
         : undefined,
     };
   }

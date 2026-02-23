@@ -143,6 +143,13 @@ export function createAgentToolHarness({ actor = null, requestId = "", executeTo
 
   return {
     requestId: normalizedRequestId,
+    actor: actor
+      ? {
+          userId: normalizeText(actor.userId),
+          workspaceId: normalizeText(actor.workspaceId),
+          role: normalizeText(actor.role),
+        }
+      : null,
     traces,
     runToolCall,
   };

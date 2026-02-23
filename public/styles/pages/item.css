@@ -263,6 +263,31 @@
   color: var(--danger);
 }
 
+.item-file-live-undo {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.item-file-live-undo:hover {
+  opacity: 0.85;
+}
+
+.item-file-live-undo:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.item-file-live-undo.hidden {
+  display: none;
+}
+
 .item-file-live-activity {
   list-style: none;
   margin: 0 0 var(--space-3);

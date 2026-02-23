@@ -19,6 +19,7 @@ import {
   loadPersistedChatState,
   savePersistedChatState,
 } from "./services/chat-persistence.js";
+import { createWorkspaceSync } from "./services/workspace-sync.js";
 import { createStore } from "./state/store.js";
 
 const mountNode = document.getElementById("app-root");
@@ -38,12 +39,20 @@ let router = null;
 let disposeAuthGate = null;
 let disposeShell = null;
 let disposeChatPersistence = null;
+let workspaceSync = null;
 
 function stopChatPersistence() {
   if (typeof disposeChatPersistence === "function") {
     disposeChatPersistence();
     disposeChatPersistence = null;
   }
+}
+
+function stopWorkspaceSync() {
+  if (workspaceSync && typeof workspaceSync.dispose === "function") {
+    workspaceSync.dispose();
+  }
+  workspaceSync = null;
 }
 
 function hydrateChatFromStorage(session) {
@@ -105,6 +114,7 @@ async function handleSignOut() {
   const currentSession = getAuthSession();
   clearPersistedChatState(getBrowserStorage(), currentSession);
   stopChatPersistence();
+  stopWorkspaceSync();
   apiClient.logout();
   authContext.session = null;
   store.setState({
@@ -113,6 +123,8 @@ async function handleSignOut() {
     chatCitations: [],
     chatPendingFollowUps: [],
     chatContext: { type: "home" },
+    notesById: {},
+    foldersById: {},
   });
   mountAuthGate();
 }
@@ -134,6 +146,7 @@ function mountAppShell() {
     disposeShell();
     disposeShell = null;
   }
+  stopWorkspaceSync();
 
   const auth = {
     getSession: getAuthSession,
@@ -149,13 +162,17 @@ function mountAppShell() {
   const shell = initAppShell(shellEls, { store, apiClient, auth });
   disposeShell = shell.dispose;
   startChatPersistence(authSession);
+  workspaceSync = createWorkspaceSync({ store, apiClient });
+  shell.setOnWorkspaceActionGlobal((action) => {
+    workspaceSync?.applyAction(action);
+  });
 
   const contentSlot = shell.getContentSlot();
 
   const pages = {
-    home: createHomePage({ store, apiClient, auth, shell }),
-    folder: createFolderPage({ store, apiClient, auth, shell }),
-    item: createItemPage({ store, apiClient, auth, shell }),
+    home: createHomePage({ store, apiClient, auth, shell, workspaceSync }),
+    folder: createFolderPage({ store, apiClient, auth, shell, workspaceSync }),
+    item: createItemPage({ store, apiClient, auth, shell, workspaceSync }),
   };
 
   router = createRouter({
@@ -181,6 +198,7 @@ function mountAuthGate({ mode = "signin", email = "", name = "", error = "" } = 
   }
 
   stopChatPersistence();
+  stopWorkspaceSync();
 
   if (typeof disposeShell === "function") {
     disposeShell();

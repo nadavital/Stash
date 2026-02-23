@@ -1,4 +1,5 @@
 import { buildAgentNoteTitle } from "../chatHelpers.js";
+import { sanitizeCreateFields } from "./contentFormatGuards.js";
 
 function resolveAttachment(args, chatAttachment = null) {
   if (chatAttachment && (chatAttachment.fileDataUrl || chatAttachment.imageDataUrl)) {
@@ -15,7 +16,7 @@ function resolveAttachment(args, chatAttachment = null) {
 export function createCaptureToolHandlers({ createMemory }) {
   return {
     async create_note(args, actor, { chatAttachment = null } = {}) {
-      const content = String(args.content || "").trim();
+      const rawContent = String(args.content || "").trim();
       const sourceUrlArg = String(args.sourceUrl || "").trim();
       const attachment = resolveAttachment(args, chatAttachment);
       const attachmentPresent = Boolean(attachment?.fileDataUrl || attachment?.imageDataUrl);
@@ -28,6 +29,16 @@ export function createCaptureToolHandlers({ createMemory }) {
       } else if (requestedSourceType === "file" || requestedSourceType === "image") {
         sourceType = requestedSourceType;
       }
+      const sanitized = sanitizeCreateFields({
+        title: args.title,
+        content: rawContent,
+      }, {
+        sourceType,
+        fileMime: attachment?.fileMimeType || "",
+        fileName: attachment?.fileName || "",
+      });
+      const content = String(sanitized.content || "");
+      const title = String(sanitized.title || "");
       let sourceUrl = sourceUrlArg;
       if (!requestedSourceType && /^https?:\/\//i.test(content)) {
         sourceType = "link";
@@ -42,7 +53,7 @@ export function createCaptureToolHandlers({ createMemory }) {
       }
       const note = await createMemory({
         content,
-        title: String(args.title || "").trim(),
+        title,
         sourceType,
         sourceUrl,
         imageDataUrl: attachment?.imageDataUrl || null,

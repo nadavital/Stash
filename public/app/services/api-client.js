@@ -215,6 +215,14 @@ function parseError(payload, statusCode) {
   return error;
 }
 
+function buildIfMatchHeaderFromPayload(payload) {
+  const revision = Number(payload?.baseRevision);
+  if (!Number.isFinite(revision) || revision < 1) {
+    return {};
+  }
+  return { "If-Match": `"${Math.floor(revision)}"` };
+}
+
 async function jsonFetch(url, options = {}) {
   const {
     skipAuth = false,
@@ -606,7 +614,24 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return adaptAnswerResponse(response, "chat");
     },
 
-    async askStreaming(payload, { onCitations, onWebSources, onToken, onDone, onError, onToolCall, onToolResult, onToolTrace }) {
+    async askStreaming(
+      payload,
+      {
+        onCitations,
+        onWebSources,
+        onToken,
+        onDone,
+        onError,
+        onToolCall,
+        onToolResult,
+        onToolTrace,
+        onDebugError,
+        onWorkspaceActionStart,
+        onWorkspaceActionProgress,
+        onWorkspaceActionCommit,
+        onWorkspaceActionError,
+      }
+    ) {
       try {
         const token = getStoredSessionToken();
         const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
@@ -671,8 +696,23 @@ export function createApiClient({ adapterDebug = false } = {}) {
                 else if (eventType === "tool_result" && onToolResult) {
                   onToolResult(parsed.name, parsed.result || null, parsed.error || null, parsed.noteId || "", parsed);
                 }
+                else if (eventType === "workspace_action_start" && onWorkspaceActionStart) {
+                  onWorkspaceActionStart(parsed || null);
+                }
+                else if (eventType === "workspace_action_progress" && onWorkspaceActionProgress) {
+                  onWorkspaceActionProgress(parsed || null);
+                }
+                else if (eventType === "workspace_action_commit" && onWorkspaceActionCommit) {
+                  onWorkspaceActionCommit(parsed || null);
+                }
+                else if (eventType === "workspace_action_error" && onWorkspaceActionError) {
+                  onWorkspaceActionError(parsed || null);
+                }
                 else if (eventType === "tool_trace" && onToolTrace) {
                   onToolTrace(parsed || null);
+                }
+                else if (eventType === "debug_error" && onDebugError) {
+                  onDebugError(parsed || null);
                 }
                 else if (eventType === "done") fireDone();
               } catch {
@@ -813,6 +853,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
       if (!normalizedId) throw new Error("Missing id");
       return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}`, {
         method: "PUT",
+        headers: buildIfMatchHeaderFromPayload(payload),
         body: JSON.stringify(payload),
       });
     },
@@ -822,6 +863,7 @@ export function createApiClient({ adapterDebug = false } = {}) {
       if (!normalizedId) throw new Error("Missing id");
       return jsonFetch(`${API_ENDPOINTS.notes}/${encodeURIComponent(normalizedId)}/extracted`, {
         method: "PUT",
+        headers: buildIfMatchHeaderFromPayload(payload),
         body: JSON.stringify(payload || {}),
       });
     },
@@ -921,6 +963,18 @@ export function createApiClient({ adapterDebug = false } = {}) {
       });
       eventSource.addEventListener("activity", (e) => {
         try { onEvent({ type: "activity", ...JSON.parse(e.data) }); } catch { /* no-op */ }
+      });
+      eventSource.addEventListener("workspace_action_start", (e) => {
+        try { onEvent({ type: "workspace_action_start", ...JSON.parse(e.data) }); } catch { /* no-op */ }
+      });
+      eventSource.addEventListener("workspace_action_progress", (e) => {
+        try { onEvent({ type: "workspace_action_progress", ...JSON.parse(e.data) }); } catch { /* no-op */ }
+      });
+      eventSource.addEventListener("workspace_action_commit", (e) => {
+        try { onEvent({ type: "workspace_action_commit", ...JSON.parse(e.data) }); } catch { /* no-op */ }
+      });
+      eventSource.addEventListener("workspace_action_error", (e) => {
+        try { onEvent({ type: "workspace_action_error", ...JSON.parse(e.data) }); } catch { /* no-op */ }
       });
       eventSource.addEventListener("connected", () => {
         adapterLog("SSE connected");

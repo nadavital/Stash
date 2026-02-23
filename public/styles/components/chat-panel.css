@@ -288,6 +288,7 @@
 
 .chat-typing-indicator {
   display: inline-flex;
+  align-items: center;
   gap: 4px;
   padding: var(--space-2) 0;
   align-self: flex-start;
@@ -307,6 +308,13 @@
 
 .chat-typing-indicator .dot:nth-child(3) {
   animation-delay: 0.3s;
+}
+
+.chat-typing-label {
+  margin-left: var(--space-2);
+  font-size: var(--font-size-2xs);
+  color: var(--muted);
+  line-height: 1;
 }
 
 @keyframes chatTypingBounce {

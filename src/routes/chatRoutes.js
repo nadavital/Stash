@@ -1,3 +1,10 @@
+import {
+  buildStreamingPromptAndInput,
+  resolveStreamingChatSearchContext,
+} from "../chat/context/streamingChatContext.js";
+import { runStreamingChatOrchestrator } from "../chat/orchestrator/streamingChatOrchestrator.js";
+import { writeSseEvent } from "../chat/orchestrator/sseEvents.js";
+
 export async function handleChatRoutes(req, res, url, context) {
   const {
     actor,
@@ -49,41 +56,25 @@ export async function handleChatRoutes(req, res, url, context) {
         sendJson(res, 400, { error: "Missing question" });
         return true;
       }
-      const recentConversationText = recentMessages
-        .map((entry) => `${entry.role}: ${entry.text}`)
-        .join("\n");
-      const likelyExternalIntent = isLikelyExternalInfoRequest(`${question}\n${recentConversationText}`);
-      const contextNoteId = String(body.contextNoteId || "").trim();
-      let contextNoteSourceUrl = "";
-
-      // Pre-search for context
-      let citations = await searchMemories({
-        query: question,
-        project: body.project || "",
-        limit: Number(body.limit || 6),
+      const {
+        contextNoteId,
+        contextNoteSourceUrl,
+        likelyExternalIntent,
+        citations,
+        webSearchDomains,
+      } = await resolveStreamingChatSearchContext({
+        body,
         actor,
+        question,
         scope,
         workingSetIds,
-        contextNoteId,
+        recentMessages,
+        searchMemories,
+        noteRepo,
+        isLikelyExternalInfoRequest,
+        extractDomainsFromText,
+        extractDomainFromUrl,
       });
-
-      if (contextNoteId) {
-        try {
-          const contextNote = await noteRepo.getNoteById(contextNoteId, actor.workspaceId);
-          if (contextNote) {
-            contextNoteSourceUrl = String(contextNote.sourceUrl || "").trim();
-            citations = citations.filter((c) => String(c.note?.id || "") !== contextNoteId);
-            citations.unshift({ rank: 0, score: 1.0, note: contextNote });
-          }
-        } catch {
-          // best-effort
-        }
-      }
-      const questionDomains = extractDomainsFromText(question, 8);
-      const contextDomain = extractDomainFromUrl(contextNoteSourceUrl);
-      // Only hard-restrict web search when the user targets a specific URL/item.
-      // Folder/project citations should not silently narrow global web search.
-      const webSearchDomains = [...new Set([contextDomain, ...questionDomains].filter(Boolean))].slice(0, 100);
       const webSearchTool = buildChatWebSearchTool(webSearchDomains);
       const responseTools = webSearchTool ? [...CHAT_TOOLS, webSearchTool] : CHAT_TOOLS;
       const responseInclude = webSearchTool ? ["web_search_call.action.sources"] : undefined;
@@ -97,60 +88,23 @@ export async function handleChatRoutes(req, res, url, context) {
         "Access-Control-Allow-Origin": "*",
       });
 
-      res.write(`event: citations\ndata: ${JSON.stringify({ citations })}\n\n`);
+      writeSseEvent(res, "citations", { citations });
 
       try {
-        const context = citations.length ? buildCitationBlock(citations) : "";
-        let systemPrompt = CHAT_SYSTEM_PROMPT;
-        const scopeHints = [];
-        if (scope !== "all") {
-          scopeHints.push(`Active memory scope is "${scope}".`);
-        }
-        if (body.project) {
-          scopeHints.push(`Project context is "${body.project}".`);
-          systemPrompt = `The user is working in folder "${body.project}". Consider this context.\n\n${systemPrompt}`;
-        }
-        if (workingSetIds.length > 0) {
-          scopeHints.push("Prioritize the current working-set items when searching and reasoning.");
-        }
-        if (scopeHints.length > 0) {
-          systemPrompt = `${scopeHints.join(" ")}\n\n${systemPrompt}`;
-        }
-        if (likelyExternalIntent) {
-          systemPrompt = `The user is working on an external real-world request. Continue the active thread from recent conversation context. Prefer web search and do not switch to summarizing saved notes unless the user explicitly asks for their saved notes.\n\n${systemPrompt}`;
-        }
-        systemPrompt = `Citation labels like [N1], [N2], etc are snippet references only and not note IDs. Never pass N1/N2 as tool ids. Do not include citation labels in user-facing prose; refer to items by title/folder name. ${
-          contextNoteId ? `If the user says "this note", use id "${contextNoteId}". ` : ""
-        }\n\n${systemPrompt}`;
-        if (hasAttachment) {
-          systemPrompt = `A file/image attachment is included with this request. When the user asks to save a new item, call create_note. When the user asks to replace an existing note's attachment, call update_note_attachment. Attachment payload is supplied server-side and should not be reconstructed.\n\n${systemPrompt}`;
-        }
-        if (contextNoteSourceUrl) {
-          systemPrompt = `When discussing this item, ground factual claims to the source URL when possible: ${contextNoteSourceUrl}\n\n${systemPrompt}`;
-        }
-
-        const groundingLine = contextNoteSourceUrl
-          ? `Primary source URL for this item: ${contextNoteSourceUrl}\n`
-          : "";
-        const includeMemoryContext = !likelyExternalIntent && Boolean(context);
-        const questionText = includeMemoryContext
-          ? `${question}\n\n${groundingLine}Context from saved notes:\n${context}`.trim()
-          : `${question}\n${groundingLine}`.trim();
-
-        const historyInput = recentMessages.map((entry) => ({
-          role: entry.role === "assistant" ? "assistant" : "user",
-          content: [{ type: "input_text", text: String(entry.text || "") }],
-        }));
-
-        // Keep full session chat history in structured role form, then append this turn.
-        let currentInput = [
-          ...historyInput,
-          { role: "user", content: [{ type: "input_text", text: questionText }] },
-        ];
-        let currentInstructions = systemPrompt;
-        let currentPreviousId = undefined;
-        let toolRounds = 0;
-        const MAX_TOOL_ROUNDS = 3;
+        const { systemPrompt, initialInput } = buildStreamingPromptAndInput({
+          question,
+          recentMessages,
+          citations,
+          scope,
+          workingSetIds,
+          project: String(body.project || ""),
+          likelyExternalIntent,
+          contextNoteId,
+          contextNoteSourceUrl,
+          hasAttachment,
+          buildCitationBlock,
+          CHAT_SYSTEM_PROMPT,
+        });
         const harness = createAgentToolHarness({
           actor,
           requestId: String(req.headers["x-request-id"] || "").trim(),
@@ -177,119 +131,18 @@ export async function handleChatRoutes(req, res, url, context) {
           },
         });
 
-        while (toolRounds <= MAX_TOOL_ROUNDS) {
-          let roundWebSources = [];
-          const streamResponse = await createStreamingResponse({
-            instructions: currentInstructions,
-            input: currentInput,
-            tools: responseTools,
-            include: responseInclude,
-            previousResponseId: currentPreviousId,
-            temperature: 0.2,
-          });
-
-          // Parse OpenAI Responses API streaming events
-          const reader = streamResponse.body;
-          let buffer = "";
-          let responseId = "";
-          const pendingToolCalls = [];
-          let currentToolCall = null;
-
-          for await (const chunk of reader) {
-            buffer += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const data = line.slice(6).trim();
-              if (data === "[DONE]") continue;
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed.type === "response.created") {
-                  responseId = parsed.response?.id || "";
-                } else if (parsed.type === "response.output_text.delta" && parsed.delta) {
-                  res.write(`event: token\ndata: ${JSON.stringify({ token: parsed.delta })}\n\n`);
-                } else if (parsed.type === "response.completed" && parsed.response) {
-                  const webSources = extractOutputUrlCitations(parsed.response, 16);
-                  if (webSources.length > 0) {
-                    roundWebSources = webSources;
-                  }
-                } else if (parsed.type === "response.output_item.added" && parsed.item?.type === "function_call") {
-                  currentToolCall = { callId: parsed.item.call_id, name: parsed.item.name, args: "" };
-                } else if (parsed.type === "response.function_call_arguments.delta") {
-                  if (currentToolCall) currentToolCall.args += parsed.delta || "";
-                } else if (parsed.type === "response.output_item.done" && parsed.item?.type === "function_call") {
-                  if (currentToolCall) {
-                    currentToolCall.args = parsed.item.arguments || currentToolCall.args;
-                    pendingToolCalls.push(currentToolCall);
-                    currentToolCall = null;
-                  }
-                }
-              } catch {
-                // skip non-JSON lines
-              }
-            }
-          }
-
-          if (roundWebSources.length > 0) {
-            res.write(`event: web_sources\ndata: ${JSON.stringify({ webSources: roundWebSources })}\n\n`);
-          }
-
-          // No tool calls — we're done
-          if (pendingToolCalls.length === 0) break;
-
-          // Execute tool calls and collect outputs for continuation
-          const toolOutputs = [];
-          for (const tc of pendingToolCalls) {
-            let toolNoteId = "";
-            try {
-              const parsedArgs = JSON.parse(String(tc.args || "{}"));
-              toolNoteId = String(parsedArgs?.id || "").trim();
-            } catch {
-              toolNoteId = "";
-            }
-            res.write(`event: tool_call\ndata: ${JSON.stringify({
-              name: tc.name,
-              status: "executing",
-              ...(toolNoteId ? { noteId: toolNoteId } : {}),
-            })}\n\n`);
-            const execution = await harness.runToolCall({
-              name: tc.name,
-              rawArgs: tc.args,
-              callId: tc.callId,
-              round: toolRounds,
-            });
-            res.write(`event: tool_result\ndata: ${JSON.stringify({
-              name: tc.name,
-              ...(toolNoteId ? { noteId: toolNoteId } : {}),
-              ...(execution.ok
-                ? { result: execution.result }
-                : { error: execution.error || "Tool call failed" }),
-              traceId: execution.trace?.traceId || "",
-              cacheHit: Boolean(execution.trace?.cacheHit),
-              durationMs: Number(execution.trace?.durationMs || 0),
-            })}\n\n`);
-            res.write(`event: tool_trace\ndata: ${JSON.stringify(execution.trace || null)}\n\n`);
-
-            toolOutputs.push({
-              type: "function_call_output",
-              call_id: tc.callId,
-              output: JSON.stringify(execution.ok ? execution.result : { error: execution.error || "Tool call failed" }),
-            });
-          }
-
-          // Continue conversation with tool outputs
-          currentPreviousId = responseId;
-          currentInput = toolOutputs;
-          currentInstructions = undefined;
-          toolRounds++;
-        }
-
-        res.write(`event: tool_trace\ndata: ${JSON.stringify({
-          requestId: harness.requestId,
-          traces: harness.traces,
-        })}\n\n`);
-        res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
+        await runStreamingChatOrchestrator({
+          res,
+          createStreamingResponse,
+          extractOutputUrlCitations,
+          responseTools,
+          responseInclude,
+          harness,
+          initialInput,
+          initialInstructions: systemPrompt,
+          maxToolRounds: 3,
+          temperature: 0.2,
+        });
         res.end();
       } catch (error) {
         logger.error("chat_stream_failed", {
@@ -311,8 +164,8 @@ export async function handleChatRoutes(req, res, url, context) {
             ? `Based on your saved notes:\n${answer}`
             : "Something went wrong. Please try again.";
         }
-        res.write(`event: token\ndata: ${JSON.stringify({ token: fallbackText })}\n\n`);
-        res.write(`event: done\ndata: ${JSON.stringify({ done: true })}\n\n`);
+        writeSseEvent(res, "token", { token: fallbackText });
+        writeSseEvent(res, "done", { done: true });
         res.end();
       }
       return true;

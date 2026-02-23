@@ -88,4 +88,5 @@ describe("chat tool note-id resolution", () => {
     assert.equal(createArgs.project, "Product");
     assert.equal(searchArgs.project, "Product");
   });
+
 });

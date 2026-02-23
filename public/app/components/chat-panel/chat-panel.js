@@ -3,7 +3,7 @@ import { renderMarkdownInto } from "../../services/markdown.js";
 import { renderIcon } from "../../services/icons.js";
 
 const MAX_MESSAGES = 100;
-const MAX_RECENT_HISTORY = 12;
+const MAX_RECENT_HISTORY = MAX_MESSAGES;
 const MAX_DEBUG_TRACES = 20;
 const MAX_SOURCE_LIST_ITEMS = 8;
 const MAX_INLINE_SOURCE_CHIPS = 3;

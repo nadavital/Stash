@@ -242,4 +242,45 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.result?.args?.answerMode, "choices_plus_freeform");
     assert.equal(result.result?.args?.context, "I need these details so I can narrow suggestions");
   });
+
+  it("evicts oldest idempotency entries when cache limit is exceeded", async () => {
+    let executions = 0;
+    const harness = createAgentToolHarness({
+      idempotencyCacheMaxEntries: 2,
+      executeTool: async (_name, args) => {
+        executions += 1;
+        return { query: args.query, executions };
+      },
+    });
+
+    await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "alpha" }),
+      callId: "evict-1",
+      round: 0,
+    });
+    await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "beta" }),
+      callId: "evict-2",
+      round: 0,
+    });
+    await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "gamma" }),
+      callId: "evict-3",
+      round: 0,
+    });
+    const replay = await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "alpha" }),
+      callId: "evict-4",
+      round: 0,
+    });
+
+    assert.equal(executions, 4);
+    assert.equal(replay.ok, true);
+    assert.equal(replay.trace?.cacheHit, false);
+    assert.equal(replay.result?.query, "alpha");
+  });
 });

@@ -11,6 +11,7 @@ import {
 import { createFolderPage } from "./pages/folder-page.js";
 import { createHomePage } from "./pages/home-page.js";
 import { createItemPage } from "./pages/item-page.js";
+import { createTasksPage } from "./pages/tasks-page.js";
 import { createRouter } from "./router.js";
 import { createApiClient } from "./services/api-client.js";
 import {
@@ -173,6 +174,7 @@ function mountAppShell() {
     home: createHomePage({ store, apiClient, auth, shell, workspaceSync }),
     folder: createFolderPage({ store, apiClient, auth, shell, workspaceSync }),
     item: createItemPage({ store, apiClient, auth, shell, workspaceSync }),
+    tasks: createTasksPage({ store, apiClient, shell, workspaceSync }),
   };
 
   router = createRouter({

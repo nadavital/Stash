@@ -2,6 +2,12 @@ import { renderHomeFolderGrid } from "../components/home-folder-grid/home-folder
 import {
   renderRecentInlineStripHTML,
 } from "../components/home-recent-list/home-recent-list.js";
+import {
+  initTaskList,
+  queryTaskListEls,
+  renderTaskListHTML,
+  renderTaskListItems,
+} from "../components/task-list/task-list.js";
 import { showToast } from "../components/toast/toast.js";
 import {
   renderItemModalHTML,
@@ -70,6 +76,17 @@ function renderHomePageContent() {
       <div class="home-explorer-pane">
         ${renderInlineSearchHTML()}
         ${renderRecentInlineStripHTML({ title: "Recently Added" })}
+        ${renderTaskListHTML({
+          idBase: "home-tasks",
+          title: "Active Automations",
+          subtitle: "Scheduled actions for your workspace",
+          emptyText: "No active automations",
+          showFilters: false,
+          showComposer: true,
+          composerPlaceholder: "Create automation title",
+          showViewAll: true,
+          viewAllHref: "#/tasks",
+        })}
         <div class="home-section-header">
           <h2 class="home-section-title" style="margin:0;font-size:var(--font-size-body-sm);font-weight:var(--weight-medium);color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">Collections</h2>
           <button id="home-edit-btn" class="folder-subfolder-btn" type="button">Edit</button>
@@ -102,6 +119,7 @@ function queryPageElements(mountNode) {
   const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
+  const taskEls = queryTaskListEls(mountNode, { idBase: "home-tasks" });
 
   return {
     ...itemModalEls,
@@ -110,6 +128,7 @@ function queryPageElements(mountNode) {
     ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
+    ...taskEls,
     recentNotesList: mountNode.querySelector("#recent-notes-list"),
     foldersList: mountNode.querySelector("#home-folders-list"),
     foldersEmpty: mountNode.querySelector("#home-folders-empty"),
@@ -137,6 +156,7 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
       let modalCreateKind = "folder";
       let recentNotes = [];
       let searchResults = [];
+      let homeTasks = [];
       let sortMode = "newest";
       let filterType = "all";
       let dbFolders = [];
@@ -224,7 +244,18 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
         const shouldRefresh =
           hasError ||
           phase === "error" ||
-          ((phase === "done" || phase === "commit") && (name === "create_note" || name === "create_folder"));
+          (
+            (phase === "done" || phase === "commit") &&
+            (
+              name === "create_note" ||
+              name === "create_notes_bulk" ||
+              name === "create_folder" ||
+              name === "create_task" ||
+              name === "update_task" ||
+              name === "complete_task" ||
+              name === "delete_task"
+            )
+          );
         if (shouldRefresh) {
           refreshNotes();
         }
@@ -316,6 +347,16 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
         );
       }
 
+      function renderHomeTasks() {
+        renderTaskListItems(els, homeTasks, {
+          emptyText: "No active automations",
+          showStatus: false,
+          allowEdit: false,
+          allowDelete: false,
+          allowRun: true,
+        });
+      }
+
       function renderInlineSearchResults() {
         if (!els.foldersList) return;
         const query = String(els.inlineSearchInput?.value || "").trim();
@@ -340,6 +381,7 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
 
       function renderView() {
         const query = String(els.inlineSearchInput?.value || "").trim();
+        renderHomeTasks();
 
         if (query) {
           if (els.foldersEmpty) els.foldersEmpty.classList.add("hidden");
@@ -363,11 +405,13 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
             requests.push(apiClient.fetchNotes({ query, limit: 120 }));
           }
           requests.push(apiClient.fetchFolders());
+          requests.push(apiClient.fetchTasks({ status: "active" }));
 
           const results = await Promise.allSettled(requests);
           const recentResult = results[0];
           const searchResult = includeSearch ? results[1] : null;
           const foldersResult = includeSearch ? results[2] : results[1];
+          const tasksResult = includeSearch ? results[3] : results[2];
 
           if (recentResult.status !== "fulfilled") throw recentResult.reason;
 
@@ -388,6 +432,10 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
           dbFolders =
             foldersResult?.status === "fulfilled" && Array.isArray(foldersResult.value?.items)
               ? foldersResult.value.items.filter((f) => !f.parentId)
+              : [];
+          homeTasks =
+            tasksResult?.status === "fulfilled" && Array.isArray(tasksResult.value?.items)
+              ? tasksResult.value.items.slice(0, 8)
               : [];
           workspaceSync?.ingestFolders(dbFolders);
           dbFolders = workspaceSync ? workspaceSync.hydrateFolders(dbFolders) : dbFolders;
@@ -434,13 +482,13 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
 
         els.folderModal.dataset.createKind = modalCreateKind;
         if (els.folderModalHeading) {
-          els.folderModalHeading.textContent = isTask ? "New Task" : "New Folder";
+          els.folderModalHeading.textContent = isTask ? "New Automation" : "New Folder";
         }
         if (els.folderNameLabel) {
-          els.folderNameLabel.textContent = isTask ? "Task title" : "Name";
+          els.folderNameLabel.textContent = isTask ? "Automation title" : "Name";
         }
         if (els.folderNameInput) {
-          els.folderNameInput.placeholder = isTask ? "e.g. Follow up with design team" : "e.g. Launch Plan";
+          els.folderNameInput.placeholder = isTask ? "e.g. Weekly inbox triage" : "e.g. Launch Plan";
         }
         if (els.folderDescriptionWrap) {
           els.folderDescriptionWrap.classList.toggle("hidden", isTask);
@@ -449,7 +497,7 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
           els.folderStyleWrap.classList.toggle("hidden", isTask);
         }
         if (els.folderCreateBtn) {
-          els.folderCreateBtn.textContent = isTask ? "Create Task" : "Create Folder";
+          els.folderCreateBtn.textContent = isTask ? "Create Automation" : "Create Folder";
         }
         if (els.folderKindFolder) {
           const selected = !isTask;
@@ -517,6 +565,48 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
         },
       });
       disposers.push(cleanupSortFilter);
+
+      const cleanupTaskList = initTaskList(els, {
+        async onCreate(title) {
+          try {
+            await apiClient.createTask({
+              title,
+              prompt: title,
+              scheduleType: "manual",
+              requireApproval: true,
+              activate: false,
+            });
+            toast("Automation created (pending approval)");
+            await refreshNotes();
+          } catch (error) {
+            toast(conciseTechnicalError(error, "Automation save failed"), "error");
+          }
+        },
+        async onToggle({ id, state }) {
+          try {
+            if (String(state || "") === "pending_approval") {
+              await apiClient.approveTask(id, { activate: true });
+            } else if (String(state || "") === "active") {
+              await apiClient.pauseTask(id);
+            } else {
+              await apiClient.resumeTask(id);
+            }
+            await refreshNotes();
+          } catch (error) {
+            toast(conciseTechnicalError(error, "Automation update failed"), "error");
+          }
+        },
+        async onRun({ id }) {
+          try {
+            await apiClient.runTaskNow(id);
+            toast("Automation run started");
+            await refreshNotes();
+          } catch (error) {
+            toast(conciseTechnicalError(error, "Automation run failed"), "error");
+          }
+        },
+      });
+      disposers.push(cleanupTaskList);
 
       // Inline search via extracted component
       const cleanupInlineSearch = initInlineSearchHandlers(els, {
@@ -594,13 +684,16 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
           try {
             await apiClient.createTask({
               title: name,
-              status: "open",
+              prompt: name,
+              scheduleType: "manual",
+              requireApproval: true,
+              activate: false,
             });
             closeFolderModal(els);
-            toast("Task created");
+            toast("Automation created (pending approval)");
             await refreshNotes();
           } catch (error) {
-            toast("Task save failed", "error");
+            toast(conciseTechnicalError(error, "Automation save failed"), "error");
           }
           return;
         }

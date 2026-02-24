@@ -140,6 +140,8 @@ export function buildTaskRouteContext(deps, { actor }) {
     sendJson: deps.sendJson,
     readJsonBody: deps.readJsonBody,
     taskRepo: deps.taskRepo,
+    runTaskNow: deps.runTaskNow,
+    isWorkspaceManager: deps.isWorkspaceManager,
   };
 }
 
@@ -165,6 +167,8 @@ export function buildBatchRouteContext(deps, { actor }) {
     resolveErrorStatus: deps.resolveErrorStatus,
     readJsonBody: deps.readJsonBody,
     validateBatchPayload: deps.validateBatchPayload,
+    validateBatchCreatePayload: deps.validateBatchCreatePayload,
+    batchCreateMemories: deps.batchCreateMemories,
     batchDeleteMemories: deps.batchDeleteMemories,
     batchMoveMemories: deps.batchMoveMemories,
   };

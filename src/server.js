@@ -32,6 +32,9 @@ async function startServer() {
   const { ensurePostgresReady } = await import("./postgres/runtime.js");
   await ensurePostgresReady();
   await apiRuntime.enrichmentQueue.start();
+  if (typeof apiRuntime.startAutomationRunner === "function") {
+    apiRuntime.startAutomationRunner();
+  }
 
   server.listen(config.port, () => {
     logger.info("server_start", {

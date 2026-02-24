@@ -60,6 +60,69 @@ describe("createChatToolExecutor", () => {
     assert.equal(calls[0].content, "https://example.com");
   });
 
+  it("creates multiple notes via create_notes_bulk", async () => {
+    const execute = createChatToolExecutor({
+      batchCreateMemories: async ({ items }) => ({
+        created: items.length,
+        failed: 0,
+        items: items.map((item, index) => ({
+          index,
+          note: {
+            id: `n-${index + 1}`,
+            sourceType: item.sourceType || "text",
+            content: item.content || "",
+            metadata: { title: item.title || "" },
+          },
+        })),
+      }),
+    });
+
+    const result = await execute("create_notes_bulk", {
+      project: "Product",
+      items: [
+        { content: "First task" },
+        { content: "https://example.com/roadmap", sourceType: "link" },
+      ],
+    }, { userId: "u1", workspaceId: "w1" });
+
+    assert.equal(result.created, 2);
+    assert.equal(result.failed, 0);
+    assert.equal(result.items.length, 2);
+    assert.equal(result.items[0].status, "created");
+    assert.equal(result.items[1].sourceType, "link");
+  });
+
+  it("returns partial failures from create_notes_bulk", async () => {
+    const execute = createChatToolExecutor({
+      batchCreateMemories: async () => ({
+        created: 1,
+        failed: 1,
+        items: [
+          {
+            index: 0,
+            note: { id: "n-1", sourceType: "text", content: "ok", metadata: { title: "ok" } },
+          },
+          {
+            index: 1,
+            error: "Missing content",
+          },
+        ],
+      }),
+    });
+
+    const result = await execute("create_notes_bulk", {
+      items: [
+        { content: "ok" },
+        { content: "bad" },
+      ],
+    }, { userId: "u1", workspaceId: "w1" });
+
+    assert.equal(result.created, 1);
+    assert.equal(result.failed, 1);
+    assert.equal(result.items[1].status, "failed");
+    assert.match(result.items[1].error, /missing content/i);
+  });
+
   it("rejects malformed JSON content for json file creation", async () => {
     const execute = createChatToolExecutor({
       createMemory: async () => ({ id: "n1", sourceType: "file", content: "" }),
@@ -104,6 +167,67 @@ describe("createChatToolExecutor", () => {
     assert.equal(result.folderName, "Product");
     assert.equal(result.role, "viewer");
     assert.equal(result.userId, "u2");
+  });
+
+  it("creates pending-approval automations and pauses them via task tools", async () => {
+    const execute = createChatToolExecutor({
+      taskRepo: {
+        createTask: async ({ title, prompt, workspaceId }) => ({
+          id: "task-1",
+          title,
+          prompt,
+          state: "pending_approval",
+          approvalStatus: "pending_approval",
+          status: "paused",
+          enabled: false,
+          workspaceId,
+          createdAt: "2026-02-23T00:00:00.000Z",
+        }),
+        pauseTask: async (id, workspaceId) => ({
+          id,
+          title: "Finish docs",
+          prompt: "Finish docs",
+          state: "paused",
+          approvalStatus: "approved",
+          status: "paused",
+          enabled: false,
+          workspaceId,
+          createdAt: "2026-02-23T00:00:00.000Z",
+        }),
+      },
+    });
+
+    const created = await execute("create_task", {
+      title: "Finish docs",
+      prompt: "Finish docs",
+    }, { userId: "u1", workspaceId: "w1" });
+    assert.equal(created.task.id, "task-1");
+    assert.equal(created.task.state, "pending_approval");
+    assert.equal(created.approvalRequired, true);
+
+    const completed = await execute("complete_task", {
+      id: "task-1",
+    }, { userId: "u1", workspaceId: "w1" });
+    assert.equal(completed.task.id, "task-1");
+    assert.equal(completed.task.status, "paused");
+  });
+
+  it("normalizes list_tasks status all and respects limit", async () => {
+    const execute = createChatToolExecutor({
+      taskRepo: {
+        listTasks: async (_status, _workspaceId) => [
+          { id: "task-1", title: "One", state: "pending_approval", status: "paused", createdAt: "2026-02-23T00:00:00.000Z" },
+          { id: "task-2", title: "Two", state: "active", status: "active", createdAt: "2026-02-23T00:00:00.000Z" },
+        ],
+      },
+    });
+
+    const result = await execute("list_tasks", {
+      status: "all",
+      limit: 1,
+    }, { userId: "u1", workspaceId: "w1" });
+    assert.equal(result.count, 1);
+    assert.equal(result.tasks.length, 1);
   });
 
   it("throws on unknown tool name", async () => {

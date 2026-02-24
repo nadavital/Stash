@@ -40,6 +40,106 @@ export function normalizeToolArgs(name, args) {
         color: normalizeText(source.color),
       };
     }
+    case "list_tasks": {
+      const limit = Number(source.limit || 30);
+      return {
+        ...(source.status !== undefined
+          ? { status: normalizeTaskStatus(source.status, { allowAll: true, allowEmpty: true }) || "all" }
+          : {}),
+        limit: Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 30,
+      };
+    }
+    case "create_task": {
+      const title = normalizeText(source.title || source.name);
+      if (!title) throw new Error("create_task requires title");
+      const prompt = normalizeText(source.prompt) || title;
+      const scopeFolder = normalizeText(source.scopeFolder || source.project);
+      const scheduleTypeRaw = normalizeText(source.scheduleType).toLowerCase();
+      const intervalMinutes = normalizePositiveInt(source.intervalMinutes, { min: 5, max: 10080 });
+      const scheduleType = scheduleTypeRaw || (intervalMinutes ? "interval" : "manual");
+      if (scheduleType !== "manual" && scheduleType !== "interval") {
+        throw new Error("create_task scheduleType must be manual or interval");
+      }
+      return {
+        title,
+        prompt,
+        ...(scopeFolder ? { scopeFolder } : {}),
+        scheduleType,
+        ...(intervalMinutes !== undefined ? { intervalMinutes } : {}),
+        ...(source.timezone !== undefined ? { timezone: normalizeText(source.timezone) } : {}),
+        ...(source.maxActionsPerRun !== undefined
+          ? { maxActionsPerRun: normalizePositiveInt(source.maxActionsPerRun, { min: 1, max: 25, required: true }) }
+          : {}),
+        ...(source.maxConsecutiveFailures !== undefined
+          ? { maxConsecutiveFailures: normalizePositiveInt(source.maxConsecutiveFailures, { min: 1, max: 20, required: true }) }
+          : {}),
+        ...(source.dryRun !== undefined ? { dryRun: source.dryRun === true } : {}),
+      };
+    }
+    case "update_task": {
+      const id = normalizeText(source.id);
+      if (!id) throw new Error("update_task requires id");
+
+      const patch = {
+        id,
+      };
+      if (source.title !== undefined || source.name !== undefined) {
+        patch.title = normalizeText(source.title || source.name);
+      }
+      if (source.prompt !== undefined) {
+        patch.prompt = normalizeText(source.prompt);
+      }
+      if (source.scopeFolder !== undefined || source.project !== undefined) {
+        patch.scopeFolder = normalizeText(source.scopeFolder || source.project);
+      }
+      if (source.scopeType !== undefined) {
+        const scopeType = normalizeText(source.scopeType).toLowerCase();
+        if (scopeType !== "workspace" && scopeType !== "folder") {
+          throw new Error("update_task scopeType must be workspace or folder");
+        }
+        patch.scopeType = scopeType;
+      }
+      if (source.scheduleType !== undefined) {
+        const scheduleType = normalizeText(source.scheduleType).toLowerCase();
+        if (scheduleType !== "manual" && scheduleType !== "interval") {
+          throw new Error("update_task scheduleType must be manual or interval");
+        }
+        patch.scheduleType = scheduleType;
+      }
+      if (source.intervalMinutes !== undefined) {
+        patch.intervalMinutes = normalizePositiveInt(source.intervalMinutes, { min: 5, max: 10080 });
+      }
+      if (source.timezone !== undefined) {
+        patch.timezone = normalizeText(source.timezone);
+      }
+      if (source.maxActionsPerRun !== undefined) {
+        patch.maxActionsPerRun = normalizePositiveInt(source.maxActionsPerRun, { min: 1, max: 25, required: true });
+      }
+      if (source.maxConsecutiveFailures !== undefined) {
+        patch.maxConsecutiveFailures = normalizePositiveInt(source.maxConsecutiveFailures, { min: 1, max: 20, required: true });
+      }
+      if (source.dryRun !== undefined) {
+        patch.dryRun = source.dryRun === true;
+      }
+      if (source.status !== undefined) {
+        patch.status = normalizeTaskStatus(source.status);
+      }
+
+      if (Object.keys(patch).length < 2) {
+        throw new Error("update_task requires at least one field to update");
+      }
+      return patch;
+    }
+    case "complete_task": {
+      const id = normalizeText(source.id);
+      if (!id) throw new Error("complete_task requires id");
+      return { id };
+    }
+    case "delete_task": {
+      const id = normalizeText(source.id);
+      if (!id) throw new Error("delete_task requires id");
+      return { id };
+    }
     case "list_workspace_members": {
       const query = normalizeText(source.query);
       const limit = Number(source.limit || 50);
@@ -224,4 +324,28 @@ function isGenericOtherOption(option = "") {
   const value = String(option || "").trim().toLowerCase();
   if (!value) return false;
   return /^(other|something else|anything else|else|another option|not sure|none of these|none)\b/i.test(value);
+}
+
+function normalizeTaskStatus(value, { allowAll = false, allowEmpty = false } = {}) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) {
+    return allowEmpty ? "" : "active";
+  }
+  if (allowAll && (normalized === "all" || normalized === "any")) return "";
+  if (["pending", "pending_approval", "approval"].includes(normalized)) return "pending_approval";
+  if (["open", "active", "running"].includes(normalized)) return "active";
+  if (["paused", "inactive", "closed", "complete", "completed", "done"].includes(normalized)) return "paused";
+  throw new Error("Invalid task status");
+}
+
+function normalizePositiveInt(value, { min = 1, max = 10080, required = false } = {}) {
+  if (value === undefined || value === null || value === "") {
+    if (required) throw new Error("Expected positive integer");
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("Expected positive integer");
+  }
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
 }

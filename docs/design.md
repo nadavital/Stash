@@ -200,12 +200,14 @@ All component JS files live under `public/app/components/`. All component CSS fi
 | Composer | `components/composer/composer.js` | `components/composer.css` | `.composer-*` |
 | Home Folder Grid | `components/home-folder-grid/home-folder-grid.js` | `components/home-folder-grid.css` | `.folder-pill-*` |
 | Home Recent List | `components/home-recent-list/home-recent-list.js` | `components/home-recent-list.css` | `.recent-*` |
+| Task List | `components/task-list/task-list.js` | `components/task-list.css` | `.task-list-*` |
 | Folder Hero Toolbar | `components/folder-hero-toolbar/folder-hero-toolbar.js` | `components/folder-hero-toolbar.css` | `.folder-hero-*` |
 | Folder Item Grid | `components/folder-item-grid/folder-item-grid.js` | `components/folder-item-grid.css` | `.folder-file-*` |
 | Activity Feed | `components/activity-feed/activity-feed.js` | `components/activity-feed.css` | `.activity-feed-*` |
 | Folder Activity Modal | `components/folder-activity-modal/folder-activity-modal.js` | `components/folder-activity-modal.css` | `.folder-activity-modal-*` |
 | Item Modal | `components/item-modal/item-modal.js` | `components/item-modal.css` | `.item-modal-*` |
 | Folder Modal | `components/folder-modal/folder-modal.js` | `components/folder-modal.css` | `.folder-modal-*` |
+| Automation Modal | `components/automation-modal/automation-modal.js` | `components/automation-modal.css` | `.automation-*` |
 | Folder Share Modal | `components/folder-share-modal/folder-share-modal.js` | `components/folder-share-modal.css` | `.folder-share-*` |
 | Move Modal | `components/move-modal/move-modal.js` | `components/move-modal.css` | `.move-modal-*` |
 | Activity Modal | `components/activity-modal/activity-modal.js` | `components/activity-modal.css` | `.activity-modal-*` |
@@ -308,6 +310,24 @@ export function renderHomeRecentList()
 
 - `renderRecentInlineStripHTML(...)` renders the horizontal recents row.
 - `renderHomeRecentList()` renders the full-height right sidebar chat container; the unified `Save/Ask` assistant shell is mounted under it by page controllers.
+
+---
+
+#### Task List
+
+Reusable automation collection surface used on Home (active strip) and the dedicated Tasks page.
+
+```js
+export function renderTaskListHTML(options = {})
+export function queryTaskListEls(root, { idBase } = {})
+export function initTaskList(els, callbacks = {})
+```
+
+- `renderTaskListHTML(...)` renders automation section chrome (title/subtitle, optional filters, optional composer, list shell).
+- `queryTaskListEls(root, { idBase })` resolves list/form/filter refs for the section instance.
+- `initTaskList(els, callbacks)` wires create/approve/pause/resume/run/edit/delete/filter interactions and returns a disposer.
+- `renderTaskListItems(...)` and `setTaskListActiveFilter(...)` provide render/update helpers used by page controllers.
+- Each rendered row can show telemetry chips for run status, mutation count, failure streak, paused reason, and last error when those fields are present on task objects.
 
 ---
 
@@ -502,6 +522,24 @@ export function initFolderModalHandlers(els, { onClose, onColorSelect })
 
 ---
 
+#### Automation Modal
+
+Modal used on the Tasks page for structured automation create/edit flows.
+
+```js
+export function renderAutomationModalHTML()
+export function queryAutomationModalEls(root)
+export function openAutomationModal(els, draft = {})
+export function closeAutomationModal(els)
+export function readAutomationModalDraft(els)
+export function setAutomationModalLoading(els, loading)
+export function initAutomationModal(els, callbacks = {})
+```
+
+Fields include title, prompt, folder scope, schedule, interval minutes, max actions per run, max consecutive failures before auto-pause, timezone, and dry-run.
+
+---
+
 #### Inline Search
 
 Embedded search input with result rendering. Used inside the folder page and home page.
@@ -579,6 +617,11 @@ export function createApiClient({ adapterDebug = false } = {})
 | `fetchTasks()` | `({ status } = {}) => Promise` | GET `/api/tasks` |
 | `createTask()` | `(payload) => Promise` | POST `/api/tasks` |
 | `updateTask()` | `(id, payload) => Promise` | PUT `/api/tasks/:id` |
+| `approveTask()` | `(id, { activate } = {}) => Promise` | POST `/api/tasks/:id/approve` |
+| `pauseTask()` | `(id) => Promise` | POST `/api/tasks/:id/pause` |
+| `resumeTask()` | `(id) => Promise` | POST `/api/tasks/:id/resume` |
+| `runTaskNow()` | `(id) => Promise` | POST `/api/tasks/:id/run-now` |
+| `fetchTaskRuns()` | `(id, { limit } = {}) => Promise` | GET `/api/tasks/:id/runs` |
 | `deleteTask()` | `(id) => Promise` | DELETE `/api/tasks/:id` |
 | `fetchFolders()` | `({ parentId } = {}) => Promise` | GET `/api/folders` |
 | `createFolder()` | `(payload) => Promise` | POST `/api/folders` |

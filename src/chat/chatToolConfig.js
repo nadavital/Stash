@@ -22,6 +22,39 @@ export const CHAT_TOOLS = [
   },
   {
     type: "function",
+    name: "create_notes_bulk",
+    description:
+      "Save multiple notes/links/files in one call. Use when the user wants to capture many items at once.",
+    parameters: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Default folder for items that do not provide a project" },
+        stopOnError: { type: "boolean", description: "If true, stop at the first failed item" },
+        items: {
+          type: "array",
+          description: "Items to create (max 25 in one call).",
+          items: {
+            type: "object",
+            properties: {
+              content: { type: "string", description: "The note content or URL to save (optional when attachment is present)" },
+              title: { type: "string", description: "Preferred item title (optional, plain language)." },
+              project: { type: "string", description: "Folder override for this item (optional)" },
+              sourceType: { type: "string", enum: ["url", "link", "text", "manual", "file", "image"], description: "Type of content" },
+              sourceUrl: { type: "string", description: "Optional source URL" },
+              imageDataUrl: { type: "string", description: "Optional image data URL" },
+              fileDataUrl: { type: "string", description: "Optional file data URL" },
+              fileName: { type: "string", description: "Optional file name for attachment uploads" },
+              fileMimeType: { type: "string", description: "Optional mime type for attachment uploads" },
+            },
+            required: [],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
+    type: "function",
     name: "create_folder",
     description: "Create a new folder/collection. Use when the user wants to organize items into a new group.",
     parameters: {
@@ -32,6 +65,92 @@ export const CHAT_TOOLS = [
         color: { type: "string", description: "Color: green, blue, purple, orange, pink, red, yellow" },
       },
       required: ["name"],
+    },
+  },
+  {
+    type: "function",
+    name: "list_tasks",
+    description: "List automations in the workspace.",
+    parameters: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending_approval", "active", "paused", "all"],
+          description: "Optional automation status filter",
+        },
+        limit: { type: "number", description: "Optional max tasks to return (default 30, max 200)" },
+      },
+      required: [],
+    },
+  },
+  {
+    type: "function",
+    name: "create_task",
+    description: "Create a new automation task. New tasks require user approval before activation.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Automation title" },
+        prompt: { type: "string", description: "Automation instruction prompt" },
+        project: { type: "string", description: "Folder scope for automation output" },
+        scopeFolder: { type: "string", description: "Folder scope override for automation output" },
+        scheduleType: { type: "string", enum: ["manual", "interval"], description: "Automation schedule type" },
+        intervalMinutes: { type: "number", description: "For interval schedule: run every N minutes (min 5)" },
+        timezone: { type: "string", description: "IANA timezone (optional)" },
+        maxActionsPerRun: { type: "number", description: "Max mutating actions per run (1-25)" },
+        maxConsecutiveFailures: { type: "number", description: "Auto-pause after this many failed runs (1-20)" },
+        dryRun: { type: "boolean", description: "If true, automation is marked dry-run" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    type: "function",
+    name: "update_task",
+    description: "Update an automation task configuration.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task id" },
+        title: { type: "string", description: "Updated task title" },
+        prompt: { type: "string", description: "Updated automation prompt" },
+        project: { type: "string", description: "Updated folder scope" },
+        scopeFolder: { type: "string", description: "Updated folder scope" },
+        scopeType: { type: "string", enum: ["workspace", "folder"], description: "Scope mode" },
+        scheduleType: { type: "string", enum: ["manual", "interval"], description: "Updated schedule type" },
+        intervalMinutes: { type: "number", description: "Updated interval minutes" },
+        timezone: { type: "string", description: "Updated timezone" },
+        maxActionsPerRun: { type: "number", description: "Updated max actions per run" },
+        maxConsecutiveFailures: { type: "number", description: "Updated auto-pause threshold (1-20)" },
+        dryRun: { type: "boolean", description: "Updated dry-run flag" },
+        status: { type: "string", enum: ["active", "paused"], description: "Activation state" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "complete_task",
+    description: "Pause an automation task.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task id" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "delete_task",
+    description: "Delete a task by id.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task id" },
+      },
+      required: ["id"],
     },
   },
   {

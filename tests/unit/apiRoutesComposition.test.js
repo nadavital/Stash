@@ -88,6 +88,8 @@ describe("api route context builders", () => {
       askMemories: () => {},
       buildProjectContext: () => "",
       validateBatchPayload: () => ({ valid: true }),
+      validateBatchCreatePayload: () => ({ valid: true }),
+      batchCreateMemories: () => {},
       batchDeleteMemories: () => {},
       batchMoveMemories: () => {},
     };

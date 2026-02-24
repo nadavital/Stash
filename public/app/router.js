@@ -27,6 +27,10 @@ function parseRouteFromHash(hash) {
     };
   }
 
+  if (parts[0] === "tasks") {
+    return { name: "tasks" };
+  }
+
   return { name: "home" };
 }
 

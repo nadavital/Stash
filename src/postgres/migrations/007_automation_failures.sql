@@ -1,0 +1,11 @@
+ALTER TABLE automations
+ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE automations
+ADD COLUMN IF NOT EXISTS max_consecutive_failures INTEGER NOT NULL DEFAULT 3;
+
+ALTER TABLE automations
+ADD COLUMN IF NOT EXISTS paused_reason TEXT;
+
+ALTER TABLE automations
+ADD COLUMN IF NOT EXISTS last_run_mutation_count INTEGER NOT NULL DEFAULT 0;

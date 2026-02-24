@@ -5,9 +5,36 @@ export async function handleBatchNoteRoutes(req, res, url, context) {
     resolveErrorStatus,
     readJsonBody,
     validateBatchPayload,
+    validateBatchCreatePayload,
+    batchCreateMemories,
     batchDeleteMemories,
     batchMoveMemories,
   } = context;
+
+  if (req.method === "POST" && url.pathname === "/api/notes/batch-create") {
+    const body = await readJsonBody(req);
+    const bv = validateBatchCreatePayload(body);
+    if (!bv.valid) {
+      sendJson(res, 400, { error: bv.errors.join("; ") });
+      return true;
+    }
+    try {
+      const result = await batchCreateMemories({
+        items: body.items,
+        project: body.project || "",
+        actor,
+        metadata: {
+          createdFrom: "web-app-batch",
+          actorUserId: actor.userId,
+        },
+      });
+      sendJson(res, result.failed > 0 ? 207 : 201, result);
+    } catch (error) {
+      const statusCode = resolveErrorStatus(error, 400);
+      sendJson(res, statusCode, { error: error instanceof Error ? error.message : "Batch create failed" });
+    }
+    return true;
+  }
 
   if (req.method === "POST" && url.pathname === "/api/notes/batch-delete") {
     const body = await readJsonBody(req);

@@ -4,6 +4,7 @@ const MAX_PROJECT_LENGTH = 120;
 const MAX_TITLE_LENGTH = 180;
 const MAX_TAG_LENGTH = 60;
 const MAX_TAGS = 20;
+const MAX_BATCH_CREATE_ITEMS = 50;
 
 export function validateNotePayload(body, { requireContent = true } = {}) {
   const errors = [];
@@ -78,6 +79,50 @@ export function validateBatchPayload(body) {
     errors.push("ids array must not be empty");
   } else if (body.ids.length > 200) {
     errors.push("ids array exceeds maximum of 200 items");
+  }
+
+  return errors.length > 0 ? { valid: false, errors } : { valid: true, errors: [] };
+}
+
+export function validateBatchCreatePayload(body) {
+  const errors = [];
+  const items = body?.items;
+
+  if (!Array.isArray(items)) {
+    errors.push("items must be an array");
+    return { valid: false, errors };
+  }
+
+  if (items.length === 0) {
+    errors.push("items array must not be empty");
+    return { valid: false, errors };
+  }
+
+  if (items.length > MAX_BATCH_CREATE_ITEMS) {
+    errors.push(`items array exceeds maximum of ${MAX_BATCH_CREATE_ITEMS} items`);
+  }
+
+  if (body?.project !== undefined) {
+    if (typeof body.project !== "string") {
+      errors.push("project must be a string");
+    } else if (body.project.length > MAX_PROJECT_LENGTH) {
+      errors.push(`project exceeds maximum length of ${MAX_PROJECT_LENGTH} characters`);
+    }
+  }
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      errors.push(`items[${i}] must be an object`);
+      continue;
+    }
+
+    const itemValidation = validateNotePayload(item, { requireContent: true });
+    if (!itemValidation.valid) {
+      for (const itemError of itemValidation.errors) {
+        errors.push(`items[${i}]: ${itemError}`);
+      }
+    }
   }
 
   return errors.length > 0 ? { valid: false, errors } : { valid: true, errors: [] };

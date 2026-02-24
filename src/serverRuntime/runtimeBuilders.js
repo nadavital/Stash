@@ -1,6 +1,7 @@
 import { createRateLimiter } from "../rateLimit.js";
 import { createBuildChatWebSearchTool } from "../chat/chatWebSearch.js";
 import { createChatToolExecutor } from "../chat/chatToolExecutor.js";
+import { createAutomationRuntime } from "../tasks/automationRuntime.js";
 import { createAuthFailureTracker } from "../auth/authSecurity.js";
 import { createAuthEventRecorder } from "../auth/authEvents.js";
 import { buildFirebaseSessionPayload, buildNeonSessionPayload } from "../auth/sessionPayloads.js";
@@ -37,7 +38,9 @@ export function createRuntimeServices(staticDeps, { logger }) {
   const executeChatToolCall = createChatToolExecutor({
     authRepo: staticDeps.authRepo,
     folderRepo: staticDeps.folderRepo,
+    taskRepo: staticDeps.taskRepo,
     createMemory: staticDeps.createMemory,
+    batchCreateMemories: staticDeps.batchCreateMemories,
     createWorkspaceFolder: staticDeps.createWorkspaceFolder,
     listFolderCollaborators: staticDeps.listFolderCollaborators,
     setFolderCollaboratorRole: staticDeps.setFolderCollaboratorRole,
@@ -54,6 +57,20 @@ export function createRuntimeServices(staticDeps, { logger }) {
     retryMemoryEnrichment: staticDeps.retryMemoryEnrichment,
   });
 
+  const automationRuntime = createAutomationRuntime({
+    config: staticDeps.config,
+    logger,
+    hasOpenAI: staticDeps.hasOpenAI,
+    CHAT_TOOLS: staticDeps.CHAT_TOOLS,
+    CHAT_SYSTEM_PROMPT: staticDeps.CHAT_SYSTEM_PROMPT,
+    createStreamingResponse: staticDeps.createStreamingResponse,
+    extractOutputUrlCitations: staticDeps.extractOutputUrlCitations,
+    createAgentToolHarness: staticDeps.createAgentToolHarness,
+    resolveAgentToolArgs: staticDeps.resolveAgentToolArgs,
+    executeChatToolCall,
+    taskRepo: staticDeps.taskRepo,
+  });
+
   return {
     checkAuthRate,
     getAuthFailureStatus,
@@ -65,6 +82,9 @@ export function createRuntimeServices(staticDeps, { logger }) {
     handleSSE,
     buildChatWebSearchTool,
     executeChatToolCall,
+    runTaskNow: automationRuntime.runTaskNow,
+    startAutomationRunner: automationRuntime.startAutomationRunner,
+    stopAutomationRunner: automationRuntime.stopAutomationRunner,
     isWorkspaceManager,
     buildFirebaseSessionPayload,
     buildNeonSessionPayload,
@@ -155,12 +175,15 @@ export function buildApiHandlerDeps(staticDeps, runtimeServices, { startedAt, lo
     updateWorkspaceFolder: staticDeps.updateWorkspaceFolder,
     deleteWorkspaceFolder: staticDeps.deleteWorkspaceFolder,
     taskRepo: staticDeps.taskRepo,
+    runTaskNow: runtimeServices.runTaskNow,
     addMemoryComment: staticDeps.addMemoryComment,
     listMemoryVersions: staticDeps.listMemoryVersions,
     restoreMemoryVersion: staticDeps.restoreMemoryVersion,
     updateMemoryExtractedContent: staticDeps.updateMemoryExtractedContent,
     updateMemory: staticDeps.updateMemory,
     validateBatchPayload: staticDeps.validateBatchPayload,
+    validateBatchCreatePayload: staticDeps.validateBatchCreatePayload,
+    batchCreateMemories: staticDeps.batchCreateMemories,
     batchDeleteMemories: staticDeps.batchDeleteMemories,
     batchMoveMemories: staticDeps.batchMoveMemories,
   };

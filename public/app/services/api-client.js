@@ -767,6 +767,56 @@ export function createApiClient({ adapterDebug = false } = {}) {
       });
     },
 
+    async completeTask(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/pause`, {
+        method: "POST",
+      });
+    },
+
+    async approveTask(id, { activate = true } = {}) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ activate }),
+      });
+    },
+
+    async pauseTask(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/pause`, {
+        method: "POST",
+      });
+    },
+
+    async resumeTask(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/resume`, {
+        method: "POST",
+      });
+    },
+
+    async runTaskNow(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/run-now`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    },
+
+    async fetchTaskRuns(id, { limit = 30 } = {}) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      const params = new URLSearchParams();
+      if (limit) params.set("limit", String(limit));
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/runs?${params.toString()}`);
+    },
+
     async fetchFolders({ parentId } = {}) {
       const params = new URLSearchParams();
       if (parentId) params.set("parentId", String(parentId));
@@ -919,6 +969,13 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.notes}/batch-delete`, {
         method: "POST",
         body: JSON.stringify({ ids }),
+      });
+    },
+
+    async batchCreateNotes(items, project = "") {
+      return jsonFetch(`${API_ENDPOINTS.notes}/batch-create`, {
+        method: "POST",
+        body: JSON.stringify({ items, project }),
       });
     },
 

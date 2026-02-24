@@ -11,8 +11,43 @@ export async function parseStreamingResponse({
   let buffer = "";
   let responseId = "";
   const pendingToolCalls = [];
-  let currentToolCall = null;
+  const activeToolCallsByCallId = new Map();
+  const activeToolCallsByItemId = new Map();
   let webSources = [];
+
+  function normalizeId(value = "") {
+    return String(value || "").trim();
+  }
+
+  function registerToolCall(toolCall) {
+    const callId = normalizeId(toolCall?.callId);
+    const itemId = normalizeId(toolCall?.itemId);
+    if (callId) activeToolCallsByCallId.set(callId, toolCall);
+    if (itemId) activeToolCallsByItemId.set(itemId, toolCall);
+  }
+
+  function unregisterToolCall(toolCall) {
+    if (!toolCall || typeof toolCall !== "object") return;
+    const callId = normalizeId(toolCall.callId);
+    const itemId = normalizeId(toolCall.itemId);
+    if (callId) activeToolCallsByCallId.delete(callId);
+    if (itemId) activeToolCallsByItemId.delete(itemId);
+  }
+
+  function resolveToolCall({ callId = "", itemId = "" } = {}) {
+    const normalizedCallId = normalizeId(callId);
+    const normalizedItemId = normalizeId(itemId);
+    if (normalizedItemId && activeToolCallsByItemId.has(normalizedItemId)) {
+      return activeToolCallsByItemId.get(normalizedItemId);
+    }
+    if (normalizedCallId && activeToolCallsByCallId.has(normalizedCallId)) {
+      return activeToolCallsByCallId.get(normalizedCallId);
+    }
+    if (activeToolCallsByCallId.size === 1) {
+      return activeToolCallsByCallId.values().next().value || null;
+    }
+    return null;
+  }
 
   for await (const chunk of reader) {
     buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk);
@@ -34,15 +69,43 @@ export async function parseStreamingResponse({
             webSources = sources;
           }
         } else if (parsed.type === "response.output_item.added" && parsed.item?.type === "function_call") {
-          currentToolCall = { callId: parsed.item.call_id, name: parsed.item.name, args: "" };
+          const toolCall = {
+            callId: normalizeId(parsed.item.call_id),
+            itemId: normalizeId(parsed.item.id),
+            name: normalizeId(parsed.item.name),
+            args: "",
+          };
+          registerToolCall(toolCall);
         } else if (parsed.type === "response.function_call_arguments.delta") {
-          if (currentToolCall) currentToolCall.args += parsed.delta || "";
-        } else if (parsed.type === "response.output_item.done" && parsed.item?.type === "function_call") {
-          if (currentToolCall) {
-            currentToolCall.args = parsed.item.arguments || currentToolCall.args;
-            pendingToolCalls.push(currentToolCall);
-            currentToolCall = null;
+          const toolCall = resolveToolCall({
+            callId: parsed.call_id,
+            itemId: parsed.item_id,
+          });
+          if (toolCall) {
+            toolCall.args += parsed.delta || "";
           }
+        } else if (parsed.type === "response.output_item.done" && parsed.item?.type === "function_call") {
+          const doneCallId = normalizeId(parsed.item.call_id);
+          const doneItemId = normalizeId(parsed.item.id);
+          const existingToolCall = resolveToolCall({
+            callId: doneCallId,
+            itemId: doneItemId,
+          });
+          const toolCall = existingToolCall || {
+            callId: doneCallId,
+            itemId: doneItemId,
+            name: normalizeId(parsed.item.name),
+            args: "",
+          };
+          const finalArgs = normalizeId(parsed.item.arguments) || toolCall.args;
+          const finalCallId = normalizeId(toolCall.callId) || doneCallId;
+          const finalName = normalizeId(toolCall.name) || normalizeId(parsed.item.name);
+          pendingToolCalls.push({
+            callId: finalCallId,
+            name: finalName,
+            args: finalArgs,
+          });
+          unregisterToolCall(toolCall);
         }
       } catch {
         // skip non-JSON lines

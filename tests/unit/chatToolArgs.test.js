@@ -89,4 +89,20 @@ describe("chat tool note-id resolution", () => {
     assert.equal(searchArgs.project, "Product");
   });
 
+  it("maps batch create project aliases to current folder context", () => {
+    const args = resolveAgentToolArgs(
+      "create_notes_bulk",
+      {
+        project: "this folder",
+        items: [
+          { content: "first", project: "this project" },
+          { content: "second" },
+        ],
+      },
+      { contextProject: "Product" }
+    );
+    assert.equal(args.project, "Product");
+    assert.equal(args.items[0].project, "Product");
+  });
+
 });

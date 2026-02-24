@@ -575,6 +575,10 @@ export async function deleteProjectMemories(params = {}) {
   return memoryMutationOps.deleteProjectMemories(params);
 }
 
+export async function batchCreateMemories(params = {}) {
+  return memoryMutationOps.batchCreateMemories(params);
+}
+
 export async function batchDeleteMemories(params = {}) {
   return memoryMutationOps.batchDeleteMemories(params);
 }

@@ -8,6 +8,7 @@ import {
 } from "../openai.js";
 import {
   askMemories,
+  batchCreateMemories,
   batchMoveMemories,
   batchDeleteMemories,
   addMemoryComment,
@@ -56,7 +57,7 @@ import {
 } from "../storage/provider.js";
 import { enrichmentQueue } from "../queue.js";
 import { createAgentToolHarness } from "../agentHarness.js";
-import { validateNotePayload, validateBatchPayload } from "../validate.js";
+import { validateNotePayload, validateBatchPayload, validateBatchCreatePayload } from "../validate.js";
 import { extractSessionTokenFromHeaders } from "../authHeaders.js";
 import { subscribeActivity } from "../activityBus.js";
 import {
@@ -98,6 +99,7 @@ export const runtimeStaticDeps = {
   extractOutputUrlCitations,
   hasOpenAI,
   askMemories,
+  batchCreateMemories,
   batchMoveMemories,
   batchDeleteMemories,
   addMemoryComment,
@@ -143,6 +145,7 @@ export const runtimeStaticDeps = {
   createAgentToolHarness,
   validateNotePayload,
   validateBatchPayload,
+  validateBatchCreatePayload,
   extractSessionTokenFromHeaders,
   subscribeActivity,
   deleteFirebaseUser,

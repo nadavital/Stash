@@ -1,9 +1,11 @@
 import fs from "node:fs";
-import { Pool } from "pg";
+import { createRequire } from "node:module";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 
 let cachedPool = null;
+let cachedPoolCtor = null;
+const require = createRequire(import.meta.url);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,6 +75,21 @@ function buildSslConfig(connectionString) {
   return ssl;
 }
 
+function resolvePoolCtor() {
+  if (cachedPoolCtor) return cachedPoolCtor;
+  try {
+    const pgModule = require("pg");
+    cachedPoolCtor = pgModule?.Pool;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Postgres driver not installed. Add \"pg\" to dependencies. (${message})`);
+  }
+  if (typeof cachedPoolCtor !== "function") {
+    throw new Error("Postgres driver does not export Pool constructor");
+  }
+  return cachedPoolCtor;
+}
+
 export function createPostgresPool({
   databaseUrl = config.databaseUrl,
   max = Number(process.env.PG_POOL_MAX || 10),
@@ -85,6 +102,7 @@ export function createPostgresPool({
   }
 
   const sslConfig = buildSslConfig(connectionString);
+  const Pool = resolvePoolCtor();
 
   return new Pool({
     connectionString,

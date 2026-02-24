@@ -65,9 +65,15 @@ export async function handleTaskRoutes(req, res, url, context) {
   if (req.method === "POST" && url.pathname === "/api/tasks") {
     const body = await readJsonBody(req);
     try {
-      const requireApproval = body.requireApproval === true;
-      const activate = body.activate === true;
+      const requireApproval = body.requireApproval !== false;
+      const canAutoApprove = canApproveAutomations(actor, isWorkspaceManager);
+      if (!requireApproval && !canAutoApprove) {
+        sendJson(res, 403, { error: "Only workspace admins can create pre-approved automations" });
+        return true;
+      }
+
       const approvalStatus = requireApproval ? "pending_approval" : "approved";
+      const activate = body.activate === true && approvalStatus === "approved";
       const task = await taskRepo.createTask({
         title: body.title,
         name: body.name,

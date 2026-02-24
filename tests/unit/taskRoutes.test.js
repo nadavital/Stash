@@ -84,6 +84,56 @@ describe("handleTaskRoutes", () => {
     assert.equal(sent[0].body.task.id, "task-1");
   });
 
+  it("defaults task creation to pending approval for non-managers", async () => {
+    let createPayload = null;
+    const { sent, context } = createContext({
+      actor: { userId: "u2", workspaceId: "w1", role: "member" },
+      readJsonBody: async () => ({ title: "Ship", activate: true }),
+    });
+    context.taskRepo.createTask = async (payload) => {
+      createPayload = payload;
+      return createTaskFixture({
+        title: payload.title,
+        approvalStatus: payload.approvalStatus,
+        status: payload.status,
+        state: payload.approvalStatus,
+      });
+    };
+
+    const handled = await handleTaskRoutes(
+      { method: "POST" },
+      {},
+      new URL("http://localhost/api/tasks"),
+      context,
+    );
+    assert.equal(handled, true);
+    assert.equal(sent[0].statusCode, 201);
+    assert.equal(createPayload?.approvalStatus, "pending_approval");
+    assert.equal(createPayload?.status, "paused");
+  });
+
+  it("returns 403 when non-manager requests pre-approved task creation", async () => {
+    let createTaskCalls = 0;
+    const { sent, context } = createContext({
+      actor: { userId: "u2", workspaceId: "w1", role: "member" },
+      readJsonBody: async () => ({ title: "Ship", requireApproval: false, activate: true }),
+    });
+    context.taskRepo.createTask = async () => {
+      createTaskCalls += 1;
+      return createTaskFixture();
+    };
+
+    const handled = await handleTaskRoutes(
+      { method: "POST" },
+      {},
+      new URL("http://localhost/api/tasks"),
+      context,
+    );
+    assert.equal(handled, true);
+    assert.equal(sent[0].statusCode, 403);
+    assert.equal(createTaskCalls, 0);
+  });
+
   it("approves tasks through approve endpoint", async () => {
     const { sent, context } = createContext({
       readJsonBody: async () => ({ activate: true }),

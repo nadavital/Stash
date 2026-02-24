@@ -31,6 +31,17 @@ export function normalizeToolArgs(name, args) {
         fileMimeType: normalizeText(source.fileMimeType),
       };
     }
+    case "create_notes_bulk": {
+      const rawItems = Array.isArray(source.items) ? source.items : [];
+      if (rawItems.length === 0) {
+        throw new Error("create_notes_bulk requires a non-empty items array");
+      }
+      return {
+        ...(source.project !== undefined ? { project: normalizeText(source.project) } : {}),
+        ...(source.stopOnError !== undefined ? { stopOnError: source.stopOnError === true } : {}),
+        items: rawItems.map((item, index) => normalizeCreateNotesBulkItem(item, index)),
+      };
+    }
     case "create_folder": {
       const nameArg = normalizeText(source.name);
       if (!nameArg) throw new Error("create_folder requires a folder name");
@@ -348,4 +359,30 @@ function normalizePositiveInt(value, { min = 1, max = 10080, required = false } 
     throw new Error("Expected positive integer");
   }
   return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function normalizeCreateNotesBulkItem(item, index) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new Error(`create_notes_bulk item at index ${index} must be an object`);
+  }
+
+  const content = normalizeText(item.content);
+  const imageDataUrl = normalizeText(item.imageDataUrl);
+  const fileDataUrl = normalizeText(item.fileDataUrl);
+  const hasAttachment = Boolean(imageDataUrl || fileDataUrl);
+  if (!content && !hasAttachment) {
+    throw new Error(`create_notes_bulk item at index ${index} requires content or an attachment`);
+  }
+
+  return {
+    content,
+    title: normalizeText(item.title),
+    project: normalizeText(item.project),
+    sourceType: normalizeChatSourceType(item.sourceType),
+    sourceUrl: normalizeText(item.sourceUrl),
+    imageDataUrl,
+    fileDataUrl,
+    fileName: normalizeText(item.fileName),
+    fileMimeType: normalizeText(item.fileMimeType),
+  };
 }

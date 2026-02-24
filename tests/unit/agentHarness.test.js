@@ -68,6 +68,36 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.result?.args?.title, "Test Context Note");
   });
 
+  it("normalizes create_notes_bulk payloads", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "create_notes_bulk",
+      rawArgs: JSON.stringify({
+        project: " Product ",
+        stopOnError: true,
+        items: [
+          {
+            content: "  https://example.com/roadmap  ",
+            sourceType: "url",
+            title: "  Roadmap link ",
+          },
+        ],
+      }),
+      callId: "call-bulk",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.project, "Product");
+    assert.equal(result.result?.args?.stopOnError, true);
+    assert.equal(result.result?.args?.items?.[0]?.content, "https://example.com/roadmap");
+    assert.equal(result.result?.args?.items?.[0]?.sourceType, "link");
+    assert.equal(result.result?.args?.items?.[0]?.title, "Roadmap link");
+  });
+
   it("normalizes search scope and working set ids", async () => {
     const harness = createAgentToolHarness({
       executeTool: async (_name, args) => ({ args }),

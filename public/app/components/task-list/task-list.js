@@ -1,5 +1,7 @@
 import { renderIcon } from "../../services/icons.js";
 
+const MORE_ICON = renderIcon("ellipsis-vertical", { size: 16, strokeWidth: 2 });
+
 function escapeHtml(value = "") {
   return String(value || "")
     .replaceAll("&", "&amp;")
@@ -24,15 +26,10 @@ function normalizeState(task = {}) {
   return "paused";
 }
 
-function formatRelativeDate(value = "") {
-  const input = String(value || "").trim();
-  if (!input) return "";
-  const parsed = new Date(input);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(parsed);
+function stateActionLabel(state = "") {
+  if (state === "pending_approval") return "Approve";
+  if (state === "active") return "Pause";
+  return "Resume";
 }
 
 function stateLabel(state = "") {
@@ -41,163 +38,181 @@ function stateLabel(state = "") {
   return "Paused";
 }
 
-function formatPausedReason(value = "") {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return "";
-  if (normalized === "auto_paused_after_failures") return "Auto-paused after failures";
-  if (normalized === "manual_pause") return "Paused manually";
-  return normalized.replaceAll("_", " ");
+function formatCompactDateTime(value = "") {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
-function formatRunStatus(value = "") {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return "";
-  if (normalized === "succeeded") return "Last run succeeded";
-  if (normalized === "failed") return "Last run failed";
-  if (normalized === "running") return "Run in progress";
-  return `Last run ${normalized}`;
+function formatTimeOnly(value = "") {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
-function renderStateControl(task, state) {
-  const id = String(task?.id || "").trim();
-  if (!id) return "";
+function formatScheduleInterval(intervalMinutes = 0) {
+  const minutes = Math.max(1, Number(intervalMinutes) || 0);
+  if (!minutes) return "";
+  if (minutes % 1440 === 0) {
+    const days = Math.floor(minutes / 1440);
+    return days === 1 ? "Daily" : `Every ${days} days`;
+  }
+  if (minutes % 60 === 0) {
+    const hours = Math.floor(minutes / 60);
+    return hours === 1 ? "Hourly" : `Every ${hours} hours`;
+  }
+  return `Every ${minutes} minutes`;
+}
 
-  const buttonClass = ["task-list-toggle-btn", `is-${state.replaceAll("_", "-")}`].join(" ");
-  const iconName = state === "pending_approval" ? "check" : state === "active" ? "close" : "refresh";
-  const action = "toggle";
-  const label = state === "pending_approval"
-    ? "Approve automation"
-    : state === "active"
-      ? "Pause automation"
-      : "Resume automation";
+function formatTaskSchedule(task = {}) {
+  const scheduleType = String(task?.scheduleType || "").trim().toLowerCase();
+  if (scheduleType !== "interval") return "Manual";
+  const cadence = formatScheduleInterval(task?.intervalMinutes || 0) || "Interval";
+  const nextRunAt = formatCompactDateTime(task?.nextRunAt);
+  const nextRunTime = formatTimeOnly(task?.nextRunAt);
+  if (nextRunTime && /daily/i.test(cadence)) {
+    return `${cadence} at ${nextRunTime}`;
+  }
+  if (nextRunAt) {
+    return `${cadence} \u00b7 ${nextRunAt}`;
+  }
+  return cadence;
+}
 
+function formatTaskDestination(task = {}) {
+  const scopeFolder = String(task?.scopeFolder || task?.project || "").trim();
+  return scopeFolder || "Workspace root";
+}
+
+function renderTaskActionButton({
+  action = "",
+  label = "",
+  taskId = "",
+  state = "",
+  title = "",
+  tone = "default",
+}) {
+  if (!action || !label || !taskId) return "";
   return `
     <button
       type="button"
-      class="${buttonClass}"
-      data-task-action="${action}"
-      data-task-id="${escapeHtml(id)}"
+      class="task-list-menu-item${tone === "danger" ? " is-danger" : ""}"
+      data-task-action="${escapeHtml(action)}"
+      data-task-id="${escapeHtml(taskId)}"
       data-task-state="${escapeHtml(state)}"
-      aria-label="${label}"
+      data-task-title="${escapeHtml(title)}"
     >
-      ${renderIcon(iconName, { size: 14 })}
+      ${escapeHtml(label)}
     </button>
   `;
 }
 
-function renderTaskItem(task, { showStatus = true, allowEdit = true, allowDelete = true, allowRun = true } = {}) {
-  const id = String(task?.id || "").trim();
-  const title = String(task?.title || task?.name || "").trim();
-  const prompt = String(task?.prompt || "").trim();
-  const project = String(task?.project || task?.scopeFolder || "").trim();
-  const state = normalizeState(task);
-  const createdAt = formatRelativeDate(task?.createdAt);
-  const nextRunAt = formatRelativeDate(task?.nextRunAt);
-  const lastRunAt = formatRelativeDate(task?.lastRunAt);
-  const lastRunStatusLabel = formatRunStatus(task?.lastRunStatus);
-  const lastError = String(task?.lastError || "").trim();
-  const pausedReason = formatPausedReason(task?.pausedReason);
-  const lastRunMutationCount = Number(task?.lastRunMutationCount || 0);
-  const consecutiveFailures = Number(task?.consecutiveFailures || 0);
-  const maxConsecutiveFailures = Number(task?.maxConsecutiveFailures || 3);
+function renderTaskActionMenu({
+  taskId = "",
+  state = "",
+  title = "",
+  allowRun = true,
+  allowStateControl = true,
+  allowEdit = true,
+  allowDelete = false,
+} = {}) {
+  const menuItems = [
+    allowRun && state !== "pending_approval"
+      ? renderTaskActionButton({ action: "run", label: "Run now", taskId, state, title })
+      : "",
+    allowStateControl
+      ? renderTaskActionButton({ action: "state", label: stateActionLabel(state), taskId, state, title })
+      : "",
+    allowEdit
+      ? renderTaskActionButton({ action: "edit", label: "Edit", taskId, state, title })
+      : "",
+    allowDelete
+      ? renderTaskActionButton({ action: "delete", label: "Delete", taskId, state, title, tone: "danger" })
+      : "",
+  ]
+    .filter(Boolean)
+    .join("");
 
-  const safeTitle = escapeHtml(title || "Untitled automation");
-  const safePrompt = escapeHtml(prompt);
-  const safeProject = escapeHtml(project);
-  const safeLastError = escapeHtml(lastError);
-  const safePausedReason = escapeHtml(pausedReason);
-
-  const telemetrySignals = [];
-  if (lastRunStatusLabel) {
-    telemetrySignals.push(
-      `<span class="task-list-signal is-run-status">${escapeHtml(lastRunStatusLabel)}${lastRunAt ? ` ${escapeHtml(lastRunAt)}` : ""}</span>`,
-    );
-  }
-  if (lastRunMutationCount > 0) {
-    telemetrySignals.push(
-      `<span class="task-list-signal is-mutations">Last mutations ${escapeHtml(String(lastRunMutationCount))}</span>`,
-    );
-  }
-  if (consecutiveFailures > 0) {
-    telemetrySignals.push(
-      `<span class="task-list-signal is-failures">Failures ${escapeHtml(String(consecutiveFailures))}/${escapeHtml(String(maxConsecutiveFailures))}</span>`,
-    );
-  }
-  if (state === "paused" && safePausedReason) {
-    telemetrySignals.push(
-      `<span class="task-list-signal is-paused-reason">${safePausedReason}</span>`,
-    );
-  }
-  if (lastError) {
-    telemetrySignals.push(
-      `<span class="task-list-signal is-error" title="${safeLastError}">Error: ${safeLastError}</span>`,
-    );
-  }
-
-  const runButton = allowRun && state !== "pending_approval"
-    ? `
-      <button
-        type="button"
-        class="task-list-action-btn"
-        data-task-action="run"
-        data-task-id="${escapeHtml(id)}"
-        aria-label="Run automation now"
-      >
-        ${renderIcon("refresh", { size: 14 })}
-      </button>
-    `
-    : "";
-
-  const editButton = allowEdit
-    ? `
-      <button
-        type="button"
-        class="task-list-action-btn"
-        data-task-action="edit"
-        data-task-id="${escapeHtml(id)}"
-        data-task-title="${safeTitle}"
-        data-task-prompt="${safePrompt}"
-        data-task-project="${safeProject}"
-        aria-label="Edit automation"
-      >
-        ${renderIcon("edit", { size: 14 })}
-      </button>
-    `
-    : "";
-
-  const deleteButton = allowDelete
-    ? `
-      <button
-        type="button"
-        class="task-list-action-btn task-list-action-btn--danger"
-        data-task-action="delete"
-        data-task-id="${escapeHtml(id)}"
-        aria-label="Delete automation"
-      >
-        ${renderIcon("trash", { size: 14 })}
-      </button>
-    `
-    : "";
+  if (!menuItems) return "";
 
   return `
-    <li class="task-list-item is-${state.replaceAll("_", "-")}" data-task-id="${escapeHtml(id)}">
-      ${renderStateControl(task, state)}
-      <div class="task-list-main">
-        <p class="task-list-title">${safeTitle}</p>
-        ${safePrompt ? `<p class="task-list-prompt">${safePrompt}</p>` : ""}
-        <p class="task-list-meta">
-          ${showStatus ? `<span class="task-list-status is-${state.replaceAll("_", "-")}">${stateLabel(state)}</span>` : ""}
-          ${safeProject ? `<span class="task-list-project">${safeProject}</span>` : ""}
-          ${createdAt ? `<span class="task-list-date">Created ${escapeHtml(createdAt)}</span>` : ""}
-          ${nextRunAt && state !== "pending_approval" ? `<span class="task-list-date">Next ${escapeHtml(nextRunAt)}</span>` : ""}
-        </p>
-        ${telemetrySignals.length > 0 ? `<p class="task-list-telemetry">${telemetrySignals.join("")}</p>` : ""}
+    <details class="task-list-menu" data-task-menu>
+      <summary class="task-list-menu-trigger" aria-label="More actions">
+        ${MORE_ICON}
+      </summary>
+      <div class="task-list-menu-panel" role="menu" aria-label="Automation actions">
+        ${menuItems}
       </div>
-      <div class="task-list-actions">
-        ${runButton}
-        ${editButton}
-        ${deleteButton}
-      </div>
+    </details>
+  `;
+}
+
+function renderTaskItem(
+  task,
+  {
+    allowEdit = true,
+    allowDelete = false,
+    allowRun = true,
+    allowOpen = true,
+    allowStateControl = true,
+    selectedTaskId = "",
+  } = {},
+) {
+  const id = String(task?.id || "").trim();
+  const title = String(task?.title || task?.name || "").trim();
+  const state = normalizeState(task);
+  const safeTitle = escapeHtml(title || "Untitled automation");
+  const normalizedSelectedId = String(selectedTaskId || "").trim();
+  const selectedClass = normalizedSelectedId && normalizedSelectedId === id ? " is-selected" : "";
+  const scheduleLabel = formatTaskSchedule(task);
+  const destinationLabel = formatTaskDestination(task);
+  const lastRunLabel = formatCompactDateTime(task?.lastRunAt);
+
+  return `
+    <li class="task-list-item is-${state.replaceAll("_", "-")}${selectedClass}" data-task-id="${escapeHtml(id)}">
+      <article
+        class="task-list-card"
+        data-task-open="${allowOpen ? "true" : "false"}"
+        data-task-id="${escapeHtml(id)}"
+        role="button"
+        tabindex="${allowOpen ? "0" : "-1"}"
+        aria-label="Open automation ${safeTitle}"
+      >
+        <div class="task-list-main">
+          <p class="task-list-state-row">
+            <span class="task-list-state is-${escapeHtml(state.replaceAll("_", "-"))}">${escapeHtml(stateLabel(state))}</span>
+            ${lastRunLabel ? `<span class="task-list-last-run">Last run ${escapeHtml(lastRunLabel)}</span>` : ""}
+          </p>
+          <p class="task-list-title">${safeTitle}</p>
+          <p class="task-list-meta">
+            <span>${escapeHtml(scheduleLabel)}</span>
+            <span>Saves to ${escapeHtml(destinationLabel)}</span>
+          </p>
+        </div>
+        <div class="task-list-menu-wrap">
+          ${renderTaskActionMenu({
+            taskId: id,
+            state,
+            title,
+            allowRun,
+            allowStateControl,
+            allowEdit,
+            allowDelete,
+          })}
+        </div>
+      </article>
     </li>
   `;
 }
@@ -206,6 +221,7 @@ export function renderTaskListHTML({
   idBase = "task-list",
   title = "Tasks",
   subtitle = "",
+  showHeader = true,
   emptyText = "No tasks yet",
   showFilters = false,
   showComposer = true,
@@ -218,22 +234,27 @@ export function renderTaskListHTML({
   const safeEmptyText = escapeHtml(emptyText);
   const safeViewHref = escapeHtml(viewAllHref);
 
+  const resolvedAriaLabel = safeTitle || "Tasks";
   return `
-    <section class="task-list" data-component="task-list" data-id-base="${escapeHtml(idBase)}" aria-label="${safeTitle}">
-      <div class="task-list-head">
-        <div class="task-list-heading">
-          <p class="task-list-title-label">${safeTitle}</p>
-          ${safeSubtitle ? `<p class="task-list-subtitle">${safeSubtitle}</p>` : ""}
-        </div>
-        ${showViewAll ? `<a class="task-list-view-all" href="${safeViewHref}">View all</a>` : ""}
-      </div>
+    <section class="task-list" data-component="task-list" data-id-base="${escapeHtml(idBase)}" aria-label="${resolvedAriaLabel}">
+      ${showHeader
+        ? `
+          <div class="task-list-head">
+            <div class="task-list-heading">
+              <p class="task-list-title-label">${safeTitle}</p>
+              ${safeSubtitle ? `<p class="task-list-subtitle">${safeSubtitle}</p>` : ""}
+            </div>
+            ${showViewAll ? `<a class="task-list-view-all" href="${safeViewHref}">View all</a>` : ""}
+          </div>
+        `
+        : ""}
       ${showFilters
         ? `
           <div class="task-list-filters" role="group" aria-label="Automation status">
-            <button type="button" id="${escapeHtml(idBase)}-filter-pending" class="task-list-filter-btn" data-status-filter="pending_approval" aria-pressed="false">Pending</button>
-            <button type="button" id="${escapeHtml(idBase)}-filter-active" class="task-list-filter-btn is-active" data-status-filter="active" aria-pressed="true">Active</button>
-            <button type="button" id="${escapeHtml(idBase)}-filter-paused" class="task-list-filter-btn" data-status-filter="paused" aria-pressed="false">Paused</button>
-            <button type="button" id="${escapeHtml(idBase)}-filter-all" class="task-list-filter-btn" data-status-filter="all" aria-pressed="false">All</button>
+            <button type="button" id="${escapeHtml(idBase)}-filter-all" class="task-list-filter-btn is-active" data-status-filter="all" aria-pressed="true">All</button>
+            <button type="button" id="${escapeHtml(idBase)}-filter-active" class="task-list-filter-btn" data-status-filter="active" aria-pressed="false">Scheduled</button>
+            <button type="button" id="${escapeHtml(idBase)}-filter-paused" class="task-list-filter-btn" data-status-filter="paused" aria-pressed="false">Not scheduled</button>
+            <button type="button" id="${escapeHtml(idBase)}-filter-pending" class="task-list-filter-btn" data-status-filter="pending_approval" aria-pressed="false">Needs approval</button>
           </div>
         `
         : ""}
@@ -293,10 +314,12 @@ export function renderTaskListItems(
   tasks = [],
   {
     emptyText = "No tasks yet",
-    showStatus = true,
     allowEdit = true,
-    allowDelete = true,
+    allowDelete = false,
     allowRun = true,
+    allowOpen = true,
+    allowStateControl = true,
+    selectedTaskId = "",
   } = {},
 ) {
   if (!els?.taskListItems || !els?.taskListEmpty) return;
@@ -309,17 +332,24 @@ export function renderTaskListItems(
   }
   els.taskListEmpty.classList.add("hidden");
   els.taskListItems.innerHTML = list
-    .map((task) => renderTaskItem(task, { showStatus, allowEdit, allowDelete, allowRun }))
+    .map((task) => renderTaskItem(task, {
+      allowEdit,
+      allowDelete,
+      allowRun,
+      allowOpen,
+      allowStateControl,
+      selectedTaskId,
+    }))
     .join("");
 }
 
 export function initTaskList(els, callbacks = {}) {
   const disposers = [];
 
-  function on(target, eventName, handler) {
+  function on(target, eventName, handler, options) {
     if (!target) return;
-    target.addEventListener(eventName, handler);
-    disposers.push(() => target.removeEventListener(eventName, handler));
+    target.addEventListener(eventName, handler, options);
+    disposers.push(() => target.removeEventListener(eventName, handler, options));
   }
 
   on(els?.taskListForm, "submit", async (event) => {
@@ -337,47 +367,81 @@ export function initTaskList(els, callbacks = {}) {
     }
   });
 
-  on(els?.taskListRoot, "click", async (event) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const button = target.closest("[data-task-action]");
-    if (!(button instanceof HTMLButtonElement)) return;
-    const action = String(button.dataset.taskAction || "").trim();
-    const taskId = String(button.dataset.taskId || "").trim();
-    const state = String(button.dataset.taskState || "").trim().toLowerCase();
-    const title = String(button.dataset.taskTitle || "").trim();
-    const prompt = String(button.dataset.taskPrompt || "").trim();
-    const project = String(button.dataset.taskProject || "").trim();
-    if (!taskId && action !== "filter") return;
-
-    if (action === "toggle" && typeof callbacks.onToggle === "function") {
-      await callbacks.onToggle({ id: taskId, state });
-      return;
-    }
-    if (action === "run" && typeof callbacks.onRun === "function") {
-      await callbacks.onRun({ id: taskId });
-      return;
-    }
-    if (action === "delete" && typeof callbacks.onDelete === "function") {
-      await callbacks.onDelete({ id: taskId, title });
-      return;
-    }
-    if (action === "edit" && typeof callbacks.onEdit === "function") {
-      await callbacks.onEdit({ id: taskId, title, prompt, project });
-    }
+  on(els?.taskListRoot, "toggle", (event) => {
+    const toggled = event.target;
+    if (!(toggled instanceof HTMLDetailsElement)) return;
+    if (!toggled.matches(".task-list-menu")) return;
+    if (!toggled.open) return;
+    els.taskListRoot?.querySelectorAll(".task-list-menu[open]").forEach((menu) => {
+      if (menu === toggled) return;
+      menu.open = false;
+    });
   });
 
   on(els?.taskListRoot, "click", async (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const filterButton = target.closest("[data-status-filter]");
-    if (!(filterButton instanceof HTMLButtonElement)) return;
-    const status = String(filterButton.dataset.statusFilter || "").trim().toLowerCase();
-    if (!status) return;
-    setTaskListActiveFilter(els, status);
-    if (typeof callbacks.onFilterChange === "function") {
-      await callbacks.onFilterChange(status);
+
+    const button = target.closest("[data-task-action]");
+    if (button instanceof HTMLButtonElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      const action = String(button.dataset.taskAction || "").trim();
+      const taskId = String(button.dataset.taskId || "").trim();
+      const state = String(button.dataset.taskState || "").trim().toLowerCase();
+      const title = String(button.dataset.taskTitle || "").trim();
+      if (!taskId) return;
+
+      if (action === "state" && typeof callbacks.onToggle === "function") {
+        await callbacks.onToggle({ id: taskId, state });
+        return;
+      }
+      if (action === "run" && typeof callbacks.onRun === "function") {
+        await callbacks.onRun({ id: taskId });
+        return;
+      }
+      if (action === "delete" && typeof callbacks.onDelete === "function") {
+        await callbacks.onDelete({ id: taskId, title });
+        return;
+      }
+      if (action === "edit" && typeof callbacks.onEdit === "function") {
+        await callbacks.onEdit({ id: taskId, title, prompt: "", project: "" });
+      }
+      return;
     }
+
+    const filterButton = target.closest("[data-status-filter]");
+    if (filterButton instanceof HTMLButtonElement) {
+      const status = String(filterButton.dataset.statusFilter || "").trim().toLowerCase();
+      if (!status) return;
+      setTaskListActiveFilter(els, status);
+      if (typeof callbacks.onFilterChange === "function") {
+        await callbacks.onFilterChange(status);
+      }
+      return;
+    }
+
+    if (target.closest(".task-list-menu")) {
+      return;
+    }
+
+    const card = target.closest(".task-list-card[data-task-open='true']");
+    if (!(card instanceof HTMLElement)) return;
+    const taskId = String(card.dataset.taskId || "").trim();
+    if (!taskId || typeof callbacks.onOpen !== "function") return;
+    await callbacks.onOpen({ id: taskId });
+  });
+
+  on(els?.taskListRoot, "keydown", async (event) => {
+    if (!(event.target instanceof Element)) return;
+    if (event.target.closest(".task-list-menu")) return;
+    const card = event.target.closest(".task-list-card[data-task-open='true']");
+    if (!(card instanceof HTMLElement)) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const taskId = String(card.dataset.taskId || "").trim();
+    if (!taskId || typeof callbacks.onOpen !== "function") return;
+    event.preventDefault();
+    await callbacks.onOpen({ id: taskId });
   });
 
   return () => {

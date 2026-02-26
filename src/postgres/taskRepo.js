@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { config } from "../config.js";
 import { getPostgresPool } from "./pool.js";
 import { ensurePostgresReady } from "./runtime.js";
+import { normalizeTaskSpec } from "../tasks/taskSpec.js";
 
 const APPROVAL_PENDING = "pending_approval";
 const APPROVAL_APPROVED = "approved";
@@ -137,6 +138,17 @@ function normalizeTimezone(value, fallback = "UTC") {
   return normalized || fallback;
 }
 
+function normalizeNextRunAt(value, fallback = null) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("nextRunAt must be a valid ISO timestamp");
+  }
+  return parsed.toISOString();
+}
+
 function addMinutesIso(baseIso, minutes) {
   const parsed = new Date(baseIso);
   if (Number.isNaN(parsed.getTime())) {
@@ -144,6 +156,24 @@ function addMinutesIso(baseIso, minutes) {
   }
   parsed.setUTCMinutes(parsed.getUTCMinutes() + minutes);
   return parsed.toISOString();
+}
+
+function alignIntervalFromAnchor({ anchorIso = "", intervalMinutes, referenceIso = nowIso() } = {}) {
+  const interval = Number(intervalMinutes);
+  if (!Number.isFinite(interval) || interval <= 0) return null;
+  const anchor = new Date(String(anchorIso || "").trim());
+  if (Number.isNaN(anchor.getTime())) return null;
+  const reference = new Date(String(referenceIso || "").trim());
+  const refMs = Number.isNaN(reference.getTime()) ? Date.now() : reference.getTime();
+  const intervalMs = Math.floor(interval) * 60 * 1000;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return null;
+
+  let nextMs = anchor.getTime();
+  if (nextMs <= refMs) {
+    const steps = Math.floor((refMs - nextMs) / intervalMs) + 1;
+    nextMs += steps * intervalMs;
+  }
+  return new Date(nextMs).toISOString();
 }
 
 function mapTaskState({ approvalStatus, status, enabled }) {
@@ -159,6 +189,11 @@ function mapTaskRow(row) {
   const status = String(row.status || TASK_STATE_PAUSED);
   const enabled = row.enabled === true;
   const name = String(row.name || "");
+  const taskSpec = normalizeTaskSpec(row.task_spec_json, {
+    title: name,
+    prompt: String(row.prompt || ""),
+    scopeFolder: String(row.scope_folder || ""),
+  });
 
   return {
     id: row.id,
@@ -168,6 +203,7 @@ function mapTaskRow(row) {
     title: name,
     name,
     prompt: String(row.prompt || ""),
+    taskSpec,
     project: String(row.scope_folder || ""),
     scopeType: String(row.scope_type || SCOPE_WORKSPACE),
     scopeFolder: String(row.scope_folder || ""),
@@ -231,10 +267,37 @@ class PostgresTaskRepository {
     return mapTaskRow(result.rows[0]);
   }
 
-  _computeNextRunAt({ scheduleType, intervalMinutes, enabled }) {
-    if (!enabled || scheduleType !== SCHEDULE_INTERVAL || !Number.isFinite(intervalMinutes) || intervalMinutes <= 0) {
+  _computeNextRunAt({
+    scheduleType,
+    intervalMinutes,
+    enabled,
+    requestedNextRunAt = null,
+    existingNextRunAt = null,
+  }) {
+    if (scheduleType !== SCHEDULE_INTERVAL || !Number.isFinite(intervalMinutes) || intervalMinutes <= 0) {
       return null;
     }
+
+    const requestedAnchor = normalizeNextRunAt(requestedNextRunAt, null);
+    if (requestedAnchor) {
+      return alignIntervalFromAnchor({
+        anchorIso: requestedAnchor,
+        intervalMinutes,
+      });
+    }
+
+    const existingAnchor = normalizeNextRunAt(existingNextRunAt, null);
+    if (existingAnchor) {
+      return alignIntervalFromAnchor({
+        anchorIso: existingAnchor,
+        intervalMinutes,
+      });
+    }
+
+    if (!enabled) {
+      return null;
+    }
+
     return addMinutesIso(nowIso(), intervalMinutes);
   }
 
@@ -316,12 +379,14 @@ class PostgresTaskRepository {
     title,
     name,
     prompt,
+    taskSpec,
     project,
     scopeType,
     scopeFolder,
     scheduleType,
     intervalMinutes,
     timezone,
+    nextRunAt,
     maxActionsPerRun,
     maxConsecutiveFailures,
     dryRun,
@@ -346,6 +411,11 @@ class PostgresTaskRepository {
 
     const normalizedScopeFolder = String(scopeFolder || project || "").trim();
     const normalizedScopeType = normalizeScopeType(scopeType, { scopeFolder: normalizedScopeFolder });
+    const normalizedTaskSpec = normalizeTaskSpec(taskSpec, {
+      title: normalizedName,
+      prompt: normalizedPrompt,
+      scopeFolder: normalizedScopeFolder,
+    });
 
     const normalizedIntervalMinutes = normalizeIntervalMinutes(intervalMinutes, null);
     const normalizedScheduleType = normalizeScheduleType(scheduleType, { intervalMinutes: normalizedIntervalMinutes });
@@ -368,10 +438,11 @@ class PostgresTaskRepository {
       ? String(approvedByUserId || createdByUserId || "").trim() || null
       : null;
 
-    const nextRunAt = this._computeNextRunAt({
+    const computedNextRunAt = this._computeNextRunAt({
       scheduleType: normalizedScheduleType,
       intervalMinutes: resolvedIntervalMinutes,
       enabled: resolvedEnabled,
+      requestedNextRunAt: normalizeNextRunAt(nextRunAt, null),
     });
     const resolvedMaxConsecutiveFailures = normalizeMaxConsecutiveFailures(
       maxConsecutiveFailures,
@@ -390,6 +461,7 @@ class PostgresTaskRepository {
           approved_by_user_id,
           name,
           prompt,
+          task_spec_json,
           scope_type,
           scope_folder,
           schedule_type,
@@ -412,7 +484,7 @@ class PostgresTaskRepository {
           $4,
           $5,
           $6,
-          $7,
+          $7::jsonb,
           $8,
           $9,
           $10,
@@ -423,10 +495,11 @@ class PostgresTaskRepository {
           $15,
           $16,
           $17,
-          $18::timestamptz,
+          $18,
           $19::timestamptz,
           $20::timestamptz,
-          $21::timestamptz
+          $21::timestamptz,
+          $22::timestamptz
         )
       `,
       [
@@ -436,6 +509,7 @@ class PostgresTaskRepository {
         normalizedApprovedBy,
         normalizedName,
         normalizedPrompt,
+        normalizedTaskSpec,
         normalizedScopeType,
         normalizedScopeFolder || null,
         normalizedScheduleType,
@@ -447,7 +521,7 @@ class PostgresTaskRepository {
         normalizeMaxActionsPerRun(maxActionsPerRun, 4),
         resolvedMaxConsecutiveFailures,
         dryRun === true,
-        nextRunAt,
+        computedNextRunAt,
         normalizedApprovalStatus === APPROVAL_APPROVED ? now : null,
         now,
         now,
@@ -472,6 +546,11 @@ class PostgresTaskRepository {
       Object.prototype.hasOwnProperty.call(patch, "scopeFolder") ||
       Object.prototype.hasOwnProperty.call(patch, "project") ||
       Object.prototype.hasOwnProperty.call(patch, "scope_folder");
+    const hasNextRunAt = Object.prototype.hasOwnProperty.call(patch, "nextRunAt");
+    const hasTaskSpec =
+      Object.prototype.hasOwnProperty.call(patch, "taskSpec")
+      || Object.prototype.hasOwnProperty.call(patch, "task_spec_json")
+      || Object.prototype.hasOwnProperty.call(patch, "spec");
 
     const nextName = hasTitle
       ? String(patch.name ?? patch.title ?? "").trim()
@@ -545,14 +624,28 @@ class PostgresTaskRepository {
       ? normalizeMaxConsecutiveFailures(patch.maxConsecutiveFailures, existing.maxConsecutiveFailures)
       : existing.maxConsecutiveFailures;
     const nextDryRun = Object.prototype.hasOwnProperty.call(patch, "dryRun") ? patch.dryRun === true : existing.dryRun;
+    const nextTaskSpec = hasTaskSpec
+      ? normalizeTaskSpec(patch.taskSpec ?? patch.task_spec_json ?? patch.spec, {
+          title: nextName,
+          prompt: nextPrompt,
+          scopeFolder: nextScopeFolder,
+        })
+      : normalizeTaskSpec(existing.taskSpec, {
+          title: nextName,
+          prompt: nextPrompt,
+          scopeFolder: nextScopeFolder,
+        });
     const nextTimezone = Object.prototype.hasOwnProperty.call(patch, "timezone")
       ? normalizeTimezone(patch.timezone, existing.timezone)
       : existing.timezone;
 
+    const requestedNextRunAt = hasNextRunAt ? normalizeNextRunAt(patch.nextRunAt, null) : null;
     const nextRunAt = this._computeNextRunAt({
       scheduleType: nextScheduleType,
       intervalMinutes: resolvedIntervalMinutes,
       enabled: nextEnabled,
+      requestedNextRunAt,
+      existingNextRunAt: hasNextRunAt ? null : existing.nextRunAt,
     });
 
     const approvedByUserId = existing.approvedByUserId || null;
@@ -564,26 +657,28 @@ class PostgresTaskRepository {
         SET
           name = $1,
           prompt = $2,
-          scope_type = $3,
-          scope_folder = $4,
-          schedule_type = $5,
-          interval_minutes = $6,
-          timezone = $7,
-          approval_status = $8,
-          enabled = $9,
-          status = $10,
-          max_actions_per_run = $11,
-          max_consecutive_failures = $12,
-          dry_run = $13,
-          next_run_at = $14::timestamptz,
-          approved_by_user_id = $15,
-          approved_at = $16::timestamptz,
-          updated_at = $17::timestamptz
-        WHERE id = $18 AND workspace_id = $19
+          task_spec_json = $3::jsonb,
+          scope_type = $4,
+          scope_folder = $5,
+          schedule_type = $6,
+          interval_minutes = $7,
+          timezone = $8,
+          approval_status = $9,
+          enabled = $10,
+          status = $11,
+          max_actions_per_run = $12,
+          max_consecutive_failures = $13,
+          dry_run = $14,
+          next_run_at = $15::timestamptz,
+          approved_by_user_id = $16,
+          approved_at = $17::timestamptz,
+          updated_at = $18::timestamptz
+        WHERE id = $19 AND workspace_id = $20
       `,
       [
         nextName,
         nextPrompt,
+        nextTaskSpec,
         nextScopeType,
         nextScopeFolder || null,
         nextScheduleType,
@@ -648,6 +743,7 @@ class PostgresTaskRepository {
       scheduleType: existing.scheduleType,
       intervalMinutes: existing.intervalMinutes,
       enabled: nextEnabled,
+      existingNextRunAt: existing.nextRunAt,
     });
 
     const now = nowIso();
@@ -695,7 +791,6 @@ class PostgresTaskRepository {
         SET
           status = $1,
           enabled = FALSE,
-          next_run_at = NULL,
           paused_reason = $2,
           updated_at = $3::timestamptz
         WHERE id = $4 AND workspace_id = $5
@@ -725,6 +820,7 @@ class PostgresTaskRepository {
       scheduleType: existing.scheduleType,
       intervalMinutes: existing.intervalMinutes,
       enabled: true,
+      existingNextRunAt: existing.nextRunAt,
     });
 
     await this._query(
@@ -766,7 +862,15 @@ class PostgresTaskRepository {
         )
         UPDATE automations a
         SET
-          next_run_at = NOW() + make_interval(mins => GREATEST(COALESCE(a.interval_minutes, 60), 5)),
+          next_run_at = a.next_run_at + make_interval(
+            mins => (
+              GREATEST(COALESCE(a.interval_minutes, 60), 5) *
+              GREATEST(
+                1,
+                FLOOR(EXTRACT(EPOCH FROM (NOW() - a.next_run_at)) / 60 / GREATEST(COALESCE(a.interval_minutes, 60), 5))::int + 1
+              )
+            )
+          ),
           updated_at = NOW()
         FROM due
         WHERE a.id = due.id

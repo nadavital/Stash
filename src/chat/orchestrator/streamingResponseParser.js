@@ -14,6 +14,32 @@ export async function parseStreamingResponse({
   const activeToolCallsByCallId = new Map();
   const activeToolCallsByItemId = new Map();
   let webSources = [];
+  let webSearchCalls = [];
+
+  function toFiniteCount(value, fallback = 0) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.floor(parsed));
+  }
+
+  function extractWebSearchCalls(response = {}) {
+    const output = Array.isArray(response?.output) ? response.output : [];
+    const calls = [];
+    for (const item of output) {
+      if (!item || typeof item !== "object") continue;
+      if (String(item.type || "").trim() !== "web_search_call") continue;
+      const action = item.action && typeof item.action === "object" ? item.action : {};
+      const sources = Array.isArray(action.sources) ? action.sources : [];
+      calls.push({
+        id: normalizeId(item.id),
+        status: normalizeId(item.status).toLowerCase() || "completed",
+        query: normalizeId(action.query || item.query),
+        sourceCount: toFiniteCount(sources.length, 0),
+      });
+      if (calls.length >= 12) break;
+    }
+    return calls;
+  }
 
   function normalizeId(value = "") {
     return String(value || "").trim();
@@ -68,6 +94,10 @@ export async function parseStreamingResponse({
           if (sources.length > 0) {
             webSources = sources;
           }
+          const searches = extractWebSearchCalls(parsed.response);
+          if (searches.length > 0) {
+            webSearchCalls = searches;
+          }
         } else if (parsed.type === "response.output_item.added" && parsed.item?.type === "function_call") {
           const toolCall = {
             callId: normalizeId(parsed.item.call_id),
@@ -117,5 +147,6 @@ export async function parseStreamingResponse({
     responseId,
     pendingToolCalls,
     webSources,
+    webSearchCalls,
   };
 }

@@ -225,6 +225,95 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.result?.args?.title, "Retitle from context");
   });
 
+  it("normalizes create_task nextRunAt as ISO datetime", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "create_task",
+      rawArgs: JSON.stringify({
+        title: "Daily digest",
+        scheduleType: "interval",
+        intervalMinutes: 1440,
+        timezone: "America/Los_Angeles",
+        nextRunAt: "2026-02-24T09:00:00-08:00",
+      }),
+      callId: "call-next-run",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.nextRunAt, "2026-02-24T17:00:00.000Z");
+    assert.equal(result.result?.args?.spec?.version, "1");
+    assert.equal(result.result?.args?.spec?.output?.mode, "per_item_notes");
+  });
+
+  it("rejects create_task with invalid nextRunAt", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async () => ({ ok: true }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "create_task",
+      rawArgs: JSON.stringify({
+        title: "Daily digest",
+        scheduleType: "interval",
+        intervalMinutes: 1440,
+        nextRunAt: "tomorrow morning",
+      }),
+      callId: "call-bad-next-run",
+      round: 1,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.trace?.status, "validation_error");
+    assert.match(String(result.error || ""), /nextRunAt must be a valid ISO datetime/i);
+  });
+
+  it("normalizes propose_task nextRunAt as ISO datetime", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "propose_task",
+      rawArgs: JSON.stringify({
+        title: "Daily digest",
+        scheduleType: "interval",
+        intervalMinutes: 1440,
+        timezone: "America/Los_Angeles",
+        nextRunAt: "2026-02-24T09:00:00-08:00",
+      }),
+      callId: "call-propose-next-run",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.nextRunAt, "2026-02-24T17:00:00.000Z");
+    assert.equal(result.result?.args?.spec?.version, "1");
+  });
+
+  it("rejects update_task when spec is not an object", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async () => ({ ok: true }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "update_task",
+      rawArgs: JSON.stringify({
+        id: "task-1",
+        spec: "invalid",
+      }),
+      callId: "call-bad-spec",
+      round: 1,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.trace?.status, "validation_error");
+    assert.match(String(result.error || ""), /spec must be an object/i);
+  });
+
   it("normalizes ask_user_question payload", async () => {
     const harness = createAgentToolHarness({
       executeTool: async (_name, args) => ({ args }),

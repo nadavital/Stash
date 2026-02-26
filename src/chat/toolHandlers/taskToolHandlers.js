@@ -1,3 +1,6 @@
+import { buildTaskProposalSignature } from "../taskSetupPolicy.js";
+import { normalizeTaskSpec } from "../../tasks/taskSpec.js";
+
 function normalizeTaskStatus(value, { allowEmpty = false, allowAll = false } = {}) {
   if (value === undefined || value === null) {
     return allowEmpty ? null : "active";
@@ -28,6 +31,33 @@ function toPositiveInt(value, fallback = undefined, { min = 1, max = 10080 } = {
   return Math.max(min, Math.min(max, Math.floor(parsed)));
 }
 
+function buildTaskDraft(args = {}) {
+  const title = String(args?.title || args?.name || "").trim();
+  if (!title) {
+    throw new Error("task title is required");
+  }
+  const intervalMinutes = toPositiveInt(args?.intervalMinutes, undefined, { min: 5, max: 10080 });
+  const scheduleType = String(args?.scheduleType || (intervalMinutes ? "interval" : "manual")).trim().toLowerCase();
+  if (scheduleType !== "manual" && scheduleType !== "interval") {
+    throw new Error("task scheduleType must be manual or interval");
+  }
+  const draft = {
+    title,
+    prompt: String(args?.prompt || title).trim(),
+    scopeType: String(args?.scopeType || "").trim().toLowerCase() || "workspace",
+    scopeFolder: String(args?.scopeFolder || args?.project || "").trim(),
+    scheduleType,
+    intervalMinutes: scheduleType === "interval" ? intervalMinutes ?? 1440 : null,
+    timezone: String(args?.timezone || "").trim(),
+    nextRunAt: String(args?.nextRunAt || "").trim(),
+    maxActionsPerRun: toPositiveInt(args?.maxActionsPerRun, 4, { min: 1, max: 25 }),
+    maxConsecutiveFailures: toPositiveInt(args?.maxConsecutiveFailures, 3, { min: 1, max: 20 }),
+    dryRun: args?.dryRun === true,
+  };
+  draft.spec = normalizeTaskSpec(args?.spec, draft);
+  return draft;
+}
+
 function mapTask(task) {
   return {
     id: String(task?.id || ""),
@@ -49,6 +79,7 @@ function mapTask(task) {
     consecutiveFailures: Number(task?.consecutiveFailures || 0),
     pausedReason: String(task?.pausedReason || ""),
     dryRun: task?.dryRun === true,
+    taskSpec: task?.taskSpec && typeof task.taskSpec === "object" ? task.taskSpec : null,
     createdAt: String(task?.createdAt || ""),
     updatedAt: String(task?.updatedAt || ""),
     nextRunAt: String(task?.nextRunAt || ""),
@@ -74,33 +105,48 @@ export function createTaskToolHandlers({ taskRepo }) {
       };
     },
 
+    async propose_task(args) {
+      const draft = buildTaskDraft(args);
+      const proposalSignature = buildTaskProposalSignature(draft);
+      return {
+        proposal: {
+          ...draft,
+          proposalSignature,
+        },
+        actions: ["Create it", "Cancel"],
+      };
+    },
+
     async create_task(args, actor) {
-      const title = String(args?.title || args?.name || "").trim();
-      if (!title) {
-        throw new Error("create_task requires title");
-      }
-      const intervalMinutes = toPositiveInt(args?.intervalMinutes, undefined, { min: 5, max: 10080 });
-      const scheduleType = String(args?.scheduleType || (intervalMinutes ? "interval" : "manual")).trim().toLowerCase();
+      const draft = buildTaskDraft(args);
+      const role = String(actor?.role || "").trim().toLowerCase();
+      const canAutoApprove = role === "owner" || role === "admin";
+      const confirmed = args?.confirmed === true;
+      const approvalStatus = confirmed && canAutoApprove ? "approved" : "pending_approval";
+      const autoActivate = approvalStatus === "approved" && draft.scheduleType === "interval";
 
       const task = await taskRepo.createTask({
-        title,
-        prompt: String(args?.prompt || title).trim(),
-        scopeType: String(args?.scopeType || "").trim().toLowerCase() || undefined,
-        scopeFolder: String(args?.scopeFolder || args?.project || "").trim(),
-        scheduleType,
-        intervalMinutes,
-        timezone: String(args?.timezone || "").trim() || undefined,
-        maxActionsPerRun: toPositiveInt(args?.maxActionsPerRun, undefined, { min: 1, max: 25 }),
-        maxConsecutiveFailures: toPositiveInt(args?.maxConsecutiveFailures, undefined, { min: 1, max: 20 }),
-        dryRun: args?.dryRun === true,
-        status: "paused",
-        approvalStatus: "pending_approval",
+        title: draft.title,
+        prompt: draft.prompt,
+        taskSpec: draft.spec,
+        scopeType: draft.scopeType || undefined,
+        scopeFolder: draft.scopeFolder,
+        scheduleType: draft.scheduleType,
+        intervalMinutes: draft.intervalMinutes,
+        timezone: draft.timezone || undefined,
+        nextRunAt: draft.nextRunAt || undefined,
+        maxActionsPerRun: draft.maxActionsPerRun,
+        maxConsecutiveFailures: draft.maxConsecutiveFailures,
+        dryRun: draft.dryRun,
+        status: autoActivate ? "active" : "paused",
+        approvalStatus,
         workspaceId: actor.workspaceId,
         createdByUserId: actor.userId,
+        approvedByUserId: approvalStatus === "approved" ? actor.userId : "",
       });
       return {
         task: mapTask(task),
-        approvalRequired: true,
+        approvalRequired: approvalStatus !== "approved",
       };
     },
 
@@ -109,6 +155,9 @@ export function createTaskToolHandlers({ taskRepo }) {
       if (!id) {
         throw new Error("update_task requires id");
       }
+      const existing = args?.spec !== undefined
+        ? await taskRepo.getTask(id, actor.workspaceId)
+        : null;
 
       const patch = {};
       if (args?.title !== undefined || args?.name !== undefined) {
@@ -132,6 +181,9 @@ export function createTaskToolHandlers({ taskRepo }) {
       if (args?.timezone !== undefined) {
         patch.timezone = String(args.timezone || "").trim();
       }
+      if (args?.nextRunAt !== undefined) {
+        patch.nextRunAt = String(args.nextRunAt || "").trim();
+      }
       if (args?.maxActionsPerRun !== undefined) {
         patch.maxActionsPerRun = toPositiveInt(args.maxActionsPerRun, undefined, { min: 1, max: 25 });
       }
@@ -140,6 +192,15 @@ export function createTaskToolHandlers({ taskRepo }) {
       }
       if (args?.dryRun !== undefined) {
         patch.dryRun = args.dryRun === true;
+      }
+      if (args?.spec !== undefined) {
+        patch.taskSpec = normalizeTaskSpec(args.spec, {
+          title: existing?.title || "",
+          prompt: existing?.prompt || "",
+          scopeFolder: patch.scopeFolder ?? existing?.scopeFolder ?? "",
+          scheduleType: patch.scheduleType ?? existing?.scheduleType ?? "manual",
+          intervalMinutes: patch.intervalMinutes ?? existing?.intervalMinutes ?? null,
+        });
       }
       if (args?.status !== undefined) {
         patch.status = normalizeTaskStatus(args.status, { allowEmpty: false, allowAll: false });

@@ -133,3 +133,29 @@ describe("createPostgresTaskRepo completeTaskRun", () => {
     assert.equal(captured.updateAutomationsParams[9], "2026-02-23T02:00:00.000Z");
   });
 });
+
+describe("createPostgresTaskRepo interval scheduling", () => {
+  it("keeps interval anchor when requested nextRunAt is provided while disabled", () => {
+    const repo = createPostgresTaskRepo({ query: async () => ({ rows: [] }) });
+    const nextRunAt = repo._computeNextRunAt({
+      scheduleType: "interval",
+      intervalMinutes: 1440,
+      enabled: false,
+      requestedNextRunAt: "2026-02-24T09:00:00.000Z",
+    });
+
+    assert.ok(nextRunAt, "expected aligned nextRunAt");
+    assert.ok(new Date(nextRunAt).getTime() > Date.now(), "expected nextRunAt in the future");
+  });
+
+  it("returns null nextRunAt for manual schedules", () => {
+    const repo = createPostgresTaskRepo({ query: async () => ({ rows: [] }) });
+    const nextRunAt = repo._computeNextRunAt({
+      scheduleType: "manual",
+      intervalMinutes: null,
+      enabled: true,
+      requestedNextRunAt: "2026-02-24T09:00:00.000Z",
+    });
+    assert.equal(nextRunAt, null);
+  });
+});

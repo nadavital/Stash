@@ -1,13 +1,10 @@
 import { renderHomeFolderGrid } from "../components/home-folder-grid/home-folder-grid.js";
 import {
-  renderRecentInlineStripHTML,
-} from "../components/home-recent-list/home-recent-list.js";
-import {
-  initTaskList,
-  queryTaskListEls,
-  renderTaskListHTML,
-  renderTaskListItems,
-} from "../components/task-list/task-list.js";
+  initActivityFeed,
+  queryActivityFeedEls,
+  renderActivityFeedHTML,
+  renderActivityFeedItems,
+} from "../components/activity-feed/activity-feed.js";
 import { showToast } from "../components/toast/toast.js";
 import {
   renderItemModalHTML,
@@ -53,7 +50,7 @@ import { createBatchSelectController } from "../services/batch-select.js";
 import { createFolderCrudController } from "../services/folder-crud.js";
 import { initKeyboardShortcuts } from "../services/keyboard.js";
 import {
-  applySortFilter,
+  buildNoteTitle,
   conciseTechnicalError,
   normalizeCitation,
 } from "../services/mappers.js";
@@ -62,11 +59,8 @@ import { createSaveModalController } from "../services/save-modal-controller.js"
 import { createItemModalController } from "../services/item-modal-controller.js";
 import { createNoteCrudController } from "../services/note-crud.js";
 import { renderFolderCards } from "../services/render-folder-cards.js";
-import { renderRecentNoteStrip } from "../services/render-recent-strip.js";
 import { subscribeNoteEnrichment } from "../services/sse-notes.js";
 import { createViewToggleController } from "../services/view-toggle.js";
-
-
 
 function renderHomePageContent() {
   return `
@@ -75,17 +69,8 @@ function renderHomePageContent() {
 
       <div class="home-explorer-pane">
         ${renderInlineSearchHTML()}
-        ${renderRecentInlineStripHTML({ title: "Recently Added" })}
-        ${renderTaskListHTML({
-          idBase: "home-tasks",
-          title: "Active Automations",
-          subtitle: "Scheduled actions for your workspace",
-          emptyText: "No active automations",
-          showFilters: false,
-          showComposer: true,
-          composerPlaceholder: "Create automation title",
-          showViewAll: true,
-          viewAllHref: "#/tasks",
+        ${renderActivityFeedHTML({
+          title: "Recent",
         })}
         <div class="home-section-header">
           <h2 class="home-section-title" style="margin:0;font-size:var(--font-size-body-sm);font-weight:var(--weight-medium);color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;">Collections</h2>
@@ -113,23 +98,22 @@ function renderHomePageContent() {
 }
 
 function queryPageElements(mountNode) {
+  const activityFeedEls = queryActivityFeedEls(mountNode);
   const itemModalEls = queryItemModalEls(mountNode);
   const folderModalEls = queryFolderModalEls(mountNode);
   const moveModalEls = queryMoveModalEls(mountNode);
   const saveModalEls = querySaveModalEls(mountNode);
   const inlineSearchEls = queryInlineSearchEls(mountNode);
   const sortFilterEls = querySortFilterEls(mountNode);
-  const taskEls = queryTaskListEls(mountNode, { idBase: "home-tasks" });
 
   return {
+    ...activityFeedEls,
     ...itemModalEls,
     ...folderModalEls,
     ...moveModalEls,
     ...saveModalEls,
     ...inlineSearchEls,
     ...sortFilterEls,
-    ...taskEls,
-    recentNotesList: mountNode.querySelector("#recent-notes-list"),
     foldersList: mountNode.querySelector("#home-folders-list"),
     foldersEmpty: mountNode.querySelector("#home-folders-empty"),
     foldersError: mountNode.querySelector("#home-folders-error"),
@@ -141,6 +125,88 @@ function queryPageElements(mountNode) {
     batchCancelBtn: mountNode.querySelector("#batch-cancel-btn"),
     toast: document.getElementById("toast"),
   };
+}
+
+function normalizeTaskState(task = {}) {
+  const explicitState = String(task?.state || "").trim().toLowerCase();
+  if (explicitState === "pending_approval" || explicitState === "active" || explicitState === "paused") {
+    return explicitState;
+  }
+
+  const approval = String(task?.approvalStatus || "").trim().toLowerCase();
+  if (approval === "pending_approval") return "pending_approval";
+
+  const status = String(task?.status || "").trim().toLowerCase();
+  const enabled = task?.enabled === true;
+  if (status === "active" && enabled) return "active";
+  return "paused";
+}
+
+function toSourceLabel(sourceType = "") {
+  const normalized = String(sourceType || "").trim().toLowerCase();
+  if (normalized === "link") return "Link";
+  if (normalized === "file") return "File";
+  if (normalized === "image") return "Image";
+  return "Text";
+}
+
+function buildHomeFeedItems(notes = [], tasks = [], { limit = 8 } = {}) {
+  const noteEntries = (Array.isArray(notes) ? notes : []).map((entry, index) => {
+    const note = normalizeCitation(entry, index).note;
+    const occurredAt = String(note?.updatedAt || note?.createdAt || "").trim();
+    if (!occurredAt) return null;
+    return {
+      type: "note",
+      occurredAt,
+      title: buildNoteTitle(note),
+      noteId: String(note?.id || "").trim(),
+      noteType: String(note?.sourceType || "").trim().toLowerCase(),
+      sourceLabel: toSourceLabel(note?.sourceType),
+      project: String(note?.project || "").trim(),
+    };
+  }).filter(Boolean);
+
+  const runEntries = (Array.isArray(tasks) ? tasks : []).map((task) => {
+    const occurredAt = String(task?.lastRunAt || "").trim();
+    if (!occurredAt) return null;
+    return {
+      type: "run",
+      occurredAt,
+      taskId: String(task?.id || "").trim(),
+      title: String(task?.title || task?.name || "").trim() || "Untitled automation",
+      status: String(task?.lastRunStatus || "").trim().toLowerCase(),
+      summary: String(task?.lastRunSummary || "").trim(),
+      mutationCount: Number(task?.lastRunMutationCount || 0),
+      state: normalizeTaskState(task),
+    };
+  }).filter(Boolean);
+
+  return [...noteEntries, ...runEntries]
+    .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+    .slice(0, Math.max(1, Math.min(30, Math.floor(Number(limit) || 8))));
+}
+
+function applyFeedSortFilter(items = [], { sortMode = "newest", filterType = "all" } = {}) {
+  const list = Array.isArray(items) ? [...items] : [];
+  const normalizedFilter = String(filterType || "all").trim().toLowerCase();
+  const normalizedSort = String(sortMode || "newest").trim().toLowerCase();
+
+  const filtered = normalizedFilter === "all"
+    ? list
+    : list.filter((item) => String(item?.type || "") === "note" && String(item?.noteType || "") === normalizedFilter);
+
+  filtered.sort((a, b) => {
+    if (normalizedSort === "az" || normalizedSort === "za") {
+      const left = String(a?.title || "").toLowerCase();
+      const right = String(b?.title || "").toLowerCase();
+      return normalizedSort === "az" ? left.localeCompare(right) : right.localeCompare(left);
+    }
+    const leftTime = new Date(String(a?.occurredAt || "")).getTime() || 0;
+    const rightTime = new Date(String(b?.occurredAt || "")).getTime() || 0;
+    return normalizedSort === "oldest" ? leftTime - rightTime : rightTime - leftTime;
+  });
+
+  return filtered;
 }
 
 export function createHomePage({ store, apiClient, auth = null, shell, workspaceSync = null }) {
@@ -156,7 +222,8 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
       let modalCreateKind = "folder";
       let recentNotes = [];
       let searchResults = [];
-      let homeTasks = [];
+      let allTasks = [];
+      let activityFeedItems = [];
       let sortMode = "newest";
       let filterType = "all";
       let dbFolders = [];
@@ -235,6 +302,7 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
           if (changed) {
             recentNotes = hydratedRecent;
             searchResults = hydratedSearch;
+            activityFeedItems = buildHomeFeedItems(recentNotes, allTasks, { limit: 8 });
             renderView();
           }
         }
@@ -336,24 +404,10 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
         });
       }
 
-      function renderRecent() {
-        renderRecentNoteStrip(
-          els.recentNotesList,
-          applySortFilter(Array.isArray(recentNotes) ? recentNotes : [], { sortMode, filterType }),
-          {
-            onOpen(note) { markAccessed(note.id); navigate(`#/item/${note.id}`); },
-            limit: 12,
-          },
-        );
-      }
-
-      function renderHomeTasks() {
-        renderTaskListItems(els, homeTasks, {
-          emptyText: "No active automations",
-          showStatus: false,
-          allowEdit: false,
-          allowDelete: false,
-          allowRun: true,
+      function renderActivityFeed() {
+        const filteredItems = applyFeedSortFilter(activityFeedItems, { sortMode, filterType });
+        renderActivityFeedItems(els, filteredItems, {
+          emptyText: "No recent note saves or automation runs yet.",
         });
       }
 
@@ -366,7 +420,7 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
           onOpen(note) {
             openItemModal(els, note);
             markAccessed(note.id);
-            renderRecent();
+            renderView();
           },
           onDelete(noteId) {
             deleteNoteById(noteId);
@@ -381,17 +435,15 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
 
       function renderView() {
         const query = String(els.inlineSearchInput?.value || "").trim();
-        renderHomeTasks();
+        renderActivityFeed();
 
         if (query) {
           if (els.foldersEmpty) els.foldersEmpty.classList.add("hidden");
           renderInlineSearchResults();
-          renderRecent();
           return;
         }
 
         renderFolders();
-        renderRecent();
       }
 
       async function refreshNotes() {
@@ -405,7 +457,7 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
             requests.push(apiClient.fetchNotes({ query, limit: 120 }));
           }
           requests.push(apiClient.fetchFolders());
-          requests.push(apiClient.fetchTasks({ status: "active" }));
+          requests.push(apiClient.fetchTasks({ status: "all" }));
 
           const results = await Promise.allSettled(requests);
           const recentResult = results[0];
@@ -433,10 +485,11 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
             foldersResult?.status === "fulfilled" && Array.isArray(foldersResult.value?.items)
               ? foldersResult.value.items.filter((f) => !f.parentId)
               : [];
-          homeTasks =
+          allTasks =
             tasksResult?.status === "fulfilled" && Array.isArray(tasksResult.value?.items)
-              ? tasksResult.value.items.slice(0, 8)
+              ? tasksResult.value.items
               : [];
+          activityFeedItems = buildHomeFeedItems(recentNotes, allTasks, { limit: 8 });
           workspaceSync?.ingestFolders(dbFolders);
           dbFolders = workspaceSync ? workspaceSync.hydrateFolders(dbFolders) : dbFolders;
           setFallbackHint(false);
@@ -511,6 +564,18 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
         }
       }
 
+      const cleanupActivityFeed = initActivityFeed(els, {
+        onOpenNote({ noteId }) {
+          if (!noteId) return;
+          markAccessed(noteId);
+          navigate(`#/item/${noteId}`);
+        },
+        onOpenTask() {
+          navigate("#/tasks");
+        },
+      });
+      disposers.push(cleanupActivityFeed);
+
       // Batch select mode
       const batchSelect = createBatchSelectController({
         els,
@@ -565,48 +630,6 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
         },
       });
       disposers.push(cleanupSortFilter);
-
-      const cleanupTaskList = initTaskList(els, {
-        async onCreate(title) {
-          try {
-            await apiClient.createTask({
-              title,
-              prompt: title,
-              scheduleType: "manual",
-              requireApproval: true,
-              activate: false,
-            });
-            toast("Automation created (pending approval)");
-            await refreshNotes();
-          } catch (error) {
-            toast(conciseTechnicalError(error, "Automation save failed"), "error");
-          }
-        },
-        async onToggle({ id, state }) {
-          try {
-            if (String(state || "") === "pending_approval") {
-              await apiClient.approveTask(id, { activate: true });
-            } else if (String(state || "") === "active") {
-              await apiClient.pauseTask(id);
-            } else {
-              await apiClient.resumeTask(id);
-            }
-            await refreshNotes();
-          } catch (error) {
-            toast(conciseTechnicalError(error, "Automation update failed"), "error");
-          }
-        },
-        async onRun({ id }) {
-          try {
-            await apiClient.runTaskNow(id);
-            toast("Automation run started");
-            await refreshNotes();
-          } catch (error) {
-            toast(conciseTechnicalError(error, "Automation run failed"), "error");
-          }
-        },
-      });
-      disposers.push(cleanupTaskList);
 
       // Inline search via extracted component
       const cleanupInlineSearch = initInlineSearchHandlers(els, {
@@ -711,15 +734,6 @@ export function createHomePage({ store, apiClient, auth = null, shell, workspace
       });
 
       setFolderModalKind("folder");
-
-      function showSkeletons() {
-        if (els.recentNotesList) {
-          els.recentNotesList.innerHTML = Array.from({ length: 5 }, () =>
-            `<div class="recent-inline-skeleton skeleton-pulse" aria-hidden="true"></div>`
-          ).join('');
-        }
-      }
-      showSkeletons();
 
       await refreshNotes();
 

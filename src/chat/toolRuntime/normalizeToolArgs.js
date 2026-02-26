@@ -7,6 +7,51 @@ import {
   normalizeText,
   normalizeWorkingSetIds,
 } from "./argUtils.js";
+import { normalizeTaskSpec } from "../../tasks/taskSpec.js";
+
+function normalizeIsoDateTime(value, { fieldName = "datetime" } = {}) {
+  const text = normalizeText(value);
+  if (!text) return "";
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${fieldName} must be a valid ISO datetime`);
+  }
+  return parsed.toISOString();
+}
+
+function normalizeTaskDraftArgs(source, { toolName = "create_task", includeConfirmed = false } = {}) {
+  const title = normalizeText(source.title || source.name);
+  if (!title) throw new Error(`${toolName} requires title`);
+  const prompt = normalizeText(source.prompt) || title;
+  const scopeFolder = normalizeText(source.scopeFolder || source.project);
+  const scheduleTypeRaw = normalizeText(source.scheduleType).toLowerCase();
+  const intervalMinutes = normalizePositiveInt(source.intervalMinutes, { min: 5, max: 10080 });
+  const scheduleType = scheduleTypeRaw || (intervalMinutes ? "interval" : "manual");
+  if (scheduleType !== "manual" && scheduleType !== "interval") {
+    throw new Error(`${toolName} scheduleType must be manual or interval`);
+  }
+  const normalized = {
+    title,
+    prompt,
+    ...(scopeFolder ? { scopeFolder } : {}),
+    scheduleType,
+    ...(intervalMinutes !== undefined ? { intervalMinutes } : {}),
+    ...(includeConfirmed && source.confirmed !== undefined ? { confirmed: source.confirmed === true } : {}),
+    ...(source.timezone !== undefined ? { timezone: normalizeText(source.timezone) } : {}),
+    ...(source.nextRunAt !== undefined
+      ? { nextRunAt: normalizeIsoDateTime(source.nextRunAt, { fieldName: `${toolName} nextRunAt` }) }
+      : {}),
+    ...(source.maxActionsPerRun !== undefined
+      ? { maxActionsPerRun: normalizePositiveInt(source.maxActionsPerRun, { min: 1, max: 25, required: true }) }
+      : {}),
+    ...(source.maxConsecutiveFailures !== undefined
+      ? { maxConsecutiveFailures: normalizePositiveInt(source.maxConsecutiveFailures, { min: 1, max: 20, required: true }) }
+      : {}),
+    ...(source.dryRun !== undefined ? { dryRun: source.dryRun === true } : {}),
+  };
+  normalized.spec = normalizeTaskSpec(source.spec, normalized);
+  return normalized;
+}
 
 export function normalizeToolArgs(name, args) {
   const normalizedName = normalizeText(name);
@@ -61,31 +106,10 @@ export function normalizeToolArgs(name, args) {
       };
     }
     case "create_task": {
-      const title = normalizeText(source.title || source.name);
-      if (!title) throw new Error("create_task requires title");
-      const prompt = normalizeText(source.prompt) || title;
-      const scopeFolder = normalizeText(source.scopeFolder || source.project);
-      const scheduleTypeRaw = normalizeText(source.scheduleType).toLowerCase();
-      const intervalMinutes = normalizePositiveInt(source.intervalMinutes, { min: 5, max: 10080 });
-      const scheduleType = scheduleTypeRaw || (intervalMinutes ? "interval" : "manual");
-      if (scheduleType !== "manual" && scheduleType !== "interval") {
-        throw new Error("create_task scheduleType must be manual or interval");
-      }
-      return {
-        title,
-        prompt,
-        ...(scopeFolder ? { scopeFolder } : {}),
-        scheduleType,
-        ...(intervalMinutes !== undefined ? { intervalMinutes } : {}),
-        ...(source.timezone !== undefined ? { timezone: normalizeText(source.timezone) } : {}),
-        ...(source.maxActionsPerRun !== undefined
-          ? { maxActionsPerRun: normalizePositiveInt(source.maxActionsPerRun, { min: 1, max: 25, required: true }) }
-          : {}),
-        ...(source.maxConsecutiveFailures !== undefined
-          ? { maxConsecutiveFailures: normalizePositiveInt(source.maxConsecutiveFailures, { min: 1, max: 20, required: true }) }
-          : {}),
-        ...(source.dryRun !== undefined ? { dryRun: source.dryRun === true } : {}),
-      };
+      return normalizeTaskDraftArgs(source, { toolName: "create_task", includeConfirmed: true });
+    }
+    case "propose_task": {
+      return normalizeTaskDraftArgs(source, { toolName: "propose_task", includeConfirmed: false });
     }
     case "update_task": {
       const id = normalizeText(source.id);
@@ -123,6 +147,9 @@ export function normalizeToolArgs(name, args) {
       if (source.timezone !== undefined) {
         patch.timezone = normalizeText(source.timezone);
       }
+      if (source.nextRunAt !== undefined) {
+        patch.nextRunAt = normalizeIsoDateTime(source.nextRunAt, { fieldName: "update_task nextRunAt" });
+      }
       if (source.maxActionsPerRun !== undefined) {
         patch.maxActionsPerRun = normalizePositiveInt(source.maxActionsPerRun, { min: 1, max: 25, required: true });
       }
@@ -131,6 +158,13 @@ export function normalizeToolArgs(name, args) {
       }
       if (source.dryRun !== undefined) {
         patch.dryRun = source.dryRun === true;
+      }
+      if (source.spec !== undefined) {
+        const rawSpec = source.spec;
+        if (rawSpec !== null && (typeof rawSpec !== "object" || Array.isArray(rawSpec))) {
+          throw new Error("update_task spec must be an object");
+        }
+        patch.spec = rawSpec;
       }
       if (source.status !== undefined) {
         patch.status = normalizeTaskStatus(source.status);
@@ -210,6 +244,25 @@ export function normalizeToolArgs(name, args) {
         project: normalizeText(source.project),
         ...(scope ? { scope } : {}),
         ...(workingSetIds.length ? { workingSetIds } : {}),
+      };
+    }
+    case "fetch_rss": {
+      const urlText = normalizeText(source.url);
+      if (!urlText) throw new Error("fetch_rss requires url");
+      let parsed = null;
+      try {
+        parsed = new URL(urlText);
+      } catch {
+        throw new Error("fetch_rss url must be a valid absolute URL");
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("fetch_rss supports only http(s) URLs");
+      }
+      const limitRaw = Number(source.limit || 12);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, Math.floor(limitRaw))) : 12;
+      return {
+        url: parsed.toString(),
+        limit,
       };
     }
     case "retry_note_enrichment": {

@@ -174,7 +174,7 @@ function mountAppShell() {
     home: createHomePage({ store, apiClient, auth, shell, workspaceSync }),
     folder: createFolderPage({ store, apiClient, auth, shell, workspaceSync }),
     item: createItemPage({ store, apiClient, auth, shell, workspaceSync }),
-    tasks: createTasksPage({ store, apiClient, shell, workspaceSync }),
+    tasks: createTasksPage({ store, apiClient, shell, workspaceSync, auth }),
   };
 
   router = createRouter({

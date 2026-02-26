@@ -1,6 +1,8 @@
 import { buildNoteTitle, normalizeCitation, normalizeCitationLabel } from "../../services/mappers.js";
 import { renderMarkdownInto } from "../../services/markdown.js";
 import { renderIcon } from "../../services/icons.js";
+import { createFollowUpCardsController } from "./follow-up-cards.js";
+import { createChatSourcePanels } from "./source-panels.js";
 
 const MAX_MESSAGES = 100;
 const MAX_RECENT_HISTORY = MAX_MESSAGES;
@@ -8,6 +10,7 @@ const MAX_DEBUG_TRACES = 20;
 const MAX_SOURCE_LIST_ITEMS = 8;
 const MAX_INLINE_SOURCE_CHIPS = 3;
 const MAX_PENDING_FOLLOW_UPS = 8;
+const TASK_PROPOSAL_ACTIONS = ["Create it", "Cancel"];
 
 export function renderChatPanelHTML() {
   const attachIcon = renderIcon("attach", { size: 15 });
@@ -115,16 +118,22 @@ export function initChatPanel(
   const isLocalRuntime = typeof window !== "undefined"
     && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
   const debugTraces = [];
-  const sourcePanelState = {
-    citationsExpanded: false,
-    webExpanded: false,
-  };
   let pendingAttachment = {
     fileDataUrl: null,
     fileName: "",
     fileMimeType: "",
     isImage: false,
   };
+  const localTimezone = resolveLocalTimezone();
+
+  function resolveLocalTimezone() {
+    try {
+      const timezone = Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone;
+      return String(timezone || "").trim();
+    } catch {
+      return "";
+    }
+  }
 
   function fileToDataUrl(file) {
     return new Promise((resolve, reject) => {
@@ -346,7 +355,9 @@ export function initChatPanel(
     }
     if (els.chatPanelMessages) {
       els.chatPanelMessages
-        .querySelectorAll(".chat-question-option, .chat-question-input, .chat-question-submit")
+        .querySelectorAll(
+          ".chat-question-option, .chat-question-input, .chat-question-submit, .chat-task-proposal-action"
+        )
         .forEach((control) => {
           if (
             control instanceof HTMLButtonElement ||
@@ -363,48 +374,6 @@ export function initChatPanel(
     els.chatPanelPending.classList.add("hidden");
   }
 
-  function normalizeAskUserQuestionPayload(payload) {
-    if (!payload || typeof payload !== "object") return null;
-    const question = normalizeSingleSentence(payload.question, 140);
-    if (!question) return null;
-    const validModes = new Set(["freeform_only", "choices_only", "choices_plus_freeform"]);
-    const rawAnswerMode = String(payload.answerMode || "").trim().toLowerCase();
-    const options = Array.isArray(payload.options)
-      ? payload.options.map((opt) => normalizeSingleSentence(opt, 60)).filter(Boolean).slice(0, 4)
-      : [];
-    const filteredOptions = options.filter((option) => !isActionLikeOption(option));
-    const answerMode = validModes.has(rawAnswerMode)
-      ? rawAnswerMode
-      : (filteredOptions.length >= 2 ? "choices_plus_freeform" : "freeform_only");
-    let resolvedMode =
-      answerMode === "choices_only" && filteredOptions.length === 0 ? "freeform_only" : answerMode;
-    let resolvedOptions = resolvedMode === "freeform_only"
-      ? []
-      : filteredOptions.filter((option) => !isGenericOtherOption(option));
-    if (resolvedMode !== "freeform_only" && resolvedOptions.length < 2) {
-      resolvedMode = "freeform_only";
-      resolvedOptions = [];
-    }
-    return {
-      question,
-      options: resolvedOptions,
-      answerMode: resolvedMode,
-      context: normalizeSingleSentence(payload.context, 120),
-    };
-  }
-
-  function isActionLikeOption(option = "") {
-    const value = String(option || "").trim().toLowerCase();
-    if (!value) return false;
-    return /^(share|use|tell|ask|click|enter|provide|set|pick|choose)\b/.test(value);
-  }
-
-  function isGenericOtherOption(option = "") {
-    const value = String(option || "").trim().toLowerCase();
-    if (!value) return false;
-    return /^(other|something else|anything else|else|another option|not sure|none of these|none|custom|type it)\b/i.test(value);
-  }
-
   function stripInternalReferenceTokens(value = "") {
     return String(value || "")
       .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1")
@@ -415,121 +384,54 @@ export function initChatPanel(
       .trim();
   }
 
-  function normalizeSingleSentence(value, maxLen = 140) {
-    const text = stripInternalReferenceTokens(value)
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!text) return "";
-    const firstQuestion = text.match(/[^?]{1,300}\?/);
-    if (firstQuestion?.[0]) {
-      return firstQuestion[0].trim().slice(0, maxLen);
-    }
-    const firstSentence = text.split(/[.!](?:\s|$)/)[0] || text;
-    return firstSentence.trim().slice(0, maxLen);
+  const followUpCards = createFollowUpCardsController({
+    apiClient,
+    toast,
+    onWorkspaceAction,
+    onAuthExpired,
+    askQuestion: (value) => askQuestion(value),
+    isAsking: () => isAsking,
+    getPendingFollowUps: () => getPendingFollowUps(),
+    setPendingFollowUps: (entries) => setPendingFollowUps(entries),
+    stripInternalReferenceTokens,
+    taskProposalActions: TASK_PROPOSAL_ACTIONS,
+  });
+
+  const sourcePanels = createChatSourcePanels({
+    chatPanelCitationsEl: els.chatPanelCitations,
+    chatPanelWebSourcesEl: els.chatPanelWebSources,
+    onOpenCitation,
+    buildNoteTitle,
+    normalizeCitation,
+    normalizeCitationLabel,
+    renderIcon,
+    maxSourceListItems: MAX_SOURCE_LIST_ITEMS,
+    maxInlineSourceChips: MAX_INLINE_SOURCE_CHIPS,
+  });
+
+  function normalizeAskUserQuestionPayload(payload) {
+    return followUpCards.normalizeAskUserQuestionPayload(payload);
+  }
+
+  function normalizeTaskProposalPayload(payload) {
+    return followUpCards.normalizeTaskProposalPayload(payload);
+  }
+
+  function buildTaskProposalContextText(proposal = null) {
+    return followUpCards.buildTaskProposalContextText(proposal);
+  }
+
+  function renderTaskProposalPrompt(msgEl, payload = null) {
+    followUpCards.renderTaskProposalPrompt(msgEl, payload);
   }
 
   function renderAskUserQuestionPrompt(msgEl, payload = null, { assistantText = "" } = {}) {
-    const normalized = normalizeAskUserQuestionPayload(payload);
-    if (!msgEl || !normalized) return;
-    const { question, options, answerMode } = normalized;
-    const showOptions = answerMode !== "freeform_only" && options.length > 0;
-    const showFreeform = answerMode !== "choices_only";
-    const questionAlreadyVisible = assistantContainsQuestionText(assistantText, question);
-    const questionKey = question.toLowerCase();
-    const duplicate = Array.from(msgEl.querySelectorAll(".chat-user-question")).some(
-      (node) => String(node?.dataset?.questionKey || "") === questionKey
-    );
-    if (duplicate) return;
-
-    const prompt = document.createElement("section");
-    prompt.className = "chat-user-question";
-    prompt.dataset.questionKey = questionKey;
-    prompt.setAttribute("role", "group");
-    prompt.setAttribute("aria-label", "Assistant follow-up question");
-
-    const label = document.createElement("p");
-    label.className = "chat-question-label";
-    label.textContent = questionAlreadyVisible ? "Reply to continue" : "Follow-up question";
-    prompt.appendChild(label);
-
-    if (!questionAlreadyVisible) {
-      const questionText = document.createElement("p");
-      questionText.className = "chat-question-text";
-      questionText.textContent = question;
-      prompt.appendChild(questionText);
-    } else {
-      prompt.classList.add("chat-user-question--compact");
-    }
-
-    if (showOptions) {
-      const optionsWrap = document.createElement("div");
-      optionsWrap.className = "chat-question-options";
-      options.forEach((option) => {
-        const optionBtn = document.createElement("button");
-        optionBtn.type = "button";
-        optionBtn.className = "chat-question-option";
-        optionBtn.textContent = option;
-        optionBtn.disabled = isAsking;
-        optionBtn.addEventListener("click", () => {
-          if (isAsking) return;
-          void askQuestion(option);
-        });
-        optionsWrap.appendChild(optionBtn);
-      });
-      prompt.appendChild(optionsWrap);
-    }
-
-    if (showFreeform) {
-      const form = document.createElement("form");
-      form.className = "chat-question-form";
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        if (isAsking) return;
-        const value = String(input.value || "").trim();
-        if (!value) return;
-        input.value = "";
-        void askQuestion(value);
-      });
-
-      const input = document.createElement("input");
-      input.type = "text";
-      input.className = "chat-question-input";
-      input.placeholder = "Type a response...";
-      input.autocomplete = "off";
-      input.disabled = isAsking;
-      input.setAttribute("aria-label", "Type your response");
-
-      const submit = document.createElement("button");
-      submit.type = "submit";
-      submit.className = "chat-question-submit";
-      submit.textContent = "Reply";
-      submit.disabled = isAsking;
-
-      form.append(input, submit);
-      prompt.appendChild(form);
-
-      const hint = document.createElement("p");
-      hint.className = "chat-question-hint";
-      hint.textContent = "You can also reply directly in the main chat input.";
-      prompt.appendChild(hint);
-    }
-
-    msgEl.appendChild(prompt);
+    followUpCards.renderAskUserQuestionPrompt(msgEl, payload, { assistantText });
   }
 
   function compactLatestFollowUp() {
     if (!els.chatPanelMessages) return;
-    const prompts = Array.from(els.chatPanelMessages.querySelectorAll(".chat-user-question:not(.is-answered)"));
-    if (!prompts.length) return;
-    const prompt = prompts[prompts.length - 1];
-    prompt.classList.add("is-answered", "chat-user-question--compact");
-    prompt.querySelector(".chat-question-options")?.remove();
-    prompt.querySelector(".chat-question-form")?.remove();
-    prompt.querySelector(".chat-question-hint")?.remove();
-    const label = prompt.querySelector(".chat-question-label");
-    if (label) {
-      label.textContent = "Answered";
-    }
+    followUpCards.compactLatestFollowUp(els.chatPanelMessages);
   }
 
   function updateContextHeader() {
@@ -542,6 +444,10 @@ export function initChatPanel(
         : `Viewing: ${ctx.itemTitle}`;
     } else if (ctx.type === "folder" && ctx.folderId) {
       label = `In: ${ctx.folderId}`;
+    } else if (ctx.type === "task" && (ctx.taskTitle || ctx.taskId)) {
+      label = ctx.taskTitle
+        ? `Automation: ${ctx.taskTitle}`
+        : `Automation: ${ctx.taskId}`;
     }
 
     // Keep chat visually seamless across navigation; do not inject context divider rows.
@@ -583,23 +489,6 @@ export function initChatPanel(
     return text.trim();
   }
 
-  function normalizeComparableText(value = "") {
-    return String(value || "")
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, "$1")
-      .replace(/[*_`~#>]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
-  }
-
-  function assistantContainsQuestionText(assistantText = "", questionText = "") {
-    const question = normalizeComparableText(questionText);
-    if (!question) return false;
-    const assistant = normalizeComparableText(assistantText);
-    if (!assistant) return false;
-    return assistant === question || assistant.includes(question);
-  }
-
   function setMessageBodyText(msgEl, role, text) {
     if (!msgEl) return;
     let body = msgEl.querySelector(".chat-msg-body");
@@ -638,9 +527,20 @@ export function initChatPanel(
     const messageId = String(entry.messageId || "").trim();
     if (!messageId) return null;
     const payloadSource = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
-    const payload = normalizeAskUserQuestionPayload(payloadSource);
-    if (!payload) return null;
-    return { messageId, payload };
+    const kind = String(entry.kind || "").trim().toLowerCase();
+    const proposalPayload = normalizeTaskProposalPayload(payloadSource);
+    if (kind === "task_proposal") {
+      if (!proposalPayload) return null;
+      return { messageId, kind: "task_proposal", payload: proposalPayload };
+    }
+    const questionPayload = normalizeAskUserQuestionPayload(payloadSource);
+    if (questionPayload) {
+      return { messageId, kind: "question", payload: questionPayload };
+    }
+    if (proposalPayload) {
+      return { messageId, kind: "task_proposal", payload: proposalPayload };
+    }
+    return null;
   }
 
   function getPendingFollowUps() {
@@ -666,12 +566,21 @@ export function initChatPanel(
     if (!normalizedMessageId) return;
     const existing = getPendingFollowUps().filter((entry) => entry.messageId !== normalizedMessageId);
     const normalizedPayloads = Array.isArray(payloads)
-      ? payloads.map((payload) => normalizeAskUserQuestionPayload(payload)).filter(Boolean)
+      ? payloads
+          .map((entry) => {
+            if (entry && typeof entry === "object" && !Array.isArray(entry) && entry.messageId) {
+              return normalizePendingFollowUpEntry(entry);
+            }
+            return normalizePendingFollowUpEntry({
+              messageId: normalizedMessageId,
+              ...(entry && typeof entry === "object" && !Array.isArray(entry)
+                ? entry
+                : { payload: entry }),
+            });
+          })
+          .filter(Boolean)
       : [];
-    const nextEntries = [
-      ...existing,
-      ...normalizedPayloads.map((payload) => ({ messageId: normalizedMessageId, payload })),
-    ];
+    const nextEntries = [...existing, ...normalizedPayloads];
     setPendingFollowUps(nextEntries);
   }
 
@@ -681,6 +590,14 @@ export function initChatPanel(
     const latest = entries[entries.length - 1];
     setPendingFollowUps(entries.slice(0, -1));
     return latest;
+  }
+
+  function getPendingFollowUpContextText(entry = null) {
+    if (!entry || typeof entry !== "object") return "";
+    if (entry.kind === "task_proposal") {
+      return buildTaskProposalContextText(entry.payload);
+    }
+    return String(entry?.payload?.question || "").trim();
   }
 
   function pushToStore(role, text, idOverride = "") {
@@ -760,6 +677,10 @@ export function initChatPanel(
       pendingFollowUps.forEach((entry) => {
         const target = assistantById.get(entry.messageId) || fallbackAssistant;
         if (!target) return;
+        if (entry.kind === "task_proposal") {
+          renderTaskProposalPrompt(target, entry.payload);
+          return;
+        }
         renderAskUserQuestionPrompt(target, entry.payload, {
           assistantText: getMessageRawText(target),
         });
@@ -777,399 +698,16 @@ export function initChatPanel(
     }
   }
 
-  function normalizeWebSourceEntries(sources = []) {
-    return Array.isArray(sources)
-      ? sources
-          .map((entry) => ({
-            url: String(entry?.url || "").trim(),
-            title: String(entry?.title || "").trim(),
-          }))
-          .filter((entry) => entry.url)
-          .slice(0, MAX_SOURCE_LIST_ITEMS)
-      : [];
-  }
-
-  function getSourceHostname(url = "") {
-    try {
-      return new URL(String(url || "")).hostname.replace(/^www\./, "");
-    } catch {
-      return "";
-    }
-  }
-
-  function getSourceFaviconUrl(url = "") {
-    const normalized = String(url || "").trim();
-    if (!normalized) return "";
-    return `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(normalized)}&sz=64`;
-  }
-
-  function createFaviconStack(urls = [], fallbackLabel = "S") {
-    const stack = document.createElement("div");
-    stack.className = "chat-source-stack";
-    const normalizedUrls = Array.isArray(urls) ? urls.filter(Boolean).slice(0, 3) : [];
-    if (normalizedUrls.length === 0) {
-      const fallback = document.createElement("span");
-      fallback.className = "chat-source-stack-item chat-source-stack-fallback";
-      fallback.textContent = String(fallbackLabel || "S").slice(0, 1).toUpperCase();
-      stack.appendChild(fallback);
-      return stack;
-    }
-    normalizedUrls.forEach((url, index) => {
-      const item = document.createElement("span");
-      item.className = "chat-source-stack-item";
-      item.style.zIndex = String(20 - index);
-      const img = document.createElement("img");
-      img.className = "chat-source-favicon";
-      img.src = getSourceFaviconUrl(url);
-      img.alt = "";
-      img.loading = "lazy";
-      img.decoding = "async";
-      item.appendChild(img);
-      stack.appendChild(item);
-    });
-    return stack;
-  }
-
-  function renderSourceToggle(container, {
-    label = "Sources",
-    count = 0,
-    urls = [],
-    expanded = false,
-    onToggle = null,
-  } = {}) {
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "chat-source-toggle";
-    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-    toggle.addEventListener("click", () => {
-      if (typeof onToggle === "function") onToggle();
-    });
-
-    const left = document.createElement("span");
-    left.className = "chat-source-toggle-left";
-    left.append(
-      createFaviconStack(urls, label.slice(0, 1)),
-      Object.assign(document.createElement("span"), {
-        className: "chat-source-toggle-label",
-        textContent: label,
-      }),
-      Object.assign(document.createElement("span"), {
-        className: "chat-source-toggle-count",
-        textContent: String(Math.max(0, Number(count) || 0)),
-      })
-    );
-
-    const chevron = document.createElement("span");
-    chevron.className = `chat-source-toggle-chevron${expanded ? " is-expanded" : ""}`;
-    chevron.innerHTML = renderIcon("chevron-right", { size: 14, strokeWidth: 2 });
-
-    toggle.append(left, chevron);
-    container.appendChild(toggle);
-  }
-
   function renderCitations(citations = []) {
-    if (!els.chatPanelCitations) return;
-    const normalized = Array.isArray(citations)
-      ? citations.map((entry, index) => normalizeCitation(entry, index)).slice(0, MAX_SOURCE_LIST_ITEMS)
-      : [];
-    els.chatPanelCitations.innerHTML = "";
-    if (!normalized.length) {
-      els.chatPanelCitations.classList.add("hidden");
-      sourcePanelState.citationsExpanded = false;
-      return;
-    }
-
-    els.chatPanelCitations.classList.remove("hidden");
-    const sourceUrls = normalized
-      .map((entry) => String(entry?.note?.sourceUrl || "").trim())
-      .filter(Boolean);
-    renderSourceToggle(els.chatPanelCitations, {
-      label: "Saved sources",
-      count: normalized.length,
-      urls: sourceUrls,
-      expanded: sourcePanelState.citationsExpanded,
-      onToggle: () => {
-        sourcePanelState.citationsExpanded = !sourcePanelState.citationsExpanded;
-        renderCitations(normalized);
-      },
-    });
-
-    if (!sourcePanelState.citationsExpanded) return;
-    const list = document.createElement("div");
-    list.className = "chat-source-list";
-
-    normalized.forEach((citation) => {
-      const note = citation.note || {};
-      const item = document.createElement("article");
-      item.className = "chat-source-item";
-
-      const row = document.createElement("div");
-      row.className = "chat-source-item-row";
-
-      const title = document.createElement("button");
-      title.type = "button";
-      title.className = "chat-source-title";
-      title.textContent = buildNoteTitle(note);
-      title.title = buildNoteTitle(note);
-      title.addEventListener("click", () => {
-        if (typeof onOpenCitation === "function") {
-          onOpenCitation(note);
-        }
-      });
-
-      const meta = document.createElement("span");
-      meta.className = "chat-source-meta";
-      meta.textContent = String(note.project || note.sourceType || "Saved item");
-      row.append(title, meta);
-      item.appendChild(row);
-
-      const actions = document.createElement("div");
-      actions.className = "chat-source-actions";
-      const openInAppBtn = document.createElement("button");
-      openInAppBtn.type = "button";
-      openInAppBtn.className = "chat-source-action";
-      openInAppBtn.textContent = "Open";
-      openInAppBtn.addEventListener("click", () => {
-        if (typeof onOpenCitation === "function") {
-          onOpenCitation(note);
-        }
-      });
-      actions.appendChild(openInAppBtn);
-
-      const sourceUrl = String(note.sourceUrl || "").trim();
-      if (sourceUrl) {
-        const openSourceBtn = document.createElement("a");
-        openSourceBtn.className = "chat-source-action";
-        openSourceBtn.href = sourceUrl;
-        openSourceBtn.target = "_blank";
-        openSourceBtn.rel = "noopener noreferrer";
-        openSourceBtn.innerHTML = `${renderIcon("external-link", { size: 12, strokeWidth: 2 })}<span>Source</span>`;
-        actions.appendChild(openSourceBtn);
-      }
-
-      item.appendChild(actions);
-      list.appendChild(item);
-    });
-
-    els.chatPanelCitations.appendChild(list);
+    sourcePanels.renderCitations(citations);
   }
 
   function renderWebSources(sources = []) {
-    if (!els.chatPanelWebSources) return;
-    const normalized = normalizeWebSourceEntries(sources);
-    els.chatPanelWebSources.innerHTML = "";
-    if (!normalized.length) {
-      els.chatPanelWebSources.classList.add("hidden");
-      sourcePanelState.webExpanded = false;
-      return;
-    }
-
-    els.chatPanelWebSources.classList.remove("hidden");
-    renderSourceToggle(els.chatPanelWebSources, {
-      label: "Web sources",
-      count: normalized.length,
-      urls: normalized.map((entry) => entry.url),
-      expanded: sourcePanelState.webExpanded,
-      onToggle: () => {
-        sourcePanelState.webExpanded = !sourcePanelState.webExpanded;
-        renderWebSources(normalized);
-      },
-    });
-
-    if (!sourcePanelState.webExpanded) return;
-    const list = document.createElement("div");
-    list.className = "chat-source-list";
-
-    normalized.forEach((entry) => {
-      const host = getSourceHostname(entry.url);
-      const link = document.createElement("a");
-      link.className = "chat-source-link";
-      link.href = entry.url;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.title = entry.url;
-
-      const favicon = document.createElement("img");
-      favicon.className = "chat-source-link-favicon";
-      favicon.src = getSourceFaviconUrl(entry.url);
-      favicon.alt = "";
-      favicon.loading = "lazy";
-      favicon.decoding = "async";
-
-      const text = document.createElement("span");
-      text.className = "chat-source-link-text";
-      const title = document.createElement("span");
-      title.className = "chat-source-title";
-      title.textContent = entry.title || host || entry.url;
-      const meta = document.createElement("span");
-      meta.className = "chat-source-meta";
-      meta.textContent = host || entry.url;
-      text.append(title, meta);
-
-      const icon = document.createElement("span");
-      icon.className = "chat-source-link-icon";
-      icon.innerHTML = renderIcon("external-link", { size: 12, strokeWidth: 2 });
-
-      link.append(favicon, text, icon);
-      list.appendChild(link);
-    });
-
-    els.chatPanelWebSources.appendChild(list);
+    sourcePanels.renderWebSources(sources);
   }
 
-  function renderInlineSourceChips(msgEl, { citations = [], webSources = [] } = {}) {
-    if (!msgEl) return;
-    msgEl.querySelector(".chat-inline-sources")?.remove();
-
-    const normalizedWeb = normalizeWebSourceEntries(webSources);
-    const normalizedCitations = Array.isArray(citations)
-      ? citations.map((entry, index) => normalizeCitation(entry, index)).slice(0, MAX_INLINE_SOURCE_CHIPS)
-      : [];
-    const chips = [];
-    const seen = new Set();
-
-    normalizedWeb.slice(0, MAX_INLINE_SOURCE_CHIPS).forEach((entry) => {
-      const key = `web:${entry.url}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      chips.push({
-        kind: "web",
-        url: entry.url,
-        label: getSourceHostname(entry.url) || entry.title || entry.url,
-      });
-    });
-
-    if (chips.length < MAX_INLINE_SOURCE_CHIPS) {
-      normalizedCitations.forEach((entry) => {
-        if (chips.length >= MAX_INLINE_SOURCE_CHIPS) return;
-        const note = entry.note || {};
-        const noteId = String(note.id || "");
-        if (!noteId || seen.has(`note:${noteId}`)) return;
-        seen.add(`note:${noteId}`);
-        chips.push({
-          kind: "note",
-          note,
-          label: buildNoteTitle(note),
-          url: String(note.sourceUrl || "").trim(),
-        });
-      });
-    }
-
-    if (!chips.length) return;
-    const wrap = document.createElement("div");
-    wrap.className = "chat-inline-sources";
-
-    chips.forEach((chip) => {
-      if (chip.kind === "web") {
-        const anchor = document.createElement("a");
-        anchor.className = "chat-inline-source-chip";
-        anchor.href = chip.url;
-        anchor.target = "_blank";
-        anchor.rel = "noopener noreferrer";
-        const favicon = document.createElement("img");
-        favicon.className = "chat-inline-source-favicon";
-        favicon.src = getSourceFaviconUrl(chip.url);
-        favicon.alt = "";
-        favicon.loading = "lazy";
-        favicon.decoding = "async";
-        const label = document.createElement("span");
-        label.textContent = chip.label;
-        anchor.append(favicon, label);
-        wrap.appendChild(anchor);
-        return;
-      }
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "chat-inline-source-chip";
-      button.textContent = chip.label;
-      button.addEventListener("click", () => {
-        if (typeof onOpenCitation === "function") {
-          onOpenCitation(chip.note);
-        }
-      });
-      wrap.appendChild(button);
-    });
-
-    msgEl.appendChild(wrap);
-  }
-
-  function extractCitationLabelsFromText(text, max = 12) {
-    const labels = [];
-    const seen = new Set();
-    const matcher = /\[?(N\d+)\]?/gi;
-    let match = matcher.exec(String(text || ""));
-    while (match && labels.length < max) {
-      const label = normalizeCitationLabel(match[1]);
-      if (label && !seen.has(label)) {
-        seen.add(label);
-        labels.push(label);
-      }
-      match = matcher.exec(String(text || ""));
-    }
-    return labels;
-  }
-
-  function resolveVisibleCitations(citations = [], assistantText = "", usedLabels = []) {
-    const normalizedCitations = Array.isArray(citations)
-      ? citations.map((entry, index) => normalizeCitation(entry, index))
-      : [];
-    if (!normalizedCitations.length) return [];
-    const text = String(assistantText || "").trim();
-    if (!text) return [];
-
-    const textLabels = extractCitationLabelsFromText(text, normalizedCitations.length);
-    const explicitLabels = Array.isArray(usedLabels)
-      ? usedLabels.map((label) => normalizeCitationLabel(label)).filter(Boolean)
-      : [];
-    const preferredLabels = new Set([...explicitLabels, ...textLabels]);
-    if (preferredLabels.size > 0) {
-      return normalizedCitations.filter((entry) => preferredLabels.has(entry.label)).slice(0, 6);
-    }
-
-    const textLower = text.toLowerCase();
-    const titleMatchedLabels = new Set();
-    normalizedCitations.forEach((entry) => {
-      const title = buildNoteTitle(entry.note || {}).trim().toLowerCase();
-      if (title.length >= 4 && textLower.includes(title)) {
-        titleMatchedLabels.add(entry.label);
-      }
-    });
-
-    if (titleMatchedLabels.size > 0) {
-      return normalizedCitations.filter((entry) => titleMatchedLabels.has(entry.label)).slice(0, 6);
-    }
-
-    return [];
-  }
-
-  function resolveVisibleWebSources(sources = [], assistantText = "") {
-    const normalized = Array.isArray(sources)
-      ? sources
-          .map((entry) => ({
-            url: String(entry?.url || "").trim(),
-            title: String(entry?.title || "").trim(),
-          }))
-          .filter((entry) => entry.url)
-          .slice(0, 8)
-      : [];
-    if (!normalized.length) return [];
-    const textLower = String(assistantText || "").toLowerCase().trim();
-    if (!textLower) return [];
-
-    return normalized.filter((entry) => {
-      const title = entry.title.toLowerCase();
-      let host = "";
-      try {
-        host = new URL(entry.url).hostname.replace(/^www\./, "").toLowerCase();
-      } catch {
-        host = "";
-      }
-      return (
-        (title.length >= 5 && textLower.includes(title)) ||
-        (host.length >= 4 && textLower.includes(host)) ||
-        textLower.includes(entry.url.toLowerCase())
-      );
-    });
+  function renderInlineSourceChips(msgEl, payload = {}) {
+    sourcePanels.renderInlineSourceChips(msgEl, payload);
   }
 
   function renderSourcesForAnswer({ assistantText = "", citations = [], usedCitationLabels = [], webSources = [], suppress = false } = {}) {
@@ -1179,23 +717,17 @@ export function initChatPanel(
       renderWebSources([]);
       return { citations: [], webSources: [] };
     }
-    sourcePanelState.citationsExpanded = false;
-    sourcePanelState.webExpanded = false;
-    const visibleCitations = resolveVisibleCitations(citations, assistantText, usedCitationLabels);
+    sourcePanels.resetSourceState();
+    const visibleCitations = sourcePanels.resolveVisibleCitations(citations, assistantText, usedCitationLabels);
     renderCitations(visibleCitations);
     saveCitationsToStore(visibleCitations);
-
-    const visibleWebSources = resolveVisibleWebSources(webSources, assistantText);
+    const visibleWebSources = sourcePanels.resolveVisibleWebSources(webSources, assistantText);
     renderWebSources(visibleWebSources);
-    return {
-      citations: visibleCitations,
-      webSources: visibleWebSources,
-    };
+    return { citations: visibleCitations, webSources: visibleWebSources };
   }
 
   function clearConversation() {
-    sourcePanelState.citationsExpanded = false;
-    sourcePanelState.webExpanded = false;
+    sourcePanels.resetSourceState();
     if (store) {
       store.setState({
         chatMessages: [],
@@ -1206,10 +738,7 @@ export function initChatPanel(
     if (els.chatPanelMessages) {
       els.chatPanelMessages.innerHTML = "";
     }
-    if (els.chatPanelCitations) {
-      els.chatPanelCitations.innerHTML = "";
-      els.chatPanelCitations.classList.add("hidden");
-    }
+    renderCitations([]);
     renderWebSources([]);
     if (els.chatEmptyState) {
       els.chatEmptyState.classList.remove("hidden");
@@ -1274,6 +803,7 @@ export function initChatPanel(
     const ctx = store ? (store.getState().chatContext || { type: "home" }) : { type: "home" };
     let project = String(projectHint || nextProjectHint || "").trim();
     let contextNoteId = "";
+    let taskContext = null;
 
     if (ctx.type === "item" && ctx.itemId) {
       contextNoteId = ctx.itemId;
@@ -1282,13 +812,22 @@ export function initChatPanel(
       }
     } else if (ctx.type === "folder" && ctx.folderId && !project) {
       project = ctx.folderId;
+    } else if (ctx.type === "task" && ctx.taskId) {
+      taskContext = {
+        id: String(ctx.taskId || "").trim(),
+        title: String(ctx.taskTitle || "").trim(),
+        state: String(ctx.taskState || "").trim().toLowerCase(),
+        scheduleType: String(ctx.scheduleType || "").trim().toLowerCase(),
+        intervalMinutes: Number(ctx.intervalMinutes || 0) || 0,
+      };
     }
     const scopePayload = buildScopePayload(ctx, contextNoteId, project);
     const recentMessages = collectRecentConversationMessages(MAX_RECENT_HISTORY);
-    if (answeredFollowUp?.payload?.question) {
+    const answeredFollowUpContext = getPendingFollowUpContextText(answeredFollowUp);
+    if (answeredFollowUpContext) {
       recentMessages.push({
         role: "assistant",
-        text: String(answeredFollowUp.payload.question || "").trim(),
+        text: answeredFollowUpContext,
       });
     }
 
@@ -1338,6 +877,7 @@ export function initChatPanel(
     let deferredCitations = [];
     let deferredWebSources = [];
     let deferredAskUserQuestions = [];
+    let deferredTaskProposals = [];
     let recoveryPromise = null;
     const seenWorkspaceActionEvents = new Set();
 
@@ -1371,7 +911,16 @@ export function initChatPanel(
       fileDataUrl: hasAttachment ? attachment.fileDataUrl : undefined,
       fileName: hasAttachment ? attachment.fileName : undefined,
       fileMimeType: hasAttachment ? attachment.fileMimeType : undefined,
+      userTimezone: localTimezone || undefined,
     };
+    if (answeredFollowUp?.kind === "task_proposal" && answeredFollowUp.payload) {
+      requestPayload.taskSetupContext = {
+        acceptedProposal: answeredFollowUp.payload,
+      };
+    }
+    if (taskContext && taskContext.id) {
+      requestPayload.taskContext = taskContext;
+    }
     const debugTrace = {
       id: `chat-debug-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       startedAt: new Date().toISOString(),
@@ -1406,6 +955,7 @@ export function initChatPanel(
               create_note: "Saving...",
               create_folder: "Creating folder...",
               search_notes: "Searching...",
+              fetch_rss: "Fetching feed...",
               get_note_raw_content: "Loading note content...",
               update_note: "Updating note...",
               update_note_markdown: "Updating content...",
@@ -1413,6 +963,7 @@ export function initChatPanel(
               list_note_versions: "Loading versions...",
               restore_note_version: "Restoring version...",
               retry_note_enrichment: "Retrying enrichment...",
+              propose_task: "Preparing task proposal...",
               ask_user_question: "Preparing a follow-up question...",
             };
             const pendingLabel = statusMap[name] || "Working...";
@@ -1431,6 +982,12 @@ export function initChatPanel(
             if (!error && name === "ask_user_question" && result && typeof result === "object") {
               if (deferredAskUserQuestions.length < 4) {
                 deferredAskUserQuestions.push(result);
+              }
+            }
+            if (!error && name === "propose_task" && result && typeof result === "object") {
+              const normalizedProposal = normalizeTaskProposalPayload(result);
+              if (normalizedProposal && deferredTaskProposals.length < 2) {
+                deferredTaskProposals.push(normalizedProposal);
               }
             }
             debugTrace.events.push({
@@ -1488,6 +1045,11 @@ export function initChatPanel(
           },
           onDone() {
             removeTyping();
+            if (assistantMsg && deferredTaskProposals.length > 0) {
+              deferredTaskProposals.forEach((proposalPayload) => {
+                renderTaskProposalPrompt(assistantMsg, proposalPayload);
+              });
+            }
             if (assistantMsg && deferredAskUserQuestions.length > 0) {
               const assistantTextForPrompt = getMessageRawText(assistantMsg);
               deferredAskUserQuestions.forEach((questionPayload) => {
@@ -1496,14 +1058,19 @@ export function initChatPanel(
                 });
               });
             }
-            upsertPendingFollowUpsForMessage(assistantMessageId, deferredAskUserQuestions);
+            upsertPendingFollowUpsForMessage(assistantMessageId, [
+              ...deferredTaskProposals.map((payload) => ({ kind: "task_proposal", payload })),
+              ...deferredAskUserQuestions.map((payload) => ({ kind: "question", payload })),
+            ]);
             setPendingState(false);
-            const hasQuestionPrompt = Boolean(assistantMsg?.querySelector(".chat-user-question"));
-            if (assistantMsg && hasQuestionPrompt) {
+            const hasStructuredPrompt = Boolean(
+              assistantMsg?.querySelector(".chat-user-question, .chat-task-proposal")
+            );
+            if (assistantMsg && hasStructuredPrompt) {
               // Keep follow-up content inside the structured card to avoid duplicate question text.
               setMessageBodyText(assistantMsg, "assistant", "");
             }
-            if (assistantMsg && !getMessageRawText(assistantMsg).trim() && !hasQuestionPrompt) {
+            if (assistantMsg && !getMessageRawText(assistantMsg).trim() && !hasStructuredPrompt) {
               const lastToolError = [...(debugTrace.events || [])]
                 .reverse()
                 .find((event) => event?.type === "tool_result" && event?.ok === false && event?.error);
@@ -1515,21 +1082,25 @@ export function initChatPanel(
               );
             }
             const assistantText = getMessageRawText(assistantMsg);
-            const userFacingError = extractUserFacingErrorText(assistantText);
+            const firstFollowUpQuestion = normalizeAskUserQuestionPayload(deferredAskUserQuestions[0])?.question || "";
+            const firstTaskProposalContext = buildTaskProposalContextText(deferredTaskProposals[0]);
+            const persistedAssistantText = assistantText
+              || (hasStructuredPrompt ? (firstFollowUpQuestion || firstTaskProposalContext) : "");
+            const userFacingError = extractUserFacingErrorText(persistedAssistantText);
             if (userFacingError) {
               debugTrace.userFacingError = userFacingError;
             }
             const renderedSources = renderSourcesForAnswer({
-              assistantText,
+              assistantText: persistedAssistantText,
               citations: deferredCitations,
               webSources: deferredWebSources,
-              suppress: hasQuestionPrompt,
+              suppress: hasStructuredPrompt,
             });
             renderInlineSourceChips(assistantMsg, renderedSources);
             debugTrace.status = "completed";
             debugTrace.finishedAt = new Date().toISOString();
-            debugTrace.assistantText = assistantText;
-            updateLastAssistantInStore(assistantText);
+            debugTrace.assistantText = persistedAssistantText;
+            updateLastAssistantInStore(persistedAssistantText);
           },
           onToolTrace(trace) {
             if (!trace) return;
@@ -1650,6 +1221,7 @@ export function initChatPanel(
         fileDataUrl: hasAttachment ? attachment.fileDataUrl : undefined,
         fileName: hasAttachment ? attachment.fileName : undefined,
         fileMimeType: hasAttachment ? attachment.fileMimeType : undefined,
+        userTimezone: localTimezone || undefined,
       });
       const resultText = result.text || "No answer.";
       if (msgEl) {

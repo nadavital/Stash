@@ -201,6 +201,7 @@ All component JS files live under `public/app/components/`. All component CSS fi
 | Home Folder Grid | `components/home-folder-grid/home-folder-grid.js` | `components/home-folder-grid.css` | `.folder-pill-*` |
 | Home Recent List | `components/home-recent-list/home-recent-list.js` | `components/home-recent-list.css` | `.recent-*` |
 | Task List | `components/task-list/task-list.js` | `components/task-list.css` | `.task-list-*` |
+| Task Detail | `components/task-detail/task-detail.js` | `components/task-detail.css` | `.task-detail-*` |
 | Folder Hero Toolbar | `components/folder-hero-toolbar/folder-hero-toolbar.js` | `components/folder-hero-toolbar.css` | `.folder-hero-*` |
 | Folder Item Grid | `components/folder-item-grid/folder-item-grid.js` | `components/folder-item-grid.css` | `.folder-file-*` |
 | Activity Feed | `components/activity-feed/activity-feed.js` | `components/activity-feed.css` | `.activity-feed-*` |
@@ -215,6 +216,8 @@ All component JS files live under `public/app/components/`. All component CSS fi
 | Inline Search | `components/inline-search/inline-search.js` | `components/inline-search.css` | `.inline-search-*` |
 | Markdown Editor | `components/markdown-editor/markdown-editor.js` | `components/markdown.css` | `.md-editor-*` |
 | Chat Panel | `components/chat-panel/chat-panel.js` | `components/chat-panel.css` | `.chat-panel-*` |
+| Chat Follow-up Cards | `components/chat-panel/follow-up-cards.js` | `components/chat-panel.css` | `.chat-user-question`, `.chat-task-proposal` |
+| Chat Source Panels | `components/chat-panel/source-panels.js` | `components/chat-panel.css` | `.chat-source-*`, `.chat-inline-source-*` |
 | Sort/Filter | `components/sort-filter/sort-filter.js` | (in `topbar.css`) | `.sort-filter-*` |
 | Toast | `components/toast/toast.js` | `components/toast.css` | `.toast` |
 | Skeleton | (CSS only) | `components/skeleton.css` | `.skeleton-*` |
@@ -313,6 +316,24 @@ export function renderHomeRecentList()
 
 ---
 
+#### Activity Feed
+
+Reusable mixed activity feed surface used on Home for recent note saves and recent automation run outcomes.
+
+```js
+export function renderActivityFeedHTML(options = {})
+export function queryActivityFeedEls(root)
+export function initActivityFeed(els, callbacks = {})
+export function renderActivityFeedItems(els, items = [], options = {})
+```
+
+- `renderActivityFeedHTML(...)` renders feed chrome (title/subtitle, list, empty state).
+- `queryActivityFeedEls(root)` resolves list and empty-state refs.
+- `initActivityFeed(...)` wires click handlers for note/task feed actions and returns a disposer.
+- `renderActivityFeedItems(...)` renders a dense two-line mixed feed row (note/run icon + title + compact metadata + drill-in action) and empty state.
+
+---
+
 #### Task List
 
 Reusable automation collection surface used on Home (active strip) and the dedicated Tasks page.
@@ -323,11 +344,32 @@ export function queryTaskListEls(root, { idBase } = {})
 export function initTaskList(els, callbacks = {})
 ```
 
-- `renderTaskListHTML(...)` renders automation section chrome (title/subtitle, optional filters, optional composer, list shell).
+- `renderTaskListHTML(...)` renders automation section chrome (optional header, optional filters, optional composer, list shell).
 - `queryTaskListEls(root, { idBase })` resolves list/form/filter refs for the section instance.
-- `initTaskList(els, callbacks)` wires create/approve/pause/resume/run/edit/delete/filter interactions and returns a disposer.
+- `initTaskList(els, callbacks)` wires create/filter interactions, card-open navigation, and per-card quick actions via the `...` menu.
 - `renderTaskListItems(...)` and `setTaskListActiveFilter(...)` provide render/update helpers used by page controllers.
-- Each rendered row can show telemetry chips for run status, mutation count, failure streak, paused reason, and last error when those fields are present on task objects.
+- Cards are fixed-height and consistently sized in a responsive grid for scanability (status pill, title, schedule, destination, last-run timestamp).
+- Quick actions in the `...` menu include `Run now`, `Approve/Pause/Resume`, `Edit`, and optional `Delete`.
+- Status filters are phrased by behavior: `All`, `Scheduled`, `Not scheduled`, and `Needs approval`.
+
+---
+
+#### Task Detail
+
+Focused automation detail surface used on the Tasks page for inspecting one automation at a time.
+
+```js
+export function renderTaskDetailHTML(options = {})
+export function queryTaskDetailEls(root, { idBase } = {})
+export function renderTaskDetail(els, model = {})
+export function initTaskDetail(els, callbacks = {})
+```
+
+- `renderTaskDetailHTML(...)` renders the detail shell and empty state.
+- `queryTaskDetailEls(root, { idBase })` resolves detail content/empty refs.
+- `renderTaskDetail(...)` renders full-page automation context (title, schedule metadata, destination, actions, pending run state, and recent runs).
+- `initTaskDetail(...)` wires task controls (`Run now`, state toggle, edit, delete) and optional back navigation.
+- Recent run rows use artifact-first summaries (concise, mutation-based) and include a run detail inspector exposing tool-call trace, captured web sources, mutation artifacts (with direct navigation links), captured model summary text, plus a `Copy run debug` action that copies full task/run JSON for debugging.
 
 ---
 
@@ -429,6 +471,7 @@ export function initChatPanel(els, { apiClient, toast, onOpenCitation, onWorkspa
 ```
 
 `initChatPanel()` returns controls for `askQuestion(...)`, `clearConversation()`, `startFromNote(note, { autoSubmit })`, and `dispose()`.
+Internally, chat follow-up/task proposal cards are isolated in `components/chat-panel/follow-up-cards.js`, and source tray/chip rendering is isolated in `components/chat-panel/source-panels.js`; `chat-panel.js` remains the orchestration/container layer.
 Header controls expose an icon-only `New chat` action (clear conversation history/citations and reset composer attachment state).
 On local development hosts (`localhost`/`127.0.0.1`), header controls also expose `Copy chat debug`, which copies a JSON trace (request payload, tool events, final output, and persisted chat state) to clipboard.
 While a response is in progress (including tool calls), the composer is locked so users cannot submit overlapping requests. Progress feedback appears inline in the chat stream (typing/tool status), not as a duplicate status line under the composer.
@@ -437,10 +480,10 @@ When `onOpenCitation` is provided, saved-source rows expose `Open` for in-app co
 Assistant messages also include inline source chips (up to three) for quick open actions without expanding the source trays.
 Citation/web-source sections are rendered only when the final assistant answer clearly references those sources (for example label/title/domain matches), reducing persistent source clutter for non-grounded replies.
 When chat tools create a file/image item, the panel automatically opens that newly created item view.
-When the backend uses the `ask_user_question` tool, the panel renders dedicated follow-up cards inside the assistant message with quick-option buttons plus an inline typed-reply input (while still allowing replies in the main composer). Follow-up cards include an optional context line, animate in, and compact after the user replies to reduce visual clutter. Generic `"Other"/"Something else"` options are suppressed whenever freeform reply is already available. Multiple follow-ups are shown sequentially, capped at four cards per assistant response.
+When the backend uses `ask_user_question`, the panel renders follow-up cards inside the assistant message with quick-option buttons plus an inline typed-reply input (while still allowing replies in the main composer); those option buttons send answer text through normal chat submission. For automation setup flows, `propose_task` renders a distinct proposal card (title + concise summary + cadence) with explicit deterministic actions: `Create it` and `Cancel` execute directly in-card (no extra chat message), update card state (`Saving`, `Saved`, `Canceled`, `Save failed`), and revisions still happen via composer text. Structured cards compact after user reply to reduce clutter.
 Assistant responses are rendered via the shared Markdown service (`services/markdown.js`), so headings, lists, tables, code fences, and links render consistently with the rest of the app while remaining sanitized.
-Chat messages/citations persist across page refresh via workspace/user-scoped local storage and are restored during app-shell bootstrap. Unanswered structured follow-up cards also persist and are rehydrated on reload so pending questions are not lost.
-Each chat request includes a bounded recent conversation history payload so follow-up turns keep prior intent and references.
+Chat messages/citations persist across page refresh via workspace/user-scoped local storage and are restored during app-shell bootstrap. Unanswered structured follow-up cards (questions and task proposals) persist and are rehydrated on reload.
+Each chat request includes bounded recent conversation history plus browser-local timezone (`Intl.DateTimeFormat().resolvedOptions().timeZone`) so scheduling defaults stay in the user locale.
 The panel and controls use touch-target tokens (`--tap-target`, `--tap-target-mobile`) so close/send/citation actions remain comfortable on small screens.
 
 ---

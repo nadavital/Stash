@@ -36,6 +36,44 @@ describe("createChatToolExecutor", () => {
     assert.equal(result.sourceType, "link");
   });
 
+  it("fetches and parses RSS feeds via fetch_rss", async () => {
+    const execute = createChatToolExecutor({
+      fetchExternalContent: async () => ({
+        ok: true,
+        status: 200,
+        text: async () => `
+          <rss version="2.0">
+            <channel>
+              <title>Example Feed</title>
+              <item>
+                <title>Story one</title>
+                <link>https://example.com/story-1</link>
+                <pubDate>Tue, 24 Feb 2026 18:00:00 GMT</pubDate>
+                <description>First story summary.</description>
+              </item>
+              <item>
+                <title>Story two</title>
+                <link>https://example.com/story-2</link>
+                <pubDate>Tue, 24 Feb 2026 17:30:00 GMT</pubDate>
+                <description>Second story summary.</description>
+              </item>
+            </channel>
+          </rss>
+        `,
+      }),
+    });
+
+    const result = await execute("fetch_rss", {
+      url: "https://example.com/rss.xml",
+      limit: 5,
+    }, { userId: "u1", workspaceId: "w1" });
+
+    assert.equal(result.feedUrl, "https://example.com/rss.xml");
+    assert.equal(result.count, 2);
+    assert.equal(result.items[0].url, "https://example.com/story-1");
+    assert.equal(result.items[0].title, "Story one");
+  });
+
   it("sanitizes create_note content/title before persisting", async () => {
     const calls = [];
     const execute = createChatToolExecutor({
@@ -210,6 +248,91 @@ describe("createChatToolExecutor", () => {
     }, { userId: "u1", workspaceId: "w1" });
     assert.equal(completed.task.id, "task-1");
     assert.equal(completed.task.status, "paused");
+  });
+
+  it("returns a normalized task proposal without creating data", async () => {
+    const execute = createChatToolExecutor({
+      taskRepo: {
+        createTask: async () => {
+          throw new Error("should not create from propose_task");
+        },
+      },
+    });
+
+    const result = await execute("propose_task", {
+      title: "Daily headlines",
+      prompt: "Fetch latest stories and save a note.",
+      scheduleType: "interval",
+      intervalMinutes: 1440,
+      timezone: "America/Los_Angeles",
+      nextRunAt: "2026-02-24T17:00:00.000Z",
+    }, { userId: "u1", workspaceId: "w1" });
+
+    assert.equal(result.proposal.title, "Daily headlines");
+    assert.equal(result.proposal.scheduleType, "interval");
+    assert.equal(result.proposal.intervalMinutes, 1440);
+    assert.deepEqual(result.actions, ["Create it", "Cancel"]);
+  });
+
+  it("auto-approves confirmed automations for workspace owners", async () => {
+    const execute = createChatToolExecutor({
+      taskRepo: {
+        createTask: async ({ title, prompt, workspaceId, approvalStatus, status, approvedByUserId }) => ({
+          id: "task-2",
+          title,
+          prompt,
+          state: status === "active" ? "active" : "paused",
+          approvalStatus,
+          status,
+          enabled: status === "active",
+          approvedByUserId,
+          workspaceId,
+          createdAt: "2026-02-23T00:00:00.000Z",
+        }),
+      },
+    });
+
+    const result = await execute("create_task", {
+      title: "Daily digest",
+      scheduleType: "interval",
+      intervalMinutes: 1440,
+      confirmed: true,
+    }, { userId: "owner-1", workspaceId: "w1", role: "owner" });
+
+    assert.equal(result.task.id, "task-2");
+    assert.equal(result.task.approvalStatus, "approved");
+    assert.equal(result.task.status, "active");
+    assert.equal(result.task.enabled, true);
+    assert.equal(result.approvalRequired, false);
+  });
+
+  it("keeps confirmed automations pending for non-managers", async () => {
+    const execute = createChatToolExecutor({
+      taskRepo: {
+        createTask: async ({ approvalStatus, status }) => ({
+          id: "task-3",
+          title: "Daily digest",
+          prompt: "Daily digest",
+          state: "pending_approval",
+          approvalStatus,
+          status,
+          enabled: false,
+          createdAt: "2026-02-23T00:00:00.000Z",
+        }),
+      },
+    });
+
+    const result = await execute("create_task", {
+      title: "Daily digest",
+      scheduleType: "interval",
+      intervalMinutes: 1440,
+      confirmed: true,
+    }, { userId: "member-1", workspaceId: "w1", role: "member" });
+
+    assert.equal(result.task.id, "task-3");
+    assert.equal(result.task.approvalStatus, "pending_approval");
+    assert.equal(result.task.status, "paused");
+    assert.equal(result.approvalRequired, true);
   });
 
   it("normalizes list_tasks status all and respects limit", async () => {

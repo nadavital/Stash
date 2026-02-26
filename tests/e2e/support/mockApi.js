@@ -139,6 +139,7 @@ export function createMockWorkspaceState() {
       ],
       n2: [],
     },
+    tasks: [],
   };
 }
 
@@ -199,6 +200,7 @@ export async function installMockApi(page, {
   onChatRequest = null,
 } = {}) {
   const chatRequests = [];
+  const taskRequests = [];
 
   await page.addInitScript(() => {
     window.localStorage.setItem("stash.session.token", "e2e-session-token");
@@ -352,6 +354,55 @@ export async function installMockApi(page, {
       return;
     }
 
+    if (method === "GET" && pathname === "/api/tasks") {
+      const statusFilter = normalizeText(url.searchParams.get("status")).toLowerCase();
+      const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
+      const items = statusFilter && statusFilter !== "all"
+        ? allTasks.filter((task) => String(task.status || "").toLowerCase() === statusFilter)
+        : allTasks;
+      await encodeJson(route, 200, { items, count: items.length });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/api/tasks") {
+      const payload = request.postDataJSON() || {};
+      taskRequests.push(payload);
+      const now = new Date().toISOString();
+      const approvalStatus = payload.requireApproval === false ? "approved" : "pending_approval";
+      const isInterval = String(payload.scheduleType || "").trim().toLowerCase() === "interval";
+      const status = approvalStatus === "approved" && payload.activate === true && isInterval
+        ? "active"
+        : "paused";
+      const task = {
+        id: `task_${Date.now()}_${taskRequests.length}`,
+        title: normalizeText(payload.title) || "Untitled task",
+        name: normalizeText(payload.title) || "Untitled task",
+        prompt: String(payload.prompt || payload.title || "").trim(),
+        scopeType: normalizeText(payload.scopeType || (payload.scopeFolder ? "folder" : "workspace")) || "workspace",
+        scopeFolder: normalizeText(payload.scopeFolder),
+        project: normalizeText(payload.scopeFolder),
+        scheduleType: isInterval ? "interval" : "manual",
+        intervalMinutes: isInterval ? Number(payload.intervalMinutes || 1440) : null,
+        timezone: normalizeText(payload.timezone) || "America/Los_Angeles",
+        nextRunAt: String(payload.nextRunAt || ""),
+        maxActionsPerRun: Number(payload.maxActionsPerRun || 4),
+        maxConsecutiveFailures: Number(payload.maxConsecutiveFailures || 3),
+        dryRun: payload.dryRun === true,
+        approvalStatus,
+        status,
+        state: approvalStatus === "pending_approval" ? "pending_approval" : status,
+        enabled: status === "active",
+        createdAt: now,
+        updatedAt: now,
+      };
+      if (!Array.isArray(state.tasks)) {
+        state.tasks = [];
+      }
+      state.tasks.unshift(task);
+      await encodeJson(route, 201, { task });
+      return;
+    }
+
     if (method === "GET" && pathname === "/api/workspaces/members") {
       await encodeJson(route, 200, { items: [] });
       return;
@@ -424,5 +475,6 @@ export async function installMockApi(page, {
   return {
     state,
     chatRequests,
+    taskRequests,
   };
 }

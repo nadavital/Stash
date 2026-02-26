@@ -72,6 +72,7 @@ describe("chat persistence", () => {
     assert.equal(state.chatCitations[0].note.id, "note-1");
     assert.equal(state.chatPendingFollowUps.length, 1);
     assert.equal(state.chatPendingFollowUps[0].messageId, "msg-a1");
+    assert.equal(state.chatPendingFollowUps[0].kind, "question");
   });
 
   it("saves and loads persisted chat state", () => {
@@ -105,6 +106,45 @@ describe("chat persistence", () => {
     assert.equal(loaded.chatCitations[0].note.id, "n-1");
     assert.equal(loaded.chatPendingFollowUps.length, 1);
     assert.equal(loaded.chatPendingFollowUps[0].payload.question, "Which option?");
+  });
+
+  it("persists task proposal follow-up cards", () => {
+    const storage = createMemoryStorage();
+    const session = { workspaceId: "ws-6", userId: "user-6" };
+    const inputState = {
+      chatMessages: [{ role: "assistant", text: "", id: "a-2" }],
+      chatCitations: [],
+      chatPendingFollowUps: [
+        {
+          messageId: "a-2",
+          kind: "task_proposal",
+          payload: {
+            title: "Daily digest",
+            summary: "Collect updates from The Verge.",
+            prompt: "Collect updates and save a summary note.",
+            scheduleType: "interval",
+            intervalMinutes: 1440,
+            timezone: "America/Los_Angeles",
+            nextRunAt: "2026-02-24T17:00:00.000Z",
+            spec: {
+              source: { mode: "web", domains: ["theverge.com"] },
+              output: { mode: "per_item_notes" },
+            },
+          },
+        },
+      ],
+    };
+
+    savePersistedChatState(storage, session, inputState);
+    const loaded = loadPersistedChatState(storage, session);
+
+    assert.ok(loaded);
+    assert.equal(loaded.chatPendingFollowUps.length, 1);
+    assert.equal(loaded.chatPendingFollowUps[0].kind, "task_proposal");
+    assert.equal(loaded.chatPendingFollowUps[0].payload.title, "Daily digest");
+    assert.equal(loaded.chatPendingFollowUps[0].payload.summary, "Collect updates from The Verge.");
+    assert.equal(loaded.chatPendingFollowUps[0].payload.scheduleType, "interval");
+    assert.equal(loaded.chatPendingFollowUps[0].payload.spec?.source?.mode, "web");
   });
 
   it("handles corrupted persisted payloads gracefully", () => {

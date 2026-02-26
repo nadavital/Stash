@@ -18,6 +18,7 @@ export function createToolHandlers(deps) {
     removeFolderCollaborator,
     listWorkspaceActivity,
     searchMemories,
+    fetchExternalContent,
     getMemoryRawContent,
     updateMemory,
     updateMemoryAttachment,
@@ -45,7 +46,7 @@ export function createToolHandlers(deps) {
       resolveWorkspaceMemberForAgent,
       resolveFolderNameForAgent,
     }),
-    ...createQueryToolHandlers({ searchMemories }),
+    ...createQueryToolHandlers({ searchMemories, fetchExternalContent }),
     ...createTaskToolHandlers({ taskRepo }),
     ...createNoteToolHandlers({
       getMemoryRawContent,

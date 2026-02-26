@@ -85,6 +85,10 @@ import {
   parseWorkingSetIds,
   normalizeRecentChatMessages,
   isLikelyExternalInfoRequest,
+  normalizeIanaTimezone,
+  inferUserTimezoneFromMessages,
+  inferTaskNextRunAtFromMessages,
+  isExplicitTaskCreationConfirmation,
   buildAgentNoteTitle,
 } from "../chat/chatHelpers.js";
 import { CHAT_TOOLS, CHAT_SYSTEM_PROMPT } from "../chat/chatToolConfig.js";
@@ -92,6 +96,7 @@ import { sendJson, sendUnauthorized, resolveErrorStatus } from "../http/response
 import { getRequestIp, getRequestOrigin, readJsonBody } from "../http/requestUtils.js";
 
 export const runtimeStaticDeps = {
+  fetchExternalContent: (...args) => globalThis.fetch(...args),
   buildWebSearchTool,
   createStreamingResponse,
   extractDomainFromUrl,
@@ -168,6 +173,10 @@ export const runtimeStaticDeps = {
   parseWorkingSetIds,
   normalizeRecentChatMessages,
   isLikelyExternalInfoRequest,
+  normalizeIanaTimezone,
+  inferUserTimezoneFromMessages,
+  inferTaskNextRunAtFromMessages,
+  isExplicitTaskCreationConfirmation,
   buildAgentNoteTitle,
   CHAT_TOOLS,
   CHAT_SYSTEM_PROMPT,

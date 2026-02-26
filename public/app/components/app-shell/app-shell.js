@@ -64,15 +64,30 @@ export function initAppShell(els, { store, apiClient, auth }) {
     els.toolbarNewMenu?.classList.add("hidden");
   }
 
+  function setToolbarRouteState(routeName = "home") {
+    const isTasks = routeName === "tasks";
+    if (els.toolbarAutomationsLink) {
+      els.toolbarAutomationsLink.classList.toggle("is-active", isTasks);
+      if (isTasks) {
+        els.toolbarAutomationsLink.setAttribute("aria-current", "page");
+      } else {
+        els.toolbarAutomationsLink.removeAttribute("aria-current");
+      }
+    }
+  }
+
   // Set chat context based on route
   function updateContext(route) {
     closeToolbarMenus();
+    setToolbarRouteState(route?.name || "home");
     if (!route || route.name === "home") {
       store.setState({ chatContext: { type: "home" } });
     } else if (route.name === "folder") {
       store.setState({ chatContext: { type: "folder", folderId: route.folderId || "" } });
     } else if (route.name === "item") {
       store.setState({ chatContext: { type: "item", itemId: route.itemId || "" } });
+    } else if (route.name === "tasks" && String(route.taskId || "").trim()) {
+      store.setState({ chatContext: { type: "task", taskId: String(route.taskId || "").trim() } });
     } else {
       store.setState({ chatContext: { type: "home" } });
     }
@@ -84,11 +99,30 @@ export function initAppShell(els, { store, apiClient, auth }) {
     });
   }
 
+  function setTaskContext(task = null) {
+    const id = String(task?.id || "").trim();
+    if (!id) {
+      store.setState({ chatContext: { type: "home" } });
+      return;
+    }
+    store.setState({
+      chatContext: {
+        type: "task",
+        taskId: id,
+        taskTitle: String(task?.title || task?.name || "").trim(),
+        taskState: String(task?.state || "").trim().toLowerCase(),
+        scheduleType: String(task?.scheduleType || "").trim().toLowerCase(),
+        intervalMinutes: Number(task?.intervalMinutes || 0) || 0,
+      },
+    });
+  }
+
   return {
     els,
     chatPanel,
     updateContext,
     setItemContext,
+    setTaskContext,
     getContentSlot() {
       return els.contentSlot;
     },

@@ -12,6 +12,7 @@ export function renderContentToolbarHTML() {
   return `
     <div class="content-toolbar">
       <a class="toolbar-brand" href="#/">Stash</a>
+      <a class="toolbar-nav-link" id="toolbar-automations-link" href="#/tasks">Automations</a>
       <span class="content-toolbar-spacer"></span>
       <button class="toolbar-icon-btn" id="toolbar-search-toggle" type="button" aria-label="Search">
         ${searchIcon}
@@ -41,6 +42,7 @@ export function queryContentToolbarEls(root) {
     toolbarSortBtn: root.querySelector("#toolbar-sort-btn"),
     toolbarViewGridBtn: root.querySelector("#toolbar-view-grid-btn"),
     toolbarViewListBtn: root.querySelector("#toolbar-view-list-btn"),
+    toolbarAutomationsLink: root.querySelector("#toolbar-automations-link"),
     toolbarChatToggle: root.querySelector("#toolbar-chat-toggle"),
     toolbarSignOutBtn: root.querySelector("#toolbar-signout-btn"),
   };

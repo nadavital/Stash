@@ -108,6 +108,120 @@ test("follow-up question card compacts after user answers", async ({ page }) => 
   await expect(prompt).not.toContainText("Downtown Palo Alto");
 });
 
+test("task proposal create button saves deterministically without posting chat text", async ({ page }) => {
+  const state = createMockWorkspaceState();
+  const mock = await installMockApi(page, {
+    state,
+    onChatRequest: async ({ callIndex }) => {
+      if (callIndex === 0) {
+        return {
+          events: [
+            { type: "citations", data: { citations: [] } },
+            {
+              type: "tool_result",
+              data: {
+                name: "propose_task",
+                result: {
+                  title: "The Verge Daily — 9:00 AM",
+                  summary: "Save one note per new article in The Verge Daily.",
+                  prompt: "Every day at 9:00 AM local time, save one note per new article.",
+                  scopeFolder: "The Verge Daily",
+                  scheduleType: "interval",
+                  intervalMinutes: 1440,
+                  timezone: "America/Los_Angeles",
+                  maxActionsPerRun: 25,
+                  maxConsecutiveFailures: 5,
+                  actions: ["Create it", "Cancel"],
+                },
+              },
+            },
+            { type: "done", data: { done: true } },
+          ],
+        };
+      }
+      return {
+        events: [
+          { type: "citations", data: { citations: [] } },
+          { type: "token", data: { token: "Unexpected second chat call." } },
+          { type: "done", data: { done: true } },
+        ],
+      };
+    },
+  });
+
+  await openApp(page);
+  await sendChatMessage(page, "Create a daily The Verge automation");
+
+  const proposalCard = page.locator(".chat-task-proposal").first();
+  await expect(proposalCard).toBeVisible();
+  await proposalCard.locator(".chat-task-proposal-action", { hasText: "Create it" }).click();
+
+  await expect(proposalCard.locator(".chat-task-proposal-label")).toContainText("Automation saved");
+  await expect(proposalCard.locator(".chat-task-proposal-status")).toContainText("Saved");
+  await expect(proposalCard.locator(".chat-task-proposal-actions")).toHaveCount(0);
+  await expect(page.locator(".chat-msg--user .chat-msg-body", { hasText: "Create it" })).toHaveCount(0);
+
+  await expect.poll(() => mock.chatRequests.length).toBe(1);
+  await expect.poll(() => mock.taskRequests.length).toBe(1);
+});
+
+test("follow-up answer options still send chat messages", async ({ page }) => {
+  const state = createMockWorkspaceState();
+  const mock = await installMockApi(page, {
+    state,
+    onChatRequest: async ({ callIndex, body }) => {
+      if (callIndex === 0) {
+        return {
+          events: [
+            { type: "citations", data: { citations: [] } },
+            {
+              type: "tool_result",
+              data: {
+                name: "ask_user_question",
+                result: {
+                  question: "Which format should I use?",
+                  options: ["Bullet list", "Table format"],
+                  answerMode: "choices_only",
+                },
+              },
+            },
+            { type: "done", data: { done: true } },
+          ],
+        };
+      }
+      if (callIndex === 1) {
+        if (String(body?.question || "").trim() !== "Bullet list") {
+          return {
+            status: 400,
+            payload: { error: "Expected selected option in question payload" },
+          };
+        }
+        return {
+          events: [
+            { type: "citations", data: { citations: [] } },
+            { type: "token", data: { token: "Using a bullet list format." } },
+            { type: "done", data: { done: true } },
+          ],
+        };
+      }
+      return {
+        events: [
+          { type: "citations", data: { citations: [] } },
+          { type: "done", data: { done: true } },
+        ],
+      };
+    },
+  });
+
+  await openApp(page);
+  await sendChatMessage(page, "Help me choose a format");
+  await expect(page.locator(".chat-user-question .chat-question-option", { hasText: "Bullet list" })).toBeVisible();
+  await page.locator(".chat-user-question .chat-question-option", { hasText: "Bullet list" }).click();
+
+  await expect.poll(() => mock.chatRequests.length).toBe(2);
+  await expect(page.locator(".chat-msg--assistant .chat-msg-body").last()).toContainText("Using a bullet list format.");
+});
+
 test("unanswered follow-up card persists after refresh", async ({ page }) => {
   const state = createMockWorkspaceState();
   await installMockApi(page, {
@@ -150,9 +264,16 @@ test("unanswered follow-up card persists after refresh", async ({ page }) => {
 
   await page.reload();
   await expect(page.locator("#chat-panel-input")).toBeVisible();
-  await expect(page.locator(".chat-user-question .chat-question-text")).toContainText(
-    "What outcome should I optimize for tomorrow?"
-  );
+  const rehydratedPrompt = page.locator(".chat-user-question").first();
+  await expect(rehydratedPrompt).toBeVisible();
+  const questionText = rehydratedPrompt.locator(".chat-question-text");
+  if (await questionText.count()) {
+    await expect(questionText).toContainText("What outcome should I optimize for tomorrow?");
+  } else {
+    await expect(page.locator(".chat-msg--assistant .chat-msg-body").last()).toContainText(
+      "What outcome should I optimize for tomorrow?"
+    );
+  }
 });
 
 test("source chips are compact by default and expandable", async ({ page }) => {

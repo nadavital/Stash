@@ -223,6 +223,24 @@ function buildIfMatchHeaderFromPayload(payload) {
   return { "If-Match": `"${Math.floor(revision)}"` };
 }
 
+function getBrowserTimezone() {
+  try {
+    const timezone = Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone;
+    return String(timezone || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function withLocalTimezone(payload) {
+  const next = payload && typeof payload === "object" ? { ...payload } : {};
+  if (!String(next.userTimezone || "").trim()) {
+    const localTimezone = getBrowserTimezone();
+    if (localTimezone) next.userTimezone = localTimezone;
+  }
+  return next;
+}
+
 async function jsonFetch(url, options = {}) {
   const {
     skipAuth = false,
@@ -607,9 +625,10 @@ export function createApiClient({ adapterDebug = false } = {}) {
     },
 
     async ask(payload) {
+      const requestPayload = withLocalTimezone(payload);
       const response = await jsonFetch(API_ENDPOINTS.chat, {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify(requestPayload),
       });
       return adaptAnswerResponse(response, "chat");
     },
@@ -633,27 +652,39 @@ export function createApiClient({ adapterDebug = false } = {}) {
       }
     ) {
       try {
-        const token = getStoredSessionToken();
+        let token = getStoredSessionToken();
         const selectedWorkspaceId = String(getStoredWorkspaceId() || "").trim();
+        if (!token) {
+          token = await refreshSessionToken();
+        }
         if (!token) {
           const authError = new Error("Not authenticated");
           authError.status = 401;
           throw authError;
         }
 
-        const body = { ...payload };
+        const body = withLocalTimezone(payload);
         if (body.contextNoteId) body.contextNoteId = body.contextNoteId;
 
-        const response = await fetch(API_ENDPOINTS.chat, {
+        const fetchChatStream = async (sessionToken) => fetch(API_ENDPOINTS.chat, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
-            Authorization: `Bearer ${token}`,
+            Authorization: `Bearer ${sessionToken}`,
             ...(selectedWorkspaceId ? { "X-Workspace-Id": selectedWorkspaceId } : {}),
           },
           body: JSON.stringify(body),
         });
+
+        let response = await fetchChatStream(token);
+        if (!response.ok && response.status === 401) {
+          const refreshedToken = await refreshSessionToken();
+          if (refreshedToken) {
+            token = refreshedToken;
+            response = await fetchChatStream(token);
+          }
+        }
 
         if (!response.ok) {
           const err = await response.json().catch(() => ({}));
@@ -743,6 +774,12 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.tasks}?${params.toString()}`);
     },
 
+    async fetchTask(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}`);
+    },
+
     async createTask(payload) {
       return jsonFetch(API_ENDPOINTS.tasks, {
         method: "POST",
@@ -765,6 +802,56 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}`, {
         method: "DELETE",
       });
+    },
+
+    async completeTask(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/pause`, {
+        method: "POST",
+      });
+    },
+
+    async approveTask(id, { activate = true } = {}) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/approve`, {
+        method: "POST",
+        body: JSON.stringify({ activate }),
+      });
+    },
+
+    async pauseTask(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/pause`, {
+        method: "POST",
+      });
+    },
+
+    async resumeTask(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/resume`, {
+        method: "POST",
+      });
+    },
+
+    async runTaskNow(id) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/run-now`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    },
+
+    async fetchTaskRuns(id, { limit = 30 } = {}) {
+      const normalizedId = String(id || "").trim();
+      if (!normalizedId) throw new Error("Missing task id");
+      const params = new URLSearchParams();
+      if (limit) params.set("limit", String(limit));
+      return jsonFetch(`${API_ENDPOINTS.tasks}/${encodeURIComponent(normalizedId)}/runs?${params.toString()}`);
     },
 
     async fetchFolders({ parentId } = {}) {
@@ -919,6 +1006,13 @@ export function createApiClient({ adapterDebug = false } = {}) {
       return jsonFetch(`${API_ENDPOINTS.notes}/batch-delete`, {
         method: "POST",
         body: JSON.stringify({ ids }),
+      });
+    },
+
+    async batchCreateNotes(items, project = "") {
+      return jsonFetch(`${API_ENDPOINTS.notes}/batch-create`, {
+        method: "POST",
+        body: JSON.stringify({ items, project }),
       });
     },
 

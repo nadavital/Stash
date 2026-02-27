@@ -51,6 +51,7 @@ const FOLDER_ID_ARG_TOOLS = new Set([
 
 const PROJECT_ARG_TOOLS = new Set([
   "create_note",
+  "create_notes_bulk",
   "search_notes",
   "update_note",
 ]);
@@ -243,6 +244,18 @@ export function resolveAgentToolArgs(
     if (resolvedProject) {
       nextArgs.project = resolvedProject;
     }
+  }
+
+  if (toolName === "create_notes_bulk" && Array.isArray(nextArgs.items) && nextArgs.items.length > 0) {
+    nextArgs.items = nextArgs.items.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const resolvedProject = resolveAgentFolderId(item.project, { contextProject });
+      if (!resolvedProject) return item;
+      return {
+        ...item,
+        project: resolvedProject,
+      };
+    });
   }
 
   return nextArgs;

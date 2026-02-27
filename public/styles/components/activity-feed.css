@@ -1,25 +1,39 @@
 .activity-feed {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   box-shadow: var(--shadow-1);
-  padding: var(--space-3);
+  padding: var(--space-2);
   display: grid;
-  gap: var(--space-2);
+  gap: 6px;
 }
 
 .activity-feed-head {
   display: flex;
+  align-items: flex-end;
   justify-content: space-between;
-  align-items: center;
   gap: var(--space-2);
+}
+
+.activity-feed-heading {
+  display: grid;
+  gap: 0;
 }
 
 .activity-feed-title {
   margin: 0;
-  color: var(--ink);
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
+  color: var(--ink-secondary);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.activity-feed-subtitle {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-normal);
 }
 
 .activity-feed-list {
@@ -27,48 +41,145 @@
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--space-2);
+  gap: 2px;
+  max-height: 186px;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .activity-feed-item {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-subtle);
+  margin: 0;
   display: grid;
-  gap: 2px;
-}
-
-.activity-feed-line {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px;
-  min-width: 0;
+  align-items: center;
+  border-radius: var(--radius-xs);
+  padding: 6px var(--space-1) 6px var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
 }
 
-.activity-feed-actor {
-  color: var(--ink);
-  font-size: var(--font-size-caption);
+.activity-feed-item-main {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.activity-feed-item:last-child {
+  border-bottom: 0;
+}
+
+.activity-feed-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-secondary);
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+}
+
+.activity-feed-item-title {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink-secondary);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-none);
+}
+
+.activity-feed-item-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed-item-detail {
+  margin: 0;
+  color: var(--ink-secondary);
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-feed-run-status {
   font-weight: var(--weight-medium);
 }
 
-.activity-feed-message {
-  color: var(--ink-secondary);
-  font-size: var(--font-size-caption);
+.activity-feed-run-status.is-succeeded {
+  color: var(--accent);
 }
 
-.activity-feed-time {
+.activity-feed-run-status.is-failed {
+  color: var(--danger);
+}
+
+.activity-feed-run-status.is-running {
+  color: var(--warn);
+}
+
+.activity-feed-action {
+  border: 0;
+  border-radius: var(--radius-pill);
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
   color: var(--muted);
-  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activity-feed-action:hover {
+  background: var(--hover-bg);
+  color: var(--ink);
 }
 
 .activity-feed-empty {
   margin: 0;
   color: var(--muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
 }
 
 .activity-feed-empty.hidden {
   display: none;
+}
+
+.activity-feed-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.activity-feed-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.activity-feed-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (max-width: 760px) {
+  .activity-feed {
+    padding: var(--space-2);
+    gap: 4px;
+  }
+
+  .activity-feed-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 6px 2px 6px var(--space-1);
+  }
+
+  .activity-feed-action {
+    justify-self: end;
+  }
 }

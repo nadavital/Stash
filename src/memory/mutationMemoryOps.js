@@ -61,6 +61,8 @@ export function createMemoryMutationOps({
   assertWorkspaceManager,
   clampInt,
 }) {
+  const MAX_BATCH_CREATE_ITEMS = clampInt(50, 1, 200, 50);
+
   async function createMemory({
     content = "",
     title = "",
@@ -886,6 +888,76 @@ export function createMemoryMutationOps({
     };
   }
 
+  async function batchCreateMemories({
+    items,
+    project = "",
+    metadata = {},
+    stopOnError = false,
+    actor = null,
+  } = {}) {
+    const actorContext = resolveActor(actor);
+    const batchItems = Array.isArray(items) ? items : [];
+    if (!batchItems.length) return { created: 0, failed: 0, items: [] };
+    if (batchItems.length > MAX_BATCH_CREATE_ITEMS) {
+      throw new Error(`Batch create exceeds maximum of ${MAX_BATCH_CREATE_ITEMS} items`);
+    }
+
+    const fallbackProject = await resolveCanonicalProjectName(String(project || ""), actorContext.workspaceId);
+    const baseMetadata =
+      metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? metadata
+        : {};
+    const createdItems = [];
+    const failedItems = [];
+
+    for (let index = 0; index < batchItems.length; index += 1) {
+      const item = batchItems[index];
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        const message = `items[${index}] must be an object`;
+        if (stopOnError) throw new Error(message);
+        failedItems.push({ index, error: message });
+        continue;
+      }
+
+      const itemMetadata =
+        item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+          ? item.metadata
+          : {};
+
+      try {
+        const note = await createMemory({
+          content: item.content,
+          title: item.title,
+          sourceType: item.sourceType,
+          sourceUrl: item.sourceUrl,
+          imageDataUrl: item.imageDataUrl,
+          fileDataUrl: item.fileDataUrl,
+          fileName: item.fileName,
+          fileMimeType: item.fileMimeType,
+          project: item.project !== undefined ? item.project : fallbackProject,
+          metadata: {
+            ...baseMetadata,
+            ...itemMetadata,
+          },
+          actor: actorContext,
+        });
+        createdItems.push({ index, note });
+      } catch (error) {
+        if (stopOnError) throw error;
+        failedItems.push({
+          index,
+          error: error instanceof Error ? error.message : "Batch create failed for item",
+        });
+      }
+    }
+
+    return {
+      created: createdItems.length,
+      failed: failedItems.length,
+      items: [...createdItems, ...failedItems].sort((a, b) => a.index - b.index),
+    };
+  }
+
   async function batchDeleteMemories({ ids, actor = null } = {}) {
     const actorContext = resolveActor(actor);
     const normalizedIds = Array.isArray(ids) ? ids.map((id) => String(id || "").trim()).filter(Boolean) : [];
@@ -961,6 +1033,7 @@ export function createMemoryMutationOps({
     addMemoryComment,
     deleteMemory,
     deleteProjectMemories,
+    batchCreateMemories,
     batchDeleteMemories,
     batchMoveMemories,
     getMemoryById,

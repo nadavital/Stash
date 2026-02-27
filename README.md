@@ -5,22 +5,17 @@ AI-powered personal memory with:
 - Web UI for capture/search/chat
 - Postgres runtime backend
 - OpenAI enrichment + embeddings (with heuristic fallback)
-- MCP stdio server for Codex/ChatGPT tool access
-- OpenClaw command-tool bridge
 
 ## Why this architecture
 
 - Managed Postgres runtime for scalable multi-user storage
-- One shared service layer feeds web + MCP + OpenClaw
+- One shared service layer feeds web + API + chat workflows
 
 ## Project structure
 
 - `src/server.js`: web server + API + static UI hosting
 - `src/memoryService.js`: save/search/context/chat/file extraction logic
 - `src/openai.js`: Responses + Embeddings API wrappers
-- `mcp/server.js`: MCP stdio server exposing memory tools
-- `openclaw/bridge.js`: command bridge for OpenClaw tools
-- `openclaw/tools.manifest.json`: OpenClaw tool schema reference
 
 ## Quick start
 
@@ -169,67 +164,6 @@ curl -s -X POST http://localhost:8787/api/auth/email-verification/send \
   -H 'Authorization: Bearer <session_token>'
 ```
 
-## MCP server (Codex/ChatGPT)
-
-MCP tool calls require auth. Configure a valid session token from `POST /api/auth/login` or `POST /api/auth/signup`.
-
-Run:
-
-```bash
-export STASH_SESSION_TOKEN='<session_token>'
-# optional: pin to a specific workspace membership
-export STASH_WORKSPACE_ID='<workspace_id>'
-npm run start:mcp
-```
-
-Canonical tools:
-
-- `create_note` (text/link/image/file capture)
-- `get_note_raw_content`
-- `update_note`
-- `update_note_markdown` (edits extracted raw/markdown content)
-- `add_note_comment`
-- `list_note_versions`
-- `restore_note_version`
-- `search_notes` (BM25 ranking)
-- `get_tasks`
-- `obtain_consolidated_memory_file`
-- `complete_task`
-- `delete_note`
-- `delete_project`
-- `retry_note_enrichment`
-- `get_enrichment_queue`
-
-Example Codex MCP config snippet:
-
-```json
-{
-  "mcpServers": {
-    "stash": {
-      "command": "node",
-      "args": ["/absolute/path/to/stash/mcp/server.js"],
-      "env": {
-        "STASH_SESSION_TOKEN": "sess_...",
-        "STASH_WORKSPACE_ID": "ws_..."
-      }
-    }
-  }
-}
-```
-
-## OpenClaw integration prep
-
-Run a tool directly:
-
-```bash
-export STASH_SESSION_TOKEN='<session_token>'
-# optional
-export STASH_WORKSPACE_ID='<workspace_id>'
-node openclaw/bridge.js search_notes '{"query":"onboarding plan"}'
-```
-
-Manifest is at `openclaw/tools.manifest.json`.
-
 ## API endpoints
 
 - `GET /api/health`
@@ -274,8 +208,6 @@ Use `X-Workspace-Id: <workspace_id>` to scope API calls to a specific workspace 
 ## Helpful scripts
 
 - `npm test`: unit + API/auth/storage integration tests (requires `DATABASE_URL`)
-- `npm run test:mcp-client`: MCP smoke test client
-  - requires `STASH_SESSION_TOKEN` (and optional `STASH_WORKSPACE_ID`)
 - `npm run import:keep -- /path/to/Takeout`: import Google Keep JSON exports
 - `npm run db:migrate:pg`: apply Postgres migrations
 - `npm run db:verify:pg`: verify required Postgres tables/indexes
@@ -285,4 +217,4 @@ Use `X-Workspace-Id: <workspace_id>` to scope API calls to a specific workspace 
 1. Save a mix of note + link + screenshot/file.
 2. Show auto summary/tags/project assignment.
 3. Ask a grounded question and show citations.
-4. Call the same memory tools via MCP and OpenClaw.
+4. Exercise the core API flows for notes, tasks, chat, and context.

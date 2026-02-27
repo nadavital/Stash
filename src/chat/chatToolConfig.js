@@ -1,3 +1,58 @@
+const TASK_SPEC_SCHEMA = {
+  type: "object",
+  description: "Structured automation behavior settings (versioned task model).",
+  properties: {
+    version: { type: "string", description: "Spec version (currently \"1\")" },
+    intent: { type: "string", description: "Task intent category (e.g. news_digest, sync, cleanup, generic)." },
+    source: {
+      type: "object",
+      description: "Where task inputs come from.",
+      properties: {
+        mode: { type: "string", enum: ["workspace", "web", "mixed"], description: "Primary source mode" },
+        query: { type: "string", description: "Optional external search query for web/mixed modes" },
+        domains: { type: "array", items: { type: "string" }, description: "Optional allowlist of source domains" },
+        lookbackHours: { type: "number", description: "Optional freshness window in hours (e.g. 24)" },
+      },
+      required: [],
+    },
+    output: {
+      type: "object",
+      description: "How generated output should be written.",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["single_note", "per_item_notes"],
+          description: "Single digest note or one note per source item",
+        },
+        maxItems: { type: "number", description: "Maximum items to include per run" },
+        includeDigestIndex: { type: "boolean", description: "When per-item mode, also create/update an index digest note" },
+        summarySentences: { type: "number", description: "Target summary sentence count per item" },
+      },
+      required: [],
+    },
+    destination: {
+      type: "object",
+      description: "Where outputs should be saved.",
+      properties: {
+        folder: { type: "string", description: "Destination folder" },
+        namingPattern: { type: "string", description: "Optional note title pattern, e.g. \"The Verge Digest — {{date}}\"" },
+      },
+      required: [],
+    },
+    dedupe: {
+      type: "object",
+      description: "Duplicate handling policy.",
+      properties: {
+        enabled: { type: "boolean", description: "Enable duplicate detection before creating notes" },
+        strategy: { type: "string", enum: ["by_url", "by_title_date", "none"], description: "Dedupe strategy" },
+        scope: { type: "string", enum: ["folder", "workspace"], description: "Dedupe scope" },
+      },
+      required: [],
+    },
+  },
+  required: [],
+};
+
 export const CHAT_TOOLS = [
   {
     type: "function",
@@ -22,6 +77,39 @@ export const CHAT_TOOLS = [
   },
   {
     type: "function",
+    name: "create_notes_bulk",
+    description:
+      "Save multiple notes/links/files in one call. Use when the user wants to capture many items at once.",
+    parameters: {
+      type: "object",
+      properties: {
+        project: { type: "string", description: "Default folder for items that do not provide a project" },
+        stopOnError: { type: "boolean", description: "If true, stop at the first failed item" },
+        items: {
+          type: "array",
+          description: "Items to create (max 25 in one call).",
+          items: {
+            type: "object",
+            properties: {
+              content: { type: "string", description: "The note content or URL to save (optional when attachment is present)" },
+              title: { type: "string", description: "Preferred item title (optional, plain language)." },
+              project: { type: "string", description: "Folder override for this item (optional)" },
+              sourceType: { type: "string", enum: ["url", "link", "text", "manual", "file", "image"], description: "Type of content" },
+              sourceUrl: { type: "string", description: "Optional source URL" },
+              imageDataUrl: { type: "string", description: "Optional image data URL" },
+              fileDataUrl: { type: "string", description: "Optional file data URL" },
+              fileName: { type: "string", description: "Optional file name for attachment uploads" },
+              fileMimeType: { type: "string", description: "Optional mime type for attachment uploads" },
+            },
+            required: [],
+          },
+        },
+      },
+      required: ["items"],
+    },
+  },
+  {
+    type: "function",
     name: "create_folder",
     description: "Create a new folder/collection. Use when the user wants to organize items into a new group.",
     parameters: {
@@ -32,6 +120,125 @@ export const CHAT_TOOLS = [
         color: { type: "string", description: "Color: green, blue, purple, orange, pink, red, yellow" },
       },
       required: ["name"],
+    },
+  },
+  {
+    type: "function",
+    name: "list_tasks",
+    description: "List automations in the workspace.",
+    parameters: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending_approval", "active", "paused", "all"],
+          description: "Optional automation status filter",
+        },
+        limit: { type: "number", description: "Optional max tasks to return (default 30, max 200)" },
+      },
+      required: [],
+    },
+  },
+  {
+    type: "function",
+    name: "create_task",
+    description: "Create a new automation task only after the user explicitly confirms the latest proposal.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Automation title" },
+        prompt: { type: "string", description: "Automation instruction prompt" },
+        project: { type: "string", description: "Folder scope for automation output" },
+        scopeFolder: { type: "string", description: "Folder scope override for automation output" },
+        scheduleType: { type: "string", enum: ["manual", "interval"], description: "Automation schedule type" },
+        intervalMinutes: { type: "number", description: "For interval schedule: run every N minutes (min 5)" },
+        timezone: { type: "string", description: "IANA timezone (optional)" },
+        nextRunAt: {
+          type: "string",
+          description: "Optional ISO datetime for the next run. Use with interval=1440 + timezone for daily at a specific local time.",
+        },
+        maxActionsPerRun: { type: "number", description: "Max mutating actions per run (1-25)" },
+        maxConsecutiveFailures: { type: "number", description: "Auto-pause after this many failed runs (1-20)" },
+        dryRun: { type: "boolean", description: "If true, automation is marked dry-run" },
+        spec: TASK_SPEC_SCHEMA,
+      },
+      required: ["title"],
+    },
+  },
+  {
+    type: "function",
+    name: "propose_task",
+    description: "Prepare a task proposal card for user confirmation. Does not create or mutate data.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Automation title" },
+        prompt: { type: "string", description: "Automation instruction prompt" },
+        project: { type: "string", description: "Folder scope for automation output" },
+        scopeFolder: { type: "string", description: "Folder scope override for automation output" },
+        scheduleType: { type: "string", enum: ["manual", "interval"], description: "Automation schedule type" },
+        intervalMinutes: { type: "number", description: "For interval schedule: run every N minutes (min 5)" },
+        timezone: { type: "string", description: "IANA timezone (optional)" },
+        nextRunAt: {
+          type: "string",
+          description: "Optional ISO datetime for the next run. Use with interval=1440 + timezone for daily at a specific local time.",
+        },
+        maxActionsPerRun: { type: "number", description: "Max mutating actions per run (1-25)" },
+        maxConsecutiveFailures: { type: "number", description: "Auto-pause after this many failed runs (1-20)" },
+        dryRun: { type: "boolean", description: "If true, automation is marked dry-run" },
+        spec: TASK_SPEC_SCHEMA,
+      },
+      required: ["title"],
+    },
+  },
+  {
+    type: "function",
+    name: "update_task",
+    description: "Update an automation task configuration.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task id" },
+        title: { type: "string", description: "Updated task title" },
+        prompt: { type: "string", description: "Updated automation prompt" },
+        project: { type: "string", description: "Updated folder scope" },
+        scopeFolder: { type: "string", description: "Updated folder scope" },
+        scopeType: { type: "string", enum: ["workspace", "folder"], description: "Scope mode" },
+        scheduleType: { type: "string", enum: ["manual", "interval"], description: "Updated schedule type" },
+        intervalMinutes: { type: "number", description: "Updated interval minutes" },
+        timezone: { type: "string", description: "Updated timezone" },
+        nextRunAt: { type: "string", description: "Updated next run ISO datetime anchor for interval schedules" },
+        maxActionsPerRun: { type: "number", description: "Updated max actions per run" },
+        maxConsecutiveFailures: { type: "number", description: "Updated auto-pause threshold (1-20)" },
+        dryRun: { type: "boolean", description: "Updated dry-run flag" },
+        status: { type: "string", enum: ["active", "paused"], description: "Activation state" },
+        spec: TASK_SPEC_SCHEMA,
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "complete_task",
+    description: "Pause an automation task.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task id" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    type: "function",
+    name: "delete_task",
+    description: "Delete a task by id.",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task id" },
+      },
+      required: ["id"],
     },
   },
   {
@@ -145,6 +352,19 @@ export const CHAT_TOOLS = [
         },
       },
       required: ["query"],
+    },
+  },
+  {
+    type: "function",
+    name: "fetch_rss",
+    description: "Fetch and parse an RSS/Atom feed URL for external source retrieval.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "RSS or Atom feed URL (http/https)" },
+        limit: { type: "number", description: "Max feed items to return (1-50, default 12)" },
+      },
+      required: ["url"],
     },
   },
   {
@@ -282,16 +502,28 @@ Context usage policy:
 
 Tool policy:
 - Use tools directly for create/edit/organize/share actions.
+- For external feeds/newsletters/blogs with a known feed URL, prefer fetch_rss before broader web search.
 - When the user explicitly asks to edit/populate/update/rewrite the current item, perform the write in the same turn (use update_note or update_note_markdown) instead of only proposing draft text.
 - In item context, treat "this note/file/template" as an instruction to apply changes to the active item unless the user asks for draft-only output.
 - After reading an item with get_note_raw_content, prefer the returned revision as baseRevision when writing.
 - For external/current facts, use web search when needed; do not claim web-search restrictions unless the user explicitly scoped the request to a specific source/item.
 - When creating notes and the user implies a name, pass that name using create_note.title.
+- For create_task, always use a two-step flow: call propose_task first, then wait for explicit user confirmation before creating.
+- For task proposals, call propose_task with complete task config, but keep user-facing proposal copy concise.
+- Proposal card actions are Create it and Cancel; users revise by typing changes in the composer.
+- Always make destination explicit in proposals (named folder or workspace root). If the user asked for a folder but did not name one, ask once or clearly default to workspace root.
+- If the user asks to change a proposed task, revise the configuration and call propose_task again before any create_task call.
+- During task setup/proposal, do not create folders, notes, comments, or collaborator changes. Only propose/save task configuration; runtime execution handles workspace mutations.
+- For automations requested at a specific clock time (for example "every day at 9:00 AM local"), set scheduleType=interval with intervalMinutes=1440, set timezone, and set nextRunAt to the next matching ISO datetime.
+- If the user says "local time" without naming a timezone, infer timezone from available locale context and proceed without adding a post-create timezone clarification step.
+- If the user uses broad time phrases like "morning", "afternoon", or "evening", do not ask a precision follow-up by default. Choose a reasonable local-time default and mention that it can be edited.
+- Do not claim scheduler limitations for daily clock-time schedules when interval+nextRunAt can satisfy the request.
 
 Follow-up question policy:
 - Use ask_user_question only when missing detail would materially change the result and no safe default exists.
 - Ask one concise concrete question at a time; avoid multi-part follow-ups.
 - Ask only what is necessary and ask no more than 4 follow-up questions for a single user request.
+- For scheduling follow-ups, maximize information gain in one question by requesting both time and timezone together unless timezone is already known.
 - ask_user_question must set answerMode:
   - freeform_only: open text answer only (omit options)
   - choices_only: 2-4 literal options only
@@ -303,5 +535,7 @@ Follow-up question policy:
 Output and references:
 - Keep responses concise and actionable.
 - In user-facing replies, reference items by title/folder name and avoid raw IDs unless the user explicitly asks for IDs.
+- For task creation/update confirmations, do not include task IDs by default.
+- For task creation confirmations, avoid internal state terms like "pending approval", "interval backend", or implementation details unless the user explicitly asks.
 - Never refer to items as N1/N2/citation labels in user-visible text.
 - Prefer plain text source attributions without inline markdown URLs; only include direct URLs when the user explicitly asks for links.`;

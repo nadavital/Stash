@@ -68,6 +68,36 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.result?.args?.title, "Test Context Note");
   });
 
+  it("normalizes create_notes_bulk payloads", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "create_notes_bulk",
+      rawArgs: JSON.stringify({
+        project: " Product ",
+        stopOnError: true,
+        items: [
+          {
+            content: "  https://example.com/roadmap  ",
+            sourceType: "url",
+            title: "  Roadmap link ",
+          },
+        ],
+      }),
+      callId: "call-bulk",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.project, "Product");
+    assert.equal(result.result?.args?.stopOnError, true);
+    assert.equal(result.result?.args?.items?.[0]?.content, "https://example.com/roadmap");
+    assert.equal(result.result?.args?.items?.[0]?.sourceType, "link");
+    assert.equal(result.result?.args?.items?.[0]?.title, "Roadmap link");
+  });
+
   it("normalizes search scope and working set ids", async () => {
     const harness = createAgentToolHarness({
       executeTool: async (_name, args) => ({ args }),
@@ -195,6 +225,95 @@ describe("createAgentToolHarness", () => {
     assert.equal(result.result?.args?.title, "Retitle from context");
   });
 
+  it("normalizes create_task nextRunAt as ISO datetime", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "create_task",
+      rawArgs: JSON.stringify({
+        title: "Daily digest",
+        scheduleType: "interval",
+        intervalMinutes: 1440,
+        timezone: "America/Los_Angeles",
+        nextRunAt: "2026-02-24T09:00:00-08:00",
+      }),
+      callId: "call-next-run",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.nextRunAt, "2026-02-24T17:00:00.000Z");
+    assert.equal(result.result?.args?.spec?.version, "1");
+    assert.equal(result.result?.args?.spec?.output?.mode, "per_item_notes");
+  });
+
+  it("rejects create_task with invalid nextRunAt", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async () => ({ ok: true }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "create_task",
+      rawArgs: JSON.stringify({
+        title: "Daily digest",
+        scheduleType: "interval",
+        intervalMinutes: 1440,
+        nextRunAt: "tomorrow morning",
+      }),
+      callId: "call-bad-next-run",
+      round: 1,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.trace?.status, "validation_error");
+    assert.match(String(result.error || ""), /nextRunAt must be a valid ISO datetime/i);
+  });
+
+  it("normalizes propose_task nextRunAt as ISO datetime", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async (_name, args) => ({ args }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "propose_task",
+      rawArgs: JSON.stringify({
+        title: "Daily digest",
+        scheduleType: "interval",
+        intervalMinutes: 1440,
+        timezone: "America/Los_Angeles",
+        nextRunAt: "2026-02-24T09:00:00-08:00",
+      }),
+      callId: "call-propose-next-run",
+      round: 1,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.result?.args?.nextRunAt, "2026-02-24T17:00:00.000Z");
+    assert.equal(result.result?.args?.spec?.version, "1");
+  });
+
+  it("rejects update_task when spec is not an object", async () => {
+    const harness = createAgentToolHarness({
+      executeTool: async () => ({ ok: true }),
+    });
+
+    const result = await harness.runToolCall({
+      name: "update_task",
+      rawArgs: JSON.stringify({
+        id: "task-1",
+        spec: "invalid",
+      }),
+      callId: "call-bad-spec",
+      round: 1,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.trace?.status, "validation_error");
+    assert.match(String(result.error || ""), /spec must be an object/i);
+  });
+
   it("normalizes ask_user_question payload", async () => {
     const harness = createAgentToolHarness({
       executeTool: async (_name, args) => ({ args }),
@@ -241,5 +360,46 @@ describe("createAgentToolHarness", () => {
     assert.deepEqual(result.result?.args?.options, ["Cheap", "Mid-range", "Premium", "Surprise me"]);
     assert.equal(result.result?.args?.answerMode, "choices_plus_freeform");
     assert.equal(result.result?.args?.context, "I need these details so I can narrow suggestions");
+  });
+
+  it("evicts oldest idempotency entries when cache limit is exceeded", async () => {
+    let executions = 0;
+    const harness = createAgentToolHarness({
+      idempotencyCacheMaxEntries: 2,
+      executeTool: async (_name, args) => {
+        executions += 1;
+        return { query: args.query, executions };
+      },
+    });
+
+    await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "alpha" }),
+      callId: "evict-1",
+      round: 0,
+    });
+    await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "beta" }),
+      callId: "evict-2",
+      round: 0,
+    });
+    await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "gamma" }),
+      callId: "evict-3",
+      round: 0,
+    });
+    const replay = await harness.runToolCall({
+      name: "search_notes",
+      rawArgs: JSON.stringify({ query: "alpha" }),
+      callId: "evict-4",
+      round: 0,
+    });
+
+    assert.equal(executions, 4);
+    assert.equal(replay.ok, true);
+    assert.equal(replay.trace?.cacheHit, false);
+    assert.equal(replay.result?.query, "alpha");
   });
 });

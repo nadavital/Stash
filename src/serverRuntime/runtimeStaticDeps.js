@@ -8,6 +8,7 @@ import {
 } from "../openai.js";
 import {
   askMemories,
+  batchCreateMemories,
   batchMoveMemories,
   batchDeleteMemories,
   addMemoryComment,
@@ -56,7 +57,7 @@ import {
 } from "../storage/provider.js";
 import { enrichmentQueue } from "../queue.js";
 import { createAgentToolHarness } from "../agentHarness.js";
-import { validateNotePayload, validateBatchPayload } from "../validate.js";
+import { validateNotePayload, validateBatchPayload, validateBatchCreatePayload } from "../validate.js";
 import { extractSessionTokenFromHeaders } from "../authHeaders.js";
 import { subscribeActivity } from "../activityBus.js";
 import {
@@ -84,6 +85,10 @@ import {
   parseWorkingSetIds,
   normalizeRecentChatMessages,
   isLikelyExternalInfoRequest,
+  normalizeIanaTimezone,
+  inferUserTimezoneFromMessages,
+  inferTaskNextRunAtFromMessages,
+  isExplicitTaskCreationConfirmation,
   buildAgentNoteTitle,
 } from "../chat/chatHelpers.js";
 import { CHAT_TOOLS, CHAT_SYSTEM_PROMPT } from "../chat/chatToolConfig.js";
@@ -91,6 +96,7 @@ import { sendJson, sendUnauthorized, resolveErrorStatus } from "../http/response
 import { getRequestIp, getRequestOrigin, readJsonBody } from "../http/requestUtils.js";
 
 export const runtimeStaticDeps = {
+  fetchExternalContent: (...args) => globalThis.fetch(...args),
   buildWebSearchTool,
   createStreamingResponse,
   extractDomainFromUrl,
@@ -98,6 +104,7 @@ export const runtimeStaticDeps = {
   extractOutputUrlCitations,
   hasOpenAI,
   askMemories,
+  batchCreateMemories,
   batchMoveMemories,
   batchDeleteMemories,
   addMemoryComment,
@@ -143,6 +150,7 @@ export const runtimeStaticDeps = {
   createAgentToolHarness,
   validateNotePayload,
   validateBatchPayload,
+  validateBatchCreatePayload,
   extractSessionTokenFromHeaders,
   subscribeActivity,
   deleteFirebaseUser,
@@ -165,6 +173,10 @@ export const runtimeStaticDeps = {
   parseWorkingSetIds,
   normalizeRecentChatMessages,
   isLikelyExternalInfoRequest,
+  normalizeIanaTimezone,
+  inferUserTimezoneFromMessages,
+  inferTaskNextRunAtFromMessages,
+  isExplicitTaskCreationConfirmation,
   buildAgentNoteTitle,
   CHAT_TOOLS,
   CHAT_SYSTEM_PROMPT,

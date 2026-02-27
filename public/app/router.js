@@ -27,6 +27,13 @@ function parseRouteFromHash(hash) {
     };
   }
 
+  if (parts[0] === "tasks") {
+    return {
+      name: "tasks",
+      taskId: parts[1] || "",
+    };
+  }
+
   return { name: "home" };
 }
 

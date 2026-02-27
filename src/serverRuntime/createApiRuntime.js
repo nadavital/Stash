@@ -8,6 +8,9 @@ export function createApiRuntime({ startedAt, logger }) {
 
   return {
     handleApi,
+    runtimeServices,
+    startAutomationRunner: runtimeServices.startAutomationRunner,
+    stopAutomationRunner: runtimeServices.stopAutomationRunner,
     providerName: runtimeStaticDeps.providerName,
     storageBridgeMode: runtimeStaticDeps.storageBridgeMode,
     hasOpenAI: runtimeStaticDeps.hasOpenAI,

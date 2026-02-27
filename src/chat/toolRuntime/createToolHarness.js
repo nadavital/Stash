@@ -8,14 +8,47 @@ import {
 } from "./argUtils.js";
 import { normalizeToolArgs } from "./normalizeToolArgs.js";
 
-export function createAgentToolHarness({ actor = null, requestId = "", executeTool, resolveArgs = null } = {}) {
+export function createAgentToolHarness({
+  actor = null,
+  requestId = "",
+  executeTool,
+  resolveArgs = null,
+  idempotencyCacheMaxEntries = 128,
+} = {}) {
   if (typeof executeTool !== "function") {
     throw new Error("createAgentToolHarness requires executeTool(name, args, actor)");
   }
 
   const idempotencyCache = new Map();
+  const parsedCacheLimit = Number(idempotencyCacheMaxEntries);
+  const normalizedCacheMaxEntries =
+    Number.isFinite(parsedCacheLimit) && parsedCacheLimit >= 0 ? Math.floor(parsedCacheLimit) : 128;
   const traces = [];
   const normalizedRequestId = normalizeText(requestId) || crypto.randomUUID();
+
+  function getCacheEntry(key = "") {
+    if (!key || normalizedCacheMaxEntries < 1 || !idempotencyCache.has(key)) {
+      return { hit: false, value: undefined };
+    }
+    const value = idempotencyCache.get(key);
+    // Refresh insertion order so frequently-used entries stay hot.
+    idempotencyCache.delete(key);
+    idempotencyCache.set(key, value);
+    return { hit: true, value };
+  }
+
+  function setCacheEntry(key = "", value = null) {
+    if (!key || normalizedCacheMaxEntries < 1) return;
+    if (idempotencyCache.has(key)) {
+      idempotencyCache.delete(key);
+    }
+    idempotencyCache.set(key, value);
+    while (idempotencyCache.size > normalizedCacheMaxEntries) {
+      const oldestKey = idempotencyCache.keys().next().value;
+      if (!oldestKey) break;
+      idempotencyCache.delete(oldestKey);
+    }
+  }
 
   async function runToolCall({ name, rawArgs, callId = "", round = 0 } = {}) {
     const traceId = crypto.randomUUID();
@@ -66,8 +99,9 @@ export function createAgentToolHarness({ actor = null, requestId = "", executeTo
       };
     }
 
-    if (idempotencyCache.has(idempotencyKey)) {
-      const cachedResult = idempotencyCache.get(idempotencyKey);
+    const cacheEntry = getCacheEntry(idempotencyKey);
+    if (cacheEntry.hit) {
+      const cachedResult = cacheEntry.value;
       const trace = {
         traceId,
         requestId: normalizedRequestId,
@@ -93,7 +127,7 @@ export function createAgentToolHarness({ actor = null, requestId = "", executeTo
 
     try {
       const result = await executeTool(normalizedName, normalizedArgs, actor);
-      idempotencyCache.set(idempotencyKey, result);
+      setCacheEntry(idempotencyKey, result);
       const trace = {
         traceId,
         requestId: normalizedRequestId,

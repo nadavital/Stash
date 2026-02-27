@@ -12,7 +12,7 @@ Chat is one control surface, not the memory system.
 - Layered memory: item, folder/project, user, workspace.
 - Agent operations are explicit and inspectable.
 - Human and agent collaborate on shared artifacts, not message history.
-- All agent surfaces (web, MCP, OpenClaw) use the same memory and tool contracts.
+- Core web and API surfaces use the same memory and tool contracts.
 
 ## Active milestones
 
@@ -39,12 +39,12 @@ Chat is one control surface, not the memory system.
 - [ ] Multi-step run UI that shows intent -> steps -> outputs.
 - [ ] Save reusable workflows ("playbooks") bound to working sets.
 
-### M4 - Tool connectivity and policy
+### M4 - Tooling and policy
 
-- [ ] Unified tool contract registry for web chat, MCP, OpenClaw.
+- [ ] Unified tool contract registry for web chat + API behavior.
 - [ ] Per-tool and per-scope permission policy.
 - [ ] Connection/test/manage UI for external tool providers.
-- [ ] Contract tests to keep all surfaces behavior-aligned.
+- [ ] Contract tests to keep core surfaces behavior-aligned.
 
 ## Iteration backlog
 

@@ -91,6 +91,8 @@ function buildWorkspaceContextCapsule({
   contextNote,
   contextNoteSourceUrl,
   citations,
+  userTimezoneHint,
+  taskContext,
 }) {
   const lines = [
     "Workspace context capsule (reference only; fetch additional data with tools before acting on assumptions):",
@@ -112,6 +114,29 @@ function buildWorkspaceContextCapsule({
   }
   if (contextNoteSourceUrl) {
     lines.push(`- active_item_source_url: ${contextNoteSourceUrl}`);
+  }
+  if (String(userTimezoneHint || "").trim()) {
+    lines.push(`- user_timezone_hint: ${String(userTimezoneHint).trim()}`);
+  }
+  const activeTaskId = String(taskContext?.id || "").trim();
+  if (activeTaskId) {
+    const activeTaskTitle = compactText(taskContext?.title || "", 120);
+    const activeTaskState = compactText(taskContext?.state || "", 40).toLowerCase();
+    const activeTaskScheduleType = compactText(taskContext?.scheduleType || "", 40).toLowerCase();
+    const activeTaskInterval = Number(taskContext?.intervalMinutes || 0);
+    lines.push(`- active_task_id: ${activeTaskId}`);
+    if (activeTaskTitle) {
+      lines.push(`- active_task_title: ${activeTaskTitle}`);
+    }
+    if (activeTaskState) {
+      lines.push(`- active_task_state: ${activeTaskState}`);
+    }
+    if (activeTaskScheduleType) {
+      lines.push(`- active_task_schedule_type: ${activeTaskScheduleType}`);
+    }
+    if (Number.isFinite(activeTaskInterval) && activeTaskInterval > 0) {
+      lines.push(`- active_task_interval_minutes: ${Math.floor(activeTaskInterval)}`);
+    }
   }
   const quickSummaries = (Array.isArray(citations) ? citations : [])
     .slice(0, 3)
@@ -138,6 +163,8 @@ export function buildStreamingPromptAndInput({
   contextNoteSourceUrl,
   hasAttachment,
   CHAT_SYSTEM_PROMPT,
+  userTimezoneHint = "",
+  taskContext = null,
 }) {
   const workspaceContextCapsule = buildWorkspaceContextCapsule({
     scope,
@@ -147,6 +174,8 @@ export function buildStreamingPromptAndInput({
     contextNote,
     contextNoteSourceUrl,
     citations,
+    userTimezoneHint,
+    taskContext,
   });
   let systemPrompt = CHAT_SYSTEM_PROMPT;
   systemPrompt = `${workspaceContextCapsule}\n\n${systemPrompt}`;

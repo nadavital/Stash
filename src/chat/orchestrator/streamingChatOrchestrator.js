@@ -14,12 +14,15 @@ export async function runStreamingChatOrchestrator({
   maxToolRounds = 3,
   temperature = 0.2,
 }) {
+  const parsedRoundLimit = Number(maxToolRounds);
+  const normalizedMaxToolRounds =
+    Number.isFinite(parsedRoundLimit) && parsedRoundLimit >= 0 ? Math.floor(parsedRoundLimit) : 3;
   let currentInput = initialInput;
   let currentInstructions = initialInstructions;
   let currentPreviousId = undefined;
   let toolRounds = 0;
 
-  while (toolRounds <= maxToolRounds) {
+  while (true) {
     const streamResponse = await createStreamingResponse({
       instructions: currentInstructions,
       input: currentInput,
@@ -39,8 +42,21 @@ export async function runStreamingChatOrchestrator({
     if (roundResult.webSources.length > 0) {
       writeSseEvent(res, "web_sources", { webSources: roundResult.webSources });
     }
+    if (roundResult.webSearchCalls.length > 0) {
+      writeSseEvent(res, "web_search_trace", { webSearchCalls: roundResult.webSearchCalls });
+    }
 
     if (roundResult.pendingToolCalls.length === 0) {
+      break;
+    }
+
+    if (toolRounds >= normalizedMaxToolRounds) {
+      writeSseEvent(res, "debug_error", {
+        code: "tool_round_limit_reached",
+        message: "Tool round limit reached before pending tool calls were resolved",
+        maxToolRounds: normalizedMaxToolRounds,
+        pendingToolCalls: roundResult.pendingToolCalls.length,
+      });
       break;
     }
 

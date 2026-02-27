@@ -100,8 +100,6 @@ export const config = {
   tasksDbPath: resolveDataPath(process.env.TASKS_DB_PATH, LEGACY_TASKS_DB_PATH),
   dataDir: DATA_DIR,
   uploadDir: UPLOAD_DIR,
-  mcpServerName: process.env.MCP_SERVER_NAME || "stash",
-  mcpServerVersion: process.env.MCP_SERVER_VERSION || "0.1.0",
   consolidatedMemoryMarkdownFile: resolveDataPath(
     process.env.CONSOLIDATED_MEMORY_MARKDOWN_FILE,
     path.join(DATA_DIR, "consolidated-memory.md")
@@ -122,6 +120,9 @@ export const config = {
   neonAuthBaseUrl: String(process.env.NEON_AUTH_BASE_URL || "").trim(),
   neonAuthIssuer: String(process.env.NEON_AUTH_ISSUER || "").trim(),
   neonAuthAudience: String(process.env.NEON_AUTH_AUDIENCE || "").trim(),
+  automationPollIntervalMs: parsePort(process.env.AUTOMATION_POLL_INTERVAL_MS, 30000),
+  automationPollBatchSize: parsePort(process.env.AUTOMATION_POLL_BATCH_SIZE, 4),
+  automationMaxConsecutiveFailuresDefault: parsePort(process.env.AUTOMATION_MAX_CONSECUTIVE_FAILURES_DEFAULT, 3),
 };
 
 export function publicUploadPath(fileName) {

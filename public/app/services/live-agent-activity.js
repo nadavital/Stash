@@ -2,6 +2,7 @@ const ACTION_LABELS = Object.freeze({
   create_note: "Saving item",
   create_folder: "Creating folder",
   search_notes: "Searching notes",
+  fetch_rss: "Fetching feed",
   get_note_raw_content: "Loading note content",
   update_note: "Updating item",
   update_note_markdown: "Updating content",

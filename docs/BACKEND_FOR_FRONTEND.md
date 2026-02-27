@@ -154,29 +154,7 @@ Request:
 Response:
 - `201 { task }`
 
-## 4) MCP tool surface (for OpenClaw/agents)
-
-Server file: `/mcp/server.js`
-
-Auth is required for all MCP/OpenClaw tool calls:
-- pass `sessionToken` in tool args, or
-- set `STASH_SESSION_TOKEN` on the MCP/OpenClaw process environment.
-
-Optional workspace targeting:
-- pass `workspaceId` in tool args, or
-- set `STASH_WORKSPACE_ID` on the process environment.
-
-Current tools:
-- `search_notes` (BM25 ranking)
-- `get_tasks`
-- `obtain_consolidated_memory_file`
-- `complete_task`
-- `delete_note`
-- `delete_project`
-
-Use MCP when building agent integrations; use HTTP `/api/*` for frontend UI.
-
-## 5) Frontend integration notes
+## 4) Frontend integration notes
 
 ### Sending uploads correctly
 Send uploads as Data URL strings in JSON (`fileDataUrl`).
@@ -194,8 +172,6 @@ Backend behavior:
 - Tasks tab: `/api/tasks`
 - Optional inspector: show `rawContent` and `markdownContent` from note payloads
 
-## 6) Useful local run commands
+## 5) Useful local run commands
 
 - Web server: `npm run dev`
-- MCP server: `npm run dev:mcp`
-- MCP smoke test: `npm run test:mcp-client`

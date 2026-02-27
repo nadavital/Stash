@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { validateNotePayload, validateBatchPayload } from "../../src/validate.js";
+import {
+  validateNotePayload,
+  validateBatchPayload,
+  validateBatchCreatePayload,
+} from "../../src/validate.js";
 
 describe("validateNotePayload", () => {
   it("accepts valid payload with content", () => {
@@ -96,5 +100,43 @@ describe("validateBatchPayload", () => {
     const ids = Array.from({ length: 201 }, (_, i) => `id-${i}`);
     const result = validateBatchPayload({ ids });
     assert.equal(result.valid, false);
+  });
+});
+
+describe("validateBatchCreatePayload", () => {
+  it("accepts valid items array", () => {
+    const result = validateBatchCreatePayload({
+      project: "Inbox",
+      items: [
+        { content: "First note" },
+        { sourceUrl: "https://example.com", sourceType: "link" },
+      ],
+    });
+    assert.equal(result.valid, true);
+  });
+
+  it("rejects missing items", () => {
+    const result = validateBatchCreatePayload({});
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((entry) => entry.includes("items must be an array")));
+  });
+
+  it("rejects non-object item payloads", () => {
+    const result = validateBatchCreatePayload({
+      items: ["bad-item"],
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((entry) => entry.includes("items[0] must be an object")));
+  });
+
+  it("rejects invalid item contents", () => {
+    const result = validateBatchCreatePayload({
+      items: [
+        { content: "ok" },
+        { sourceType: "video" },
+      ],
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some((entry) => entry.includes("items[1]")));
   });
 });

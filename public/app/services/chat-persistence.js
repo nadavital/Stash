@@ -14,6 +14,19 @@ function asUrlString(value) {
   return String(value || "").trim().slice(0, MAX_URL_LENGTH);
 }
 
+function sanitizeObjectPayload(value, { maxChars = 20000 } = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized || serialized.length > maxChars) return null;
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeMessage(entry, index = 0) {
   if (!entry || typeof entry !== "object") return null;
   const role = entry.role === "assistant" ? "assistant" : entry.role === "user" ? "user" : "";
@@ -68,7 +81,62 @@ function sanitizePendingFollowUp(entry) {
   const messageId = asTrimmedString(entry.messageId, 96);
   if (!messageId) return null;
 
+  const normalizedKind = asTrimmedString(entry.kind, 40).toLowerCase();
   const source = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
+  if (normalizedKind === "task_proposal" || source?.proposal || source?.scheduleType || source?.intervalMinutes) {
+    const proposalSource = source?.proposal && typeof source.proposal === "object" ? source.proposal : source;
+    const title = asTrimmedString(proposalSource.title || proposalSource.name, 240);
+    if (!title) return null;
+    const summary = asTrimmedString(proposalSource.summary, 320);
+    const prompt = asTrimmedString(proposalSource.prompt || title, 2000) || title;
+    const proposalSignature = asTrimmedString(proposalSource.proposalSignature, 80);
+    const scopeFolder = asTrimmedString(proposalSource.scopeFolder || proposalSource.project, 160);
+    const scheduleTypeRaw = asTrimmedString(proposalSource.scheduleType, 40).toLowerCase();
+    const scheduleType = scheduleTypeRaw === "interval" ? "interval" : "manual";
+    const intervalRaw = Number(proposalSource.intervalMinutes);
+    const intervalMinutes = scheduleType === "interval" && Number.isFinite(intervalRaw) && intervalRaw > 0
+      ? Math.max(5, Math.min(10080, Math.floor(intervalRaw)))
+      : (scheduleType === "interval" ? 1440 : null);
+    const timezone = asTrimmedString(proposalSource.timezone, 80);
+    const rawNextRunAt = asTrimmedString(proposalSource.nextRunAt, 120);
+    const parsedNextRunAt = rawNextRunAt ? new Date(rawNextRunAt) : null;
+    const nextRunAt = parsedNextRunAt && !Number.isNaN(parsedNextRunAt.getTime())
+      ? parsedNextRunAt.toISOString()
+      : "";
+    const maxActionsRaw = Number(proposalSource.maxActionsPerRun);
+    const maxConsecutiveRaw = Number(proposalSource.maxConsecutiveFailures);
+    const maxActionsPerRun = Number.isFinite(maxActionsRaw) ? Math.max(1, Math.min(25, Math.floor(maxActionsRaw))) : 4;
+    const maxConsecutiveFailures = Number.isFinite(maxConsecutiveRaw)
+      ? Math.max(1, Math.min(20, Math.floor(maxConsecutiveRaw)))
+      : 3;
+    const dryRun = proposalSource.dryRun === true;
+    const spec = sanitizeObjectPayload(proposalSource.spec);
+    const actions = Array.isArray(source.actions)
+      ? source.actions.map((option) => asTrimmedString(option, 80)).filter(Boolean).slice(0, 3)
+      : [];
+
+    return {
+      messageId,
+      kind: "task_proposal",
+      payload: {
+        title,
+        ...(summary ? { summary } : {}),
+        prompt,
+        ...(scopeFolder ? { scopeFolder } : {}),
+        scheduleType,
+        ...(scheduleType === "interval" ? { intervalMinutes } : {}),
+        ...(timezone ? { timezone } : {}),
+        ...(nextRunAt ? { nextRunAt } : {}),
+        ...(proposalSignature ? { proposalSignature } : {}),
+        ...(spec ? { spec } : {}),
+        maxActionsPerRun,
+        maxConsecutiveFailures,
+        dryRun,
+        ...(actions.length ? { actions } : {}),
+      },
+    };
+  }
+
   const question = asTrimmedString(source.question, 240);
   if (!question) return null;
 
@@ -89,6 +157,7 @@ function sanitizePendingFollowUp(entry) {
 
   return {
     messageId,
+    kind: "question",
     payload: {
       question,
       answerMode,

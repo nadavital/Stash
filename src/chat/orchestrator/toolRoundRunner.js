@@ -98,6 +98,14 @@ function mapMutationDescriptor(toolName = "") {
       return { entityType: "folder", mutationType: "folder.update" };
     case "delete_folder":
       return { entityType: "folder", mutationType: "folder.delete" };
+    case "create_task":
+      return { entityType: "task", mutationType: "task.create" };
+    case "update_task":
+      return { entityType: "task", mutationType: "task.update" };
+    case "complete_task":
+      return { entityType: "task", mutationType: "task.pause" };
+    case "delete_task":
+      return { entityType: "task", mutationType: "task.delete" };
     default:
       return null;
   }
@@ -130,6 +138,30 @@ function buildMutationPatch(toolName = "", args = {}, executionResult = null, pa
     }
     return Object.keys(patch).length > 0 ? patch : null;
   }
+  if (normalized === "create_task" || normalized === "update_task" || normalized === "complete_task") {
+    const task = executionResult?.task && typeof executionResult.task === "object" ? executionResult.task : null;
+    if (!task) return null;
+    const patch = {};
+    if (typeof task.title === "string") patch.title = String(task.title);
+    if (typeof task.prompt === "string") patch.prompt = String(task.prompt);
+    if (typeof task.scopeFolder === "string") patch.scopeFolder = String(task.scopeFolder);
+    if (typeof task.scheduleType === "string") patch.scheduleType = String(task.scheduleType);
+    if (typeof task.intervalMinutes === "number") patch.intervalMinutes = Number(task.intervalMinutes);
+    if (typeof task.approvalStatus === "string") patch.approvalStatus = String(task.approvalStatus);
+    if (typeof task.status === "string") patch.status = String(task.status);
+    if (typeof task.state === "string") patch.state = String(task.state);
+    if (typeof task.createdAt === "string") patch.createdAt = String(task.createdAt);
+    if (typeof task.nextRunAt === "string") patch.nextRunAt = String(task.nextRunAt);
+    return Object.keys(patch).length > 0 ? patch : null;
+  }
+  if (normalized === "delete_task") {
+    if (executionResult && typeof executionResult === "object" && executionResult.deleted === true) {
+      return {
+        deleted: true,
+      };
+    }
+    return null;
+  }
   if (normalized === "update_note_attachment") {
     const patch = {};
     if (typeof args.content === "string") patch.content = String(args.content);
@@ -159,6 +191,11 @@ function resolveEntityId(descriptor = null, args = {}, executionResult = null, t
     const fromResult = String(executionResult?.folderId || "").trim();
     if (fromResult) return fromResult;
     return String(args?.folderId || "").trim();
+  }
+  if (descriptor.entityType === "task") {
+    const fromResult = String(executionResult?.task?.id || executionResult?.id || "").trim();
+    if (fromResult) return fromResult;
+    return String(args?.id || "").trim();
   }
   return "";
 }

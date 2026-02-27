@@ -95,6 +95,10 @@ export function buildChatRouteContext(deps, { actor }) {
     parseWorkingSetIds: deps.parseWorkingSetIds,
     normalizeRecentChatMessages: deps.normalizeRecentChatMessages,
     isLikelyExternalInfoRequest: deps.isLikelyExternalInfoRequest,
+    normalizeIanaTimezone: deps.normalizeIanaTimezone,
+    inferUserTimezoneFromMessages: deps.inferUserTimezoneFromMessages,
+    inferTaskNextRunAtFromMessages: deps.inferTaskNextRunAtFromMessages,
+    isExplicitTaskCreationConfirmation: deps.isExplicitTaskCreationConfirmation,
     extractDomainsFromText: deps.extractDomainsFromText,
     extractDomainFromUrl: deps.extractDomainFromUrl,
     searchMemories: deps.searchMemories,
@@ -111,6 +115,7 @@ export function buildChatRouteContext(deps, { actor }) {
     resolveAgentToolArgs: deps.resolveAgentToolArgs,
     executeChatToolCall: deps.executeChatToolCall,
     logger: deps.logger,
+    config: deps.config,
     buildAgentNoteTitle: deps.buildAgentNoteTitle,
     createMemory: deps.createMemory,
     askMemories: deps.askMemories,
@@ -140,6 +145,8 @@ export function buildTaskRouteContext(deps, { actor }) {
     sendJson: deps.sendJson,
     readJsonBody: deps.readJsonBody,
     taskRepo: deps.taskRepo,
+    runTaskNow: deps.runTaskNow,
+    isWorkspaceManager: deps.isWorkspaceManager,
   };
 }
 
@@ -165,6 +172,8 @@ export function buildBatchRouteContext(deps, { actor }) {
     resolveErrorStatus: deps.resolveErrorStatus,
     readJsonBody: deps.readJsonBody,
     validateBatchPayload: deps.validateBatchPayload,
+    validateBatchCreatePayload: deps.validateBatchCreatePayload,
+    batchCreateMemories: deps.batchCreateMemories,
     batchDeleteMemories: deps.batchDeleteMemories,
     batchMoveMemories: deps.batchMoveMemories,
   };

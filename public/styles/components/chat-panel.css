@@ -284,6 +284,133 @@
   line-height: var(--leading-snug);
 }
 
+.chat-task-proposal {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    130deg,
+    color-mix(in srgb, var(--folder-blue) 16%, var(--surface-strong)) 0%,
+    color-mix(in srgb, var(--folder-blue) 10%, var(--surface-strong)) 58%,
+    color-mix(in srgb, var(--surface-strong) 88%, transparent) 100%
+  );
+  animation: chatQuestionReveal 180ms ease-out both;
+}
+
+.chat-task-proposal.is-pending {
+  opacity: 0.88;
+}
+
+.chat-task-proposal-label {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: var(--weight-semibold);
+  color: color-mix(in srgb, var(--folder-blue) 64%, var(--ink-secondary));
+}
+
+.chat-task-proposal-title {
+  margin: 0;
+  font-size: var(--font-size-base);
+  line-height: var(--leading-snug);
+}
+
+.chat-task-proposal-meta {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  color: color-mix(in srgb, var(--folder-blue) 62%, var(--ink-secondary));
+}
+
+.chat-task-proposal-destination {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--ink-secondary);
+}
+
+.chat-task-proposal-summary {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--ink-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-task-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chat-task-proposal-action {
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface) 84%, var(--surface-strong));
+  color: var(--ink);
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.chat-task-proposal-action:hover {
+  background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface));
+}
+
+.chat-task-proposal-action.is-primary {
+  background: var(--folder-blue);
+  color: #ffffff;
+}
+
+.chat-task-proposal-action.is-primary:hover {
+  opacity: 0.85;
+}
+
+.chat-task-proposal-action:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.chat-task-proposal-hint {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  color: var(--muted);
+}
+
+.chat-task-proposal-status {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  line-height: var(--leading-snug);
+  color: var(--ink-secondary);
+}
+
+.chat-task-proposal.is-created .chat-task-proposal-status {
+  color: color-mix(in srgb, var(--green) 64%, var(--ink-secondary));
+}
+
+.chat-task-proposal.is-canceled .chat-task-proposal-status {
+  color: var(--muted);
+}
+
+.chat-task-proposal.is-error .chat-task-proposal-status {
+  color: color-mix(in srgb, var(--danger, #d14343) 78%, var(--ink-secondary));
+}
+
+.chat-task-proposal.is-answered {
+  gap: var(--space-1);
+}
+
+.chat-task-proposal.is-answered .chat-task-proposal-hint {
+  display: none;
+}
+
 /* ── Typing indicator ──────────────────────────────────── */
 
 .chat-typing-indicator {

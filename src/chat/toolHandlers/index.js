@@ -3,18 +3,22 @@ import { createCaptureToolHandlers } from "./captureToolHandlers.js";
 import { createCollaborationToolHandlers } from "./collaborationToolHandlers.js";
 import { createQueryToolHandlers } from "./queryToolHandlers.js";
 import { createNoteToolHandlers } from "./noteToolHandlers.js";
+import { createTaskToolHandlers } from "./taskToolHandlers.js";
 
 export function createToolHandlers(deps) {
   const {
     authRepo,
     folderRepo,
+    taskRepo,
     createMemory,
+    batchCreateMemories,
     createWorkspaceFolder,
     listFolderCollaborators,
     setFolderCollaboratorRole,
     removeFolderCollaborator,
     listWorkspaceActivity,
     searchMemories,
+    fetchExternalContent,
     getMemoryRawContent,
     updateMemory,
     updateMemoryAttachment,
@@ -31,7 +35,7 @@ export function createToolHandlers(deps) {
   });
 
   return {
-    ...createCaptureToolHandlers({ createMemory }),
+    ...createCaptureToolHandlers({ createMemory, batchCreateMemories }),
     ...createCollaborationToolHandlers({
       authRepo,
       createWorkspaceFolder,
@@ -42,7 +46,8 @@ export function createToolHandlers(deps) {
       resolveWorkspaceMemberForAgent,
       resolveFolderNameForAgent,
     }),
-    ...createQueryToolHandlers({ searchMemories }),
+    ...createQueryToolHandlers({ searchMemories, fetchExternalContent }),
+    ...createTaskToolHandlers({ taskRepo }),
     ...createNoteToolHandlers({
       getMemoryRawContent,
       updateMemory,

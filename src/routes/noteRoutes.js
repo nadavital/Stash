@@ -79,6 +79,7 @@ export async function handleNoteRoutes(req, res, url, context) {
   if (
     req.method === "GET"
     && url.pathname.match(/^\/api\/notes\/[^/]+$/)
+    && !url.pathname.endsWith("/batch-create")
     && !url.pathname.endsWith("/batch-delete")
     && !url.pathname.endsWith("/batch-move")
   ) {

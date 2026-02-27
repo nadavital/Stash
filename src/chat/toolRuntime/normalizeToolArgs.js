@@ -7,6 +7,51 @@ import {
   normalizeText,
   normalizeWorkingSetIds,
 } from "./argUtils.js";
+import { normalizeTaskSpec } from "../../tasks/taskSpec.js";
+
+function normalizeIsoDateTime(value, { fieldName = "datetime" } = {}) {
+  const text = normalizeText(value);
+  if (!text) return "";
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${fieldName} must be a valid ISO datetime`);
+  }
+  return parsed.toISOString();
+}
+
+function normalizeTaskDraftArgs(source, { toolName = "create_task", includeConfirmed = false } = {}) {
+  const title = normalizeText(source.title || source.name);
+  if (!title) throw new Error(`${toolName} requires title`);
+  const prompt = normalizeText(source.prompt) || title;
+  const scopeFolder = normalizeText(source.scopeFolder || source.project);
+  const scheduleTypeRaw = normalizeText(source.scheduleType).toLowerCase();
+  const intervalMinutes = normalizePositiveInt(source.intervalMinutes, { min: 5, max: 10080 });
+  const scheduleType = scheduleTypeRaw || (intervalMinutes ? "interval" : "manual");
+  if (scheduleType !== "manual" && scheduleType !== "interval") {
+    throw new Error(`${toolName} scheduleType must be manual or interval`);
+  }
+  const normalized = {
+    title,
+    prompt,
+    ...(scopeFolder ? { scopeFolder } : {}),
+    scheduleType,
+    ...(intervalMinutes !== undefined ? { intervalMinutes } : {}),
+    ...(includeConfirmed && source.confirmed !== undefined ? { confirmed: source.confirmed === true } : {}),
+    ...(source.timezone !== undefined ? { timezone: normalizeText(source.timezone) } : {}),
+    ...(source.nextRunAt !== undefined
+      ? { nextRunAt: normalizeIsoDateTime(source.nextRunAt, { fieldName: `${toolName} nextRunAt` }) }
+      : {}),
+    ...(source.maxActionsPerRun !== undefined
+      ? { maxActionsPerRun: normalizePositiveInt(source.maxActionsPerRun, { min: 1, max: 25, required: true }) }
+      : {}),
+    ...(source.maxConsecutiveFailures !== undefined
+      ? { maxConsecutiveFailures: normalizePositiveInt(source.maxConsecutiveFailures, { min: 1, max: 20, required: true }) }
+      : {}),
+    ...(source.dryRun !== undefined ? { dryRun: source.dryRun === true } : {}),
+  };
+  normalized.spec = normalizeTaskSpec(source.spec, normalized);
+  return normalized;
+}
 
 export function normalizeToolArgs(name, args) {
   const normalizedName = normalizeText(name);
@@ -31,6 +76,17 @@ export function normalizeToolArgs(name, args) {
         fileMimeType: normalizeText(source.fileMimeType),
       };
     }
+    case "create_notes_bulk": {
+      const rawItems = Array.isArray(source.items) ? source.items : [];
+      if (rawItems.length === 0) {
+        throw new Error("create_notes_bulk requires a non-empty items array");
+      }
+      return {
+        ...(source.project !== undefined ? { project: normalizeText(source.project) } : {}),
+        ...(source.stopOnError !== undefined ? { stopOnError: source.stopOnError === true } : {}),
+        items: rawItems.map((item, index) => normalizeCreateNotesBulkItem(item, index)),
+      };
+    }
     case "create_folder": {
       const nameArg = normalizeText(source.name);
       if (!nameArg) throw new Error("create_folder requires a folder name");
@@ -39,6 +95,95 @@ export function normalizeToolArgs(name, args) {
         description: normalizeText(source.description),
         color: normalizeText(source.color),
       };
+    }
+    case "list_tasks": {
+      const limit = Number(source.limit || 30);
+      return {
+        ...(source.status !== undefined
+          ? { status: normalizeTaskStatus(source.status, { allowAll: true, allowEmpty: true }) || "all" }
+          : {}),
+        limit: Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 30,
+      };
+    }
+    case "create_task": {
+      return normalizeTaskDraftArgs(source, { toolName: "create_task", includeConfirmed: true });
+    }
+    case "propose_task": {
+      return normalizeTaskDraftArgs(source, { toolName: "propose_task", includeConfirmed: false });
+    }
+    case "update_task": {
+      const id = normalizeText(source.id);
+      if (!id) throw new Error("update_task requires id");
+
+      const patch = {
+        id,
+      };
+      if (source.title !== undefined || source.name !== undefined) {
+        patch.title = normalizeText(source.title || source.name);
+      }
+      if (source.prompt !== undefined) {
+        patch.prompt = normalizeText(source.prompt);
+      }
+      if (source.scopeFolder !== undefined || source.project !== undefined) {
+        patch.scopeFolder = normalizeText(source.scopeFolder || source.project);
+      }
+      if (source.scopeType !== undefined) {
+        const scopeType = normalizeText(source.scopeType).toLowerCase();
+        if (scopeType !== "workspace" && scopeType !== "folder") {
+          throw new Error("update_task scopeType must be workspace or folder");
+        }
+        patch.scopeType = scopeType;
+      }
+      if (source.scheduleType !== undefined) {
+        const scheduleType = normalizeText(source.scheduleType).toLowerCase();
+        if (scheduleType !== "manual" && scheduleType !== "interval") {
+          throw new Error("update_task scheduleType must be manual or interval");
+        }
+        patch.scheduleType = scheduleType;
+      }
+      if (source.intervalMinutes !== undefined) {
+        patch.intervalMinutes = normalizePositiveInt(source.intervalMinutes, { min: 5, max: 10080 });
+      }
+      if (source.timezone !== undefined) {
+        patch.timezone = normalizeText(source.timezone);
+      }
+      if (source.nextRunAt !== undefined) {
+        patch.nextRunAt = normalizeIsoDateTime(source.nextRunAt, { fieldName: "update_task nextRunAt" });
+      }
+      if (source.maxActionsPerRun !== undefined) {
+        patch.maxActionsPerRun = normalizePositiveInt(source.maxActionsPerRun, { min: 1, max: 25, required: true });
+      }
+      if (source.maxConsecutiveFailures !== undefined) {
+        patch.maxConsecutiveFailures = normalizePositiveInt(source.maxConsecutiveFailures, { min: 1, max: 20, required: true });
+      }
+      if (source.dryRun !== undefined) {
+        patch.dryRun = source.dryRun === true;
+      }
+      if (source.spec !== undefined) {
+        const rawSpec = source.spec;
+        if (rawSpec !== null && (typeof rawSpec !== "object" || Array.isArray(rawSpec))) {
+          throw new Error("update_task spec must be an object");
+        }
+        patch.spec = rawSpec;
+      }
+      if (source.status !== undefined) {
+        patch.status = normalizeTaskStatus(source.status);
+      }
+
+      if (Object.keys(patch).length < 2) {
+        throw new Error("update_task requires at least one field to update");
+      }
+      return patch;
+    }
+    case "complete_task": {
+      const id = normalizeText(source.id);
+      if (!id) throw new Error("complete_task requires id");
+      return { id };
+    }
+    case "delete_task": {
+      const id = normalizeText(source.id);
+      if (!id) throw new Error("delete_task requires id");
+      return { id };
     }
     case "list_workspace_members": {
       const query = normalizeText(source.query);
@@ -99,6 +244,25 @@ export function normalizeToolArgs(name, args) {
         project: normalizeText(source.project),
         ...(scope ? { scope } : {}),
         ...(workingSetIds.length ? { workingSetIds } : {}),
+      };
+    }
+    case "fetch_rss": {
+      const urlText = normalizeText(source.url);
+      if (!urlText) throw new Error("fetch_rss requires url");
+      let parsed = null;
+      try {
+        parsed = new URL(urlText);
+      } catch {
+        throw new Error("fetch_rss url must be a valid absolute URL");
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("fetch_rss supports only http(s) URLs");
+      }
+      const limitRaw = Number(source.limit || 12);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, Math.floor(limitRaw))) : 12;
+      return {
+        url: parsed.toString(),
+        limit,
       };
     }
     case "retry_note_enrichment": {
@@ -224,4 +388,54 @@ function isGenericOtherOption(option = "") {
   const value = String(option || "").trim().toLowerCase();
   if (!value) return false;
   return /^(other|something else|anything else|else|another option|not sure|none of these|none)\b/i.test(value);
+}
+
+function normalizeTaskStatus(value, { allowAll = false, allowEmpty = false } = {}) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) {
+    return allowEmpty ? "" : "active";
+  }
+  if (allowAll && (normalized === "all" || normalized === "any")) return "";
+  if (["pending", "pending_approval", "approval"].includes(normalized)) return "pending_approval";
+  if (["open", "active", "running"].includes(normalized)) return "active";
+  if (["paused", "inactive", "closed", "complete", "completed", "done"].includes(normalized)) return "paused";
+  throw new Error("Invalid task status");
+}
+
+function normalizePositiveInt(value, { min = 1, max = 10080, required = false } = {}) {
+  if (value === undefined || value === null || value === "") {
+    if (required) throw new Error("Expected positive integer");
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("Expected positive integer");
+  }
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+}
+
+function normalizeCreateNotesBulkItem(item, index) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new Error(`create_notes_bulk item at index ${index} must be an object`);
+  }
+
+  const content = normalizeText(item.content);
+  const imageDataUrl = normalizeText(item.imageDataUrl);
+  const fileDataUrl = normalizeText(item.fileDataUrl);
+  const hasAttachment = Boolean(imageDataUrl || fileDataUrl);
+  if (!content && !hasAttachment) {
+    throw new Error(`create_notes_bulk item at index ${index} requires content or an attachment`);
+  }
+
+  return {
+    content,
+    title: normalizeText(item.title),
+    project: normalizeText(item.project),
+    sourceType: normalizeChatSourceType(item.sourceType),
+    sourceUrl: normalizeText(item.sourceUrl),
+    imageDataUrl,
+    fileDataUrl,
+    fileName: normalizeText(item.fileName),
+    fileMimeType: normalizeText(item.fileMimeType),
+  };
 }
